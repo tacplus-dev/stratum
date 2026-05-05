@@ -1,0 +1,9 @@
+server/target/
+!server/target/stratum.jar
+tacplus/
+.git/
+codegen/
+design.md
+README.md
+pom.xml
+proto/
