@@ -59,6 +59,8 @@ import com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.types
 import com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.libs.servicemanager.Caller;
 import com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.types.libs.errors.ProtoException;
 import com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.types.libs.x509.X509;
+import com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.types.vservices.llmsensor.Llmsensor;
+import com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.types.vservices.scmsensor.Scmsensor;
 
 /**
  * StratumHandler wires together EventStore, WorkingSetStore, and the gRPC
@@ -156,10 +158,34 @@ public class StratumHandler extends StratumVServiceBase {
     // -----------------------------------------------------------------------
 
     @Override
-    public void onEventStream(byte[] eventBytes, SubscriptionMeta meta) throws Exception {
+    public void onEventStreamClaudesensor(byte[] eventBytes, SubscriptionMeta meta) throws Exception {
         SensorEvent event = SensorEvent.parseFrom(eventBytes);
         eventStore.put(event);
         pushToLiveWatchers(event);
+    }
+
+    @Override
+    public void onEventStreamLlmsensor(byte[] eventBytes, SubscriptionMeta meta) throws Exception {
+        Llmsensor.LlmEvent ev = Llmsensor.LlmEvent.parseFrom(eventBytes);
+        eventStore.putLlmRaw(ev.getEventId(), eventBytes);
+        log.debug("stored llm event: event_id={} email={}", ev.getEventId(), ev.getEmail());
+    }
+
+    @Override
+    public void onEventStreamScmsensor(byte[] eventBytes, SubscriptionMeta meta) throws Exception {
+        Scmsensor.ScmEvent ev = Scmsensor.ScmEvent.parseFrom(eventBytes);
+        eventStore.putScmRaw(ev.getEventId(), eventBytes);
+        log.debug("stored scm event: event_id={} email={}", ev.getEventId(), ev.getEmail());
+    }
+
+    /**
+     * Fallback handler for any new vservice sensors added in the future.
+     * The generated Handler.java routes unhandled topics here via default methods,
+     * so new sensors are persisted automatically until a typed override is added.
+     */
+    @Override
+    public void handleEventStreamMessage(String topic, byte[] eventBytes, SubscriptionMeta meta) throws Exception {
+        log.warn("unhandled event stream topic: {} (offset={})", topic, meta.offset);
     }
 
     private void pushToLiveWatchers(SensorEvent event) {

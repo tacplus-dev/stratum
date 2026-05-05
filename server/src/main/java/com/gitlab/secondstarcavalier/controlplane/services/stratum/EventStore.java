@@ -51,6 +51,8 @@ public class EventStore {
 
     private HazelcastInstance hz;
     private IMap<String, SensorEvent> events;
+    private IMap<String, byte[]> llmEvents;
+    private IMap<String, byte[]> scmEvents;
     private int retentionDays;
 
     private final ScheduledExecutorService cleaner = Executors.newSingleThreadScheduledExecutor(
@@ -76,6 +78,8 @@ public class EventStore {
 
         hz = Hazelcast.newHazelcastInstance(StratumMapConfig.build(seedMembers));
         events = hz.getMap(StratumMapConfig.MAP_NAME);
+        llmEvents = hz.getMap("llm-events");
+        scmEvents = hz.getMap("scm-events");
 
         cleaner.scheduleWithFixedDelay(
                 this::runRetentionCleanupIfLeader,
@@ -94,6 +98,20 @@ public class EventStore {
      */
     public void put(SensorEvent event) {
         events.put(event.getEventId(), event);
+    }
+
+    /**
+     * Stores a raw LlmEvent (protobuf bytes) keyed by event_id.
+     */
+    public void putLlmRaw(String eventId, byte[] bytes) {
+        llmEvents.put(eventId, bytes);
+    }
+
+    /**
+     * Stores a raw ScmEvent (protobuf bytes) keyed by event_id.
+     */
+    public void putScmRaw(String eventId, byte[] bytes) {
+        scmEvents.put(eventId, bytes);
     }
 
     // -----------------------------------------------------------------------
