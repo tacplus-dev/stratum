@@ -295,7 +295,7 @@ message StratumState {
 2. **Write `proto/vservices/stratum.proto`** — all sync and async MCP RPCs, JobEvent, JobProgress, MapInfo, ResourceUsage messages.
 
 3. **Create `services/stratum/`** following the hotdb/colddb pattern:
-   - `tacplus.yaml` — image name `registry.gitlab.com/secondstarcavalier/controlplane/services/stratum/stratum`
+   - `tacplus.yaml` — image name `registry.gitlab.com/secondstarcavalier/schematic/platform/services/stratum/stratum`
    - `pom.xml` — parent, modules (codegen, server)
    - `Dockerfile` — COPY grpc_health_probe (pre-downloaded arm64 binary), stratum entrypoint script, same pattern as hotdb
    - `stratum` — entrypoint shell script: `exec java $JAVA_OPTS -jar /app/stratum.jar "$@"`

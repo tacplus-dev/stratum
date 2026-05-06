@@ -15,14 +15,14 @@ Already a pro? Just edit this README.md and make it your own. Want to make it ea
 
 ```
 cd existing_repo
-git remote add origin https://gitlab.com/secondstarcavalier/controlplane/services/stratum.git
+git remote add origin https://gitlab.com/secondstarcavalier/schematic/platform/services/stratum.git
 git branch -M main
 git push -uf origin main
 ```
 
 ## Integrate with your tools
 
-* [Set up project integrations](https://gitlab.com/secondstarcavalier/controlplane/services/stratum/-/settings/integrations)
+* [Set up project integrations](https://gitlab.com/secondstarcavalier/schematic/platform/services/stratum/-/settings/integrations)
 
 ## Collaborate with your team
 
