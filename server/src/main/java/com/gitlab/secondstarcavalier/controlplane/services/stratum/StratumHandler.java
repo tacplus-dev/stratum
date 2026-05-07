@@ -141,6 +141,32 @@ public class StratumHandler extends StratumVServiceBase {
         // StratumState has no config singleton; nothing to do.
     }
 
+    @Override
+    public com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.s2sm.internal.grpc.servers.services.stratum.StratumConfigStateService.StratumConfigStateServiceHandler getStratumConfigStateGrpcImpl() {
+        return new com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.s2sm.internal.grpc.servers.services.stratum.StratumConfigStateService.StratumConfigStateServiceHandler() {
+            @Override
+            public Stratum.Config getConfig(Caller caller) throws ProtoException {
+                Stratum.Config cfg = config;
+                return cfg != null ? cfg : Stratum.Config.getDefaultInstance();
+            }
+            @Override
+            public Stratum.Config setConfig(Caller caller, Stratum.Config request) throws ProtoException {
+                try {
+                    initFromConfig(request);
+                } catch (Exception e) {
+                    throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
+                }
+                return request;
+            }
+            @Override
+            public void watchConfig(Caller caller, StreamObserver<Stratum.Config> responseObserver) throws ProtoException {
+                Stratum.Config cfg = config;
+                if (cfg != null) responseObserver.onNext(cfg);
+                responseObserver.onCompleted();
+            }
+        };
+    }
+
     private void initFromConfig(Stratum.Config cfg) {
         this.config = cfg;
         log.info("config: hazelcast_memory_mb={}, map_idle_ttl_seconds={}, max_maps={}, " +
