@@ -142,6 +142,11 @@ public class StratumHandler extends StratumVServiceBase {
     }
 
     @Override
+    public com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.s2sm.internal.grpc.servers.services.stratum.StratumStateService.StratumStateServiceHandler getStratumStateGrpcImpl() {
+        return new com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.s2sm.internal.grpc.servers.services.stratum.StratumStateService.StratumStateServiceHandler() {};
+    }
+
+    @Override
     public com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.s2sm.internal.grpc.servers.services.stratum.StratumConfigStateService.StratumConfigStateServiceHandler getStratumConfigStateGrpcImpl() {
         return new com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.s2sm.internal.grpc.servers.services.stratum.StratumConfigStateService.StratumConfigStateServiceHandler() {
             @Override
