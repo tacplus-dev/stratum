@@ -31,7 +31,7 @@ import org.slf4j.LoggerFactory;
 
 import com.hazelcast.map.IMap;
 
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.SensorEvent;
+import com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.SensorEvent;
 
 /**
  * CalciteEngine executes Calcite SQL queries over a Hazelcast working-set IMap.
