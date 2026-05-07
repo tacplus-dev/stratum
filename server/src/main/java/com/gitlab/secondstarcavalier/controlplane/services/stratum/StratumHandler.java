@@ -132,12 +132,12 @@ public class StratumHandler extends StratumVServiceBase {
     }
 
     @Override
-    protected void handleStratumConfigStateConfig(Stratum.Config cfg) throws Exception {
+    public void handleStratumConfigStateConfig(Stratum.Config cfg) throws Exception {
         initFromConfig(cfg);
     }
 
     @Override
-    protected void handleStratumStateConfig(Stratum.Config cfg) throws Exception {
+    public void handleStratumStateConfig(Stratum.Config cfg) throws Exception {
         // StratumState has no config singleton; nothing to do.
     }
 
