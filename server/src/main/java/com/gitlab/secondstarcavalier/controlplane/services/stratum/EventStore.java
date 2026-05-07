@@ -22,8 +22,8 @@ import com.hazelcast.map.IMap;
 import com.hazelcast.query.Predicate;
 import com.hazelcast.query.Predicates;
 
-import com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.SensorEvent;
-import com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.SensorEventType;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.SensorEvent;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.SensorEventType;
 
 import com.gitlab.secondstarcavalier.controlplane.services.stratum.hazelcast.StratumMapConfig;
 import com.gitlab.secondstarcavalier.controlplane.services.stratum.hazelcast.StratumEpochExtractor;
