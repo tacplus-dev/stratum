@@ -1,5 +1,5 @@
 // Copyright (c) 2024 Second Star Cavalier, LLC.
-package com.gitlab.secondstarcavalier.controlplane.services.stratum;
+package com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -20,10 +20,10 @@ import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.map.IMap;
 
-import com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.types.services.stratum.Stratum;
-import com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.MapDetail;
-import com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.MapEntry;
-import com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.SensorEvent;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.services.stratum.Stratum;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.MapDetail;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.MapEntry;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.SensorEvent;
 
 /**
  * WorkingSetStore manages the Hazelcast namespaces for stratum's working sets:

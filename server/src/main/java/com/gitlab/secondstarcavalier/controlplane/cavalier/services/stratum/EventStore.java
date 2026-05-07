@@ -1,5 +1,5 @@
 // Copyright (c) 2024 Second Star Cavalier, LLC.
-package com.gitlab.secondstarcavalier.controlplane.services.stratum;
+package com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum;
 
 import java.util.ArrayList;
 import java.util.Base64;
@@ -22,12 +22,12 @@ import com.hazelcast.map.IMap;
 import com.hazelcast.query.Predicate;
 import com.hazelcast.query.Predicates;
 
-import com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.SensorEvent;
-import com.gitlab.secondstarcavalier.controlplane.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.SensorEventType;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.SensorEvent;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.SensorEventType;
 
-import com.gitlab.secondstarcavalier.controlplane.services.stratum.hazelcast.StratumMapConfig;
-import com.gitlab.secondstarcavalier.controlplane.services.stratum.hazelcast.StratumEpochExtractor;
-import com.gitlab.secondstarcavalier.controlplane.services.stratum.hazelcast.StratumEventTypeExtractor;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.hazelcast.StratumMapConfig;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.hazelcast.StratumEpochExtractor;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.hazelcast.StratumEventTypeExtractor;
 
 /**
  * EventStore manages the Hazelcast IMap that backs stratum's hot event store.
