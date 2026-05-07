@@ -1,5 +1,5 @@
 language: java
-pkg: com.gitlab.secondstarcavalier.controlplane.services.stratum
+pkg: com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum
 output-dir: tacplus/target/generated-sources
 post-gen:
   - cmd: mvn
