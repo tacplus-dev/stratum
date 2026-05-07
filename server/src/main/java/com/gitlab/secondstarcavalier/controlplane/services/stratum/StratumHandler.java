@@ -131,6 +131,16 @@ public class StratumHandler extends StratumVServiceBase {
         initFromConfig(cfg);
     }
 
+    @Override
+    protected void handleStratumConfigStateConfig(Stratum.Config cfg) throws Exception {
+        initFromConfig(cfg);
+    }
+
+    @Override
+    protected void handleStratumStateConfig(Stratum.Config cfg) throws Exception {
+        // StratumState has no config singleton; nothing to do.
+    }
+
     private void initFromConfig(Stratum.Config cfg) {
         this.config = cfg;
         log.info("config: hazelcast_memory_mb={}, map_idle_ttl_seconds={}, max_maps={}, " +
