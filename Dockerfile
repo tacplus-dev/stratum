@@ -1,7 +1,7 @@
 # Stratum — Release Image
 # Layers the stratum jar onto a JRE base.
 
-FROM registry.gitlab.com/secondstarcavalier/schematic/containers/jre/schematic-jre-1-2:latest
+FROM registry.gitlab.com/secondstarcavalier/schematic/containers/jre/schematic-jre-1-3:latest
 
 ARG BUILD_DATE
 ARG VCS_REF
@@ -15,7 +15,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.title="stratum" \
       org.opencontainers.image.description="Supervisor LLM stateful SQL workspace with Hazelcast and Apache Calcite"
 
-RUN addgroup -S stratum && adduser -S stratum -G stratum \
+RUN groupadd -r stratum && useradd -r -g stratum stratum \
     && mkdir -p /var/lib/stratum/persistence \
     && chown -R stratum:stratum /var/lib/stratum
 
