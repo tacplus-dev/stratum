@@ -1,7 +1,12 @@
 # Stratum — Release Image
-# Layers the stratum jar onto a JRE base.
+# Distroless Java 21 base with no shell.
+# The launcher binary reads LAUNCH_CMD and supervises the java process.
 
-FROM registry.gitlab.com/secondstarcavalier/schematic/containers/jre/schematic-jre-1-3:latest
+# Pre-create /var/lib/stratum with correct ownership for nonroot (65532).
+FROM busybox AS setup
+RUN mkdir -p /var/lib/stratum/persistence
+
+FROM gcr.io/distroless/java21-debian12
 
 ARG BUILD_DATE
 ARG VCS_REF
@@ -15,15 +20,16 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.title="stratum" \
       org.opencontainers.image.description="Supervisor LLM stateful SQL workspace with Hazelcast and Apache Calcite"
 
-RUN groupadd -r stratum && useradd -r -g stratum stratum \
-    && mkdir -p /var/lib/stratum/persistence \
-    && chown -R stratum:stratum /var/lib/stratum
-
+COPY --from=setup --chown=65532:65532 /var/lib/stratum /var/lib/stratum
 COPY server/target/stratum.jar /app/stratum.jar
-COPY stratum /usr/local/bin/stratum
-RUN chmod +x /usr/local/bin/stratum
 
-USER stratum
+ARG TARGETARCH
+COPY launcher-linux-${TARGETARCH} /usr/local/bin/stratum
+
+USER nonroot
+
+# Extra JVM flags can be appended via JAVA_TOOL_OPTIONS (automatically read by the JVM).
+ENV LAUNCH_CMD="java -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:MinRAMPercentage=50.0 -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/stratum-heapdump.hprof -Djava.net.preferIPv4Stack=true -Dio.netty.recycler.maxCapacityPerThread=0 -jar /app/stratum.jar"
 
 # Hazelcast Hot Restart persistence directory for the scratchpad map.
 VOLUME /var/lib/stratum/persistence
