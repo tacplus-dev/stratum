@@ -20,6 +20,8 @@ compute-image:
 
 variables:
   MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+  DOCKER_TLS_CERTDIR: ""
+  DOCKER_HOST: tcp://docker:2375
 
 .parse-version: &parse-version
   - |
@@ -64,7 +66,7 @@ variables:
 build-arm64:
   extends: .build-arch
   tags:
-    - br.aarch64
+    - cavalier-arm64
 
 .package-arch:
   stage: package
@@ -90,7 +92,7 @@ build-arm64:
 package-arm64:
   extends: .package-arch
   tags:
-    - br.aarch64
+    - cavalier-arm64
   needs:
     - build-arm64
   variables:
@@ -101,6 +103,8 @@ manifest:
   image: docker:latest
   services:
     - docker:dind
+  tags:
+    - br.aarch64
   needs:
     - package-arm64
   rules:
