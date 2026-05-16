@@ -30,6 +30,7 @@ USER nonroot
 
 # Extra JVM flags can be appended via JAVA_TOOL_OPTIONS (automatically read by the JVM).
 ENV LAUNCH_CMD="java -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:MinRAMPercentage=50.0 -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/stratum-heapdump.hprof -Djava.net.preferIPv4Stack=true -Dio.netty.recycler.maxCapacityPerThread=0 -jar /app/stratum.jar"
+ENV HEALTH_PORT=8443
 
 # Hazelcast Hot Restart persistence directory for the scratchpad map.
 VOLUME /var/lib/stratum/persistence
