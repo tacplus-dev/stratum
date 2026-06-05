@@ -199,33 +199,30 @@ public class StratumHandler extends StratumVServiceBase {
     // -----------------------------------------------------------------------
 
     @Override
-    public void onEventStreamClaudesensor(byte[] eventBytes, SubscriptionMeta meta) throws Exception {
-        SensorEvent event = SensorEvent.parseFrom(eventBytes);
+    public void onEventStreamClaudesensor(SensorEvent event, SubscriptionMeta meta) throws Exception {
         eventStore.put(event);
         pushToLiveWatchers(event);
     }
 
     @Override
-    public void onEventStreamLlmsensor(byte[] eventBytes, SubscriptionMeta meta) throws Exception {
-        Llmsensor.LlmEvent ev = Llmsensor.LlmEvent.parseFrom(eventBytes);
-        eventStore.putLlmRaw(ev.getEventId(), eventBytes);
+    public void onEventStreamLlmsensor(Llmsensor.LlmEvent ev, SubscriptionMeta meta) throws Exception {
+        eventStore.putLlmRaw(ev.getEventId(), ev.toByteArray());
         log.debug("stored llm event: event_id={} email={}", ev.getEventId(), ev.getEmail());
     }
 
     @Override
-    public void onEventStreamScmsensor(byte[] eventBytes, SubscriptionMeta meta) throws Exception {
-        Scmsensor.ScmEvent ev = Scmsensor.ScmEvent.parseFrom(eventBytes);
-        eventStore.putScmRaw(ev.getEventId(), eventBytes);
+    public void onEventStreamScmsensor(Scmsensor.ScmEvent ev, SubscriptionMeta meta) throws Exception {
+        eventStore.putScmRaw(ev.getEventId(), ev.toByteArray());
         log.debug("stored scm event: event_id={} email={}", ev.getEventId(), ev.getEmail());
     }
 
     /**
      * Fallback handler for any new vservice sensors added in the future.
-     * The generated Handler.java routes unhandled topics here via default methods,
-     * so new sensors are persisted automatically until a typed override is added.
+     * The generated Handler routes unhandled topics here via the typed default
+     * methods, so new sensors are surfaced (logged) until a typed override is added.
      */
     @Override
-    public void handleEventStreamMessage(String topic, byte[] eventBytes, SubscriptionMeta meta) throws Exception {
+    public void handleEventStreamMessage(String topic, com.google.protobuf.Message event, SubscriptionMeta meta) throws Exception {
         log.warn("unhandled event stream topic: {} (offset={})", topic, meta.offset);
     }
 
