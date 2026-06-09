@@ -199,19 +199,19 @@ public class StratumHandler extends StratumVServiceBase {
     // -----------------------------------------------------------------------
 
     @Override
-    public void onEventStreamClaudesensor(SensorEvent event, SubscriptionMeta meta) throws Exception {
+    public void onEventStreamClaudesensorAgenticCodeEventBusEventStream(SensorEvent event, SubscriptionMeta meta) throws Exception {
         eventStore.put(event);
         pushToLiveWatchers(event);
     }
 
     @Override
-    public void onEventStreamLlmsensor(Llmsensor.LlmEvent ev, SubscriptionMeta meta) throws Exception {
+    public void onEventStreamLlmsensorLlmEventBusEventStream(Llmsensor.LlmEvent ev, SubscriptionMeta meta) throws Exception {
         eventStore.putLlmRaw(ev.getEventId(), ev.toByteArray());
         log.debug("stored llm event: event_id={} email={}", ev.getEventId(), ev.getEmail());
     }
 
     @Override
-    public void onEventStreamScmsensor(Scmsensor.ScmEvent ev, SubscriptionMeta meta) throws Exception {
+    public void onEventStreamScmsensorScmEventBusEventStream(Scmsensor.ScmEvent ev, SubscriptionMeta meta) throws Exception {
         eventStore.putScmRaw(ev.getEventId(), ev.toByteArray());
         log.debug("stored scm event: event_id={} email={}", ev.getEventId(), ev.getEmail());
     }
