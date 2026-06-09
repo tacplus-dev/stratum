@@ -21,4 +21,4 @@ generate:
     tacplus build --src proto
 
 clean:
-  rm -rf tacplus/target server/target target
+  rm -rf model/target server/target target

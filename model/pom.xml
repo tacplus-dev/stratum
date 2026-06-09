@@ -7,10 +7,10 @@
 		<artifactId>stratum-parent</artifactId>
 		<version>1.2.0-SNAPSHOT</version>
 	</parent>
-	<artifactId>stratum-tacplus</artifactId>
+	<artifactId>stratum-model</artifactId>
 	<packaging>jar</packaging>
-	<name>Stratum Tacplus Types</name>
-	<description>Tacplus-generated types, gRPC stubs, and libraries for stratum</description>
+	<name>Stratum Model</name>
+	<description>Tacplus-generated model types, gRPC stubs, and libraries for stratum</description>
 	<dependencies>
 		<dependency>
 			<groupId>com.google.protobuf</groupId>
@@ -79,6 +79,11 @@
 			<artifactId>gson</artifactId>
 		</dependency>
 		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-compress</artifactId>
+			<version>1.28.0</version>
+		</dependency>
+		<dependency>
 			<groupId>org.slf4j</groupId>
 			<artifactId>slf4j-api</artifactId>
 		</dependency>
@@ -110,10 +115,10 @@
 		</dependency>
 	</dependencies>
 	<build>
-		<sourceDirectory>target/generated-sources/tacplus/src/main/java</sourceDirectory>
+		<sourceDirectory>target/generated-sources/model/src/main/java</sourceDirectory>
 		<resources>
 			<resource>
-				<directory>target/generated-sources/tacplus/src/main/resources</directory>
+				<directory>target/generated-sources/model/src/main/resources</directory>
 			</resource>
 		</resources>
 		<extensions>
@@ -137,8 +142,8 @@
 					<protocArtifact>com.google.protobuf:protoc:${protobuf.version}:exe:${os.detected.classifier}</protocArtifact>
 					<pluginId>grpc-java</pluginId>
 					<pluginArtifact>io.grpc:protoc-gen-grpc-java:${grpc.version}:exe:${os.detected.classifier}</pluginArtifact>
-					<protoSourceRoot>${project.build.directory}/generated-sources/tacplus/proto-annotated</protoSourceRoot>
-					<outputDirectory>${project.build.directory}/generated-sources/tacplus/src/main/java</outputDirectory>
+					<protoSourceRoot>${project.build.directory}/generated-sources/model/proto-annotated</protoSourceRoot>
+					<outputDirectory>${project.build.directory}/generated-sources/model/src/main/java</outputDirectory>
 					<clearOutputDirectory>false</clearOutputDirectory>
 				</configuration>
 				<executions>
@@ -214,7 +219,7 @@
 						</goals>
 						<configuration>
 							<target xmlns:unless="ant:unless" xmlns:if="ant:if">
-								<available file="${project.build.directory}/generated-sources/tacplus/src/main/java" type="dir" property="tacplus.skip"/>
+								<available file="${project.build.directory}/generated-sources/model/src/main/java" type="dir" property="tacplus.skip"/>
 								<echo unless:set="tacplus.skip" message="Running tacplus update (generated sources not found)..."/>
 								<exec executable="tacplus" failonerror="true" unless:set="tacplus.skip">
 									<arg value="update"/>

@@ -13,54 +13,54 @@ import org.slf4j.LoggerFactory;
 
 import io.grpc.stub.StreamObserver;
 
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.s2sm.ServiceManager;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.s2sm.internal.grpc.servers.vservices.claudesensor.StratumQuery;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.services.stratum.Stratum;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.services.stratum.Helpers;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.DeleteMapRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.DeleteMapResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.DescribeMapRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.DescribeMapResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.EventTimeRange;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.FilterMapRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.FilterMapResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.GetSessionEventsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.GetSessionEventsResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.GetUserSessionsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.GetUserSessionsResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.ListActiveSessionsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.ListActiveSessionsResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.ListMapsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.ListMapsResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.LoadByGraphdbRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.LoadByGraphdbResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.LoadByIdsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.LoadByIdsResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.LoadBySqlRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.LoadBySqlResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.LoadByTimedbRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.LoadByTimedbResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.MapSizeRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.MapSizeResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.MergeRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.MergeResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.NewMapRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.NewMapResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.QueryByEmailRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.QueryByEmailResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.QueryByTimeRangeRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.QueryByTimeRangeResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.QueryMapRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.QueryMapResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.SensorEvent;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.SessionSummary;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.WatchLiveSessionsEvent;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.claudesensor.Claudesensor.WatchLiveSessionsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.libs.servicemanager.Caller;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.libs.errors.ProtoException;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.libs.x509.X509;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.llmsensor.Llmsensor;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.types.vservices.scmsensor.Scmsensor;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.ServiceManager;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.vservices.claudesensor.StratumQuery;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.services.stratum.Stratum;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.services.stratum.Helpers;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.DeleteMapRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.DeleteMapResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.DescribeMapRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.DescribeMapResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.EventTimeRange;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.FilterMapRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.FilterMapResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.GetSessionEventsRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.GetSessionEventsResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.GetUserSessionsRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.GetUserSessionsResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ListActiveSessionsRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ListActiveSessionsResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ListMapsRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ListMapsResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.LoadByGraphdbRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.LoadByGraphdbResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.LoadByIdsRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.LoadByIdsResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.LoadBySqlRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.LoadBySqlResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.LoadByTimedbRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.LoadByTimedbResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.MapSizeRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.MapSizeResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.MergeRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.MergeResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.NewMapRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.NewMapResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.QueryByEmailRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.QueryByEmailResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.QueryByTimeRangeRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.QueryByTimeRangeResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.QueryMapRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.QueryMapResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.SensorEvent;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.SessionSummary;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.WatchLiveSessionsEvent;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.WatchLiveSessionsRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.libs.servicemanager.Caller;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.libs.errors.ProtoException;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.libs.x509.X509;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.llmsensor.Llmsensor;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.scmsensor.Scmsensor;
 
 /**
  * StratumHandler wires together EventStore, WorkingSetStore, and the gRPC
@@ -142,13 +142,13 @@ public class StratumHandler extends StratumVServiceBase {
     }
 
     @Override
-    public com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.s2sm.internal.grpc.servers.services.stratum.StratumStateService.StratumStateServiceHandler getStratumStateGrpcImpl() {
-        return new com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.s2sm.internal.grpc.servers.services.stratum.StratumStateService.StratumStateServiceHandler() {};
+    public com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.StratumStateService.StratumStateServiceHandler getStratumStateGrpcImpl() {
+        return new com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.StratumStateService.StratumStateServiceHandler() {};
     }
 
     @Override
-    public com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.s2sm.internal.grpc.servers.services.stratum.StratumConfigStateService.StratumConfigStateServiceHandler getStratumConfigStateGrpcImpl() {
-        return new com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.tacplus.s2sm.internal.grpc.servers.services.stratum.StratumConfigStateService.StratumConfigStateServiceHandler() {
+    public com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.StratumConfigStateService.StratumConfigStateServiceHandler getStratumConfigStateGrpcImpl() {
+        return new com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.StratumConfigStateService.StratumConfigStateServiceHandler() {
             @Override
             public Stratum.Config getConfig(Caller caller) throws ProtoException {
                 Stratum.Config cfg = config;

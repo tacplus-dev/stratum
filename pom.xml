@@ -9,7 +9,7 @@
 	<name>Stratum Parent</name>
 	<description>Parent POM for stratum (Supervisor LLM stateful SQL workspace)</description>
 	<modules>
-		<module>tacplus</module>
+		<module>model</module>
 		<module>codegen</module>
 		<module>server</module>
 	</modules>

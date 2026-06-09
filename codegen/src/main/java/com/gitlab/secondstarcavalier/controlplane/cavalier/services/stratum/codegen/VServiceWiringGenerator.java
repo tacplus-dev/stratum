@@ -9,7 +9,7 @@ import java.util.List;
 
 /**
  * Generates StratumVServiceBase.java — an abstract base class that bridges the
- * tacplus-generated Handler interface to stratum's vservice implementations.
+ * model-generated Handler interface to stratum's vservice implementations.
  *
  * For each discovered hosted vservice (e.g. StratumQuery), the generated class:
  *   1. Implements get{ServiceName}GrpcImpl() by delegating to provide{ServiceName}Handler()
@@ -25,7 +25,7 @@ import java.util.List;
 public class VServiceWiringGenerator {
 
     private static final String HOST_PKG_BASE = "com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum";
-    private static final String TACPLUS_BASE = HOST_PKG_BASE + ".tacplus";
+    private static final String MODEL_BASE = HOST_PKG_BASE + ".model";
     private static final String SM_PREFIX = "s2sm";
 
     /**
@@ -56,17 +56,17 @@ public class VServiceWiringGenerator {
         w.println();
 
         // Imports
-        w.println("import " + TACPLUS_BASE + "." + SM_PREFIX + ".Handler;");
-        w.println("import " + TACPLUS_BASE + ".types.services.stratum.Stratum;");
+        w.println("import " + MODEL_BASE + "." + SM_PREFIX + ".Handler;");
+        w.println("import " + MODEL_BASE + ".types.services.stratum.Stratum;");
         for (VServiceDiscovery.HostedVService svc : services) {
-            String wrapperPkg = TACPLUS_BASE + "." + SM_PREFIX +
+            String wrapperPkg = MODEL_BASE + "." + SM_PREFIX +
                     ".internal.grpc.servers.vservices." + svc.protoPackage;
             w.println("import " + wrapperPkg + "." + svc.serviceName + ";");
         }
         w.println();
 
         w.println("/**");
-        w.println(" * StratumVServiceBase wires tacplus-generated Handler interface methods");
+        w.println(" * StratumVServiceBase wires model-generated Handler interface methods");
         w.println(" * to stratum's vservice implementation providers.");
         w.println(" *");
         w.println(" * Discovered hosted vservices (tag: \"stratum\"):");

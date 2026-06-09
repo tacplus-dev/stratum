@@ -12,10 +12,10 @@
 	<name>Stratum Server</name>
 	<description>Supervisor LLM stateful SQL workspace — Hazelcast + Apache Calcite + gRPC MCP tool surface</description>
 	<dependencies>
-		<!-- Generated tacplus code -->
+		<!-- Generated model code -->
 		<dependency>
 			<groupId>com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum</groupId>
-			<artifactId>stratum-tacplus</artifactId>
+			<artifactId>stratum-model</artifactId>
 			<version>1.2.0-SNAPSHOT</version>
 		</dependency>
 		<dependency>

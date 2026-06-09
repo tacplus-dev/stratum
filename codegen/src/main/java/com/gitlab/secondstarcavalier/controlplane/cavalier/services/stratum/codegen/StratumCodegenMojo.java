@@ -31,7 +31,7 @@ public class StratumCodegenMojo extends AbstractMojo {
      * This is the proto-annotated/ directory produced during code generation.
      */
     @Parameter(property = "protoDir",
-               defaultValue = "${project.basedir}/../tacplus/target/generated-sources/tacplus/proto-annotated")
+               defaultValue = "${project.basedir}/../model/target/generated-sources/model/proto-annotated")
     private File protoDir;
 
     /**
