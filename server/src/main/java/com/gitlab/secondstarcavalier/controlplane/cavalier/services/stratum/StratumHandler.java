@@ -2,11 +2,11 @@
 package com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum;
 
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Function;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,45 +15,41 @@ import io.grpc.stub.StreamObserver;
 
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.ServiceManager;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.vservices.claudesensor.StratumQuery;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.libs.collection.CollectionRuntime;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.services.stratum.Stratum;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.services.stratum.Helpers;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.CreateMapRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.CreateMapResponse;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.DeleteMapRequest;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.DeleteMapResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.DescribeMapRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.DescribeMapResponse;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.EventTimeRange;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.FilterMapRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.FilterMapResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ExecuteMapQueryRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ExecuteMapQueryResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.GetMapDetailRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.GetMapDetailResponse;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.GetSessionEventsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.GetSessionEventsResponse;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.GetUserSessionsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.GetUserSessionsResponse;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ListActiveSessionsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ListActiveSessionsResponse;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ListMapsRequest;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ListMapsResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.LoadByGraphdbRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.LoadByGraphdbResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.LoadByIdsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.LoadByIdsResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.LoadBySqlRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.LoadBySqlResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.LoadByTimedbRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.LoadByTimedbResponse;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.MapSizeRequest;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.MapSizeResponse;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.MergeRequest;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.MergeResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.NewMapRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.NewMapResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.QueryByEmailRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.QueryByEmailResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.QueryByTimeRangeRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.QueryByTimeRangeResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.QueryMapRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.QueryMapResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ListEventsByEmailRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ListEventsByTimeRangeRequest;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.SensorEvent;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.SessionSummary;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapByGraphdbRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapByGraphdbResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapByIdsRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapByIdsResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapBySqlRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapBySqlResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapByTimedbRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapByTimedbResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapFilterRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapFilterResponse;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.WatchLiveSessionsEvent;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.WatchLiveSessionsRequest;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.libs.servicemanager.Caller;
@@ -265,10 +261,10 @@ public class StratumHandler extends StratumVServiceBase {
         // --- Map lifecycle ---
 
         @Override
-        public NewMapResponse newMap(Caller caller, NewMapRequest req) throws ProtoException {
+        public CreateMapResponse createMap(Caller caller, CreateMapRequest req) throws ProtoException {
             try {
                 store.createMap(req.getMapId());
-                return NewMapResponse.getDefaultInstance();
+                return CreateMapResponse.getDefaultInstance();
             } catch (IllegalArgumentException e) {
                 throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
             } catch (Exception e) {
@@ -298,9 +294,9 @@ public class StratumHandler extends StratumVServiceBase {
         }
 
         @Override
-        public DescribeMapResponse describeMap(Caller caller, DescribeMapRequest req) throws ProtoException {
+        public GetMapDetailResponse getMapDetail(Caller caller, GetMapDetailRequest req) throws ProtoException {
             try {
-                return DescribeMapResponse.newBuilder()
+                return GetMapDetailResponse.newBuilder()
                         .setDetail(store.describeMap(req.getMapId())).build();
             } catch (IllegalArgumentException e) {
                 throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
@@ -310,7 +306,7 @@ public class StratumHandler extends StratumVServiceBase {
         }
 
         @Override
-        public MapSizeResponse mapSize(Caller caller, MapSizeRequest req) throws ProtoException {
+        public MapSizeResponse getMapSize(Caller caller, MapSizeRequest req) throws ProtoException {
             try {
                 long[] sz = store.mapSize(req.getMapId());
                 return MapSizeResponse.newBuilder()
@@ -327,7 +323,7 @@ public class StratumHandler extends StratumVServiceBase {
         // --- Loading ---
 
         @Override
-        public LoadByIdsResponse loadByIds(Caller caller, LoadByIdsRequest req) throws ProtoException {
+        public UpdateMapByIdsResponse updateMapByIds(Caller caller, UpdateMapByIdsRequest req) throws ProtoException {
             try {
                 long[] added = {0};
                 for (String id : req.getEventIdsList()) {
@@ -336,14 +332,14 @@ public class StratumHandler extends StratumVServiceBase {
                         added[0]++;
                     });
                 }
-                return LoadByIdsResponse.newBuilder().setEventsAdded(added[0]).build();
+                return UpdateMapByIdsResponse.newBuilder().setEventsAdded(added[0]).build();
             } catch (Exception e) {
                 throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
             }
         }
 
         @Override
-        public LoadBySqlResponse loadBySql(Caller caller, LoadBySqlRequest req) throws ProtoException {
+        public UpdateMapBySqlResponse updateMapBySql(Caller caller, UpdateMapBySqlRequest req) throws ProtoException {
             try {
                 EventStore.SqlPredicates preds = EventStore.SqlParser.parse(req.getSql());
                 List<SensorEvent> events = eventStore.query(preds);
@@ -351,7 +347,7 @@ public class StratumHandler extends StratumVServiceBase {
                     store.putEvent(req.getMapId(), ev);
                 }
                 log.info("load_by_sql into {}: {} events loaded", req.getMapId(), events.size());
-                return LoadBySqlResponse.newBuilder().setEventsAdded(events.size()).build();
+                return UpdateMapBySqlResponse.newBuilder().setEventsAdded(events.size()).build();
             } catch (IllegalArgumentException e) {
                 throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
             } catch (Exception e) {
@@ -360,22 +356,22 @@ public class StratumHandler extends StratumVServiceBase {
         }
 
         @Override
-        public LoadByTimedbResponse loadByTimedb(Caller caller, LoadByTimedbRequest req) throws ProtoException {
+        public UpdateMapByTimedbResponse updateMapByTimedb(Caller caller, UpdateMapByTimedbRequest req) throws ProtoException {
             throw new ProtoException(ProtoException.UNIMPLEMENTED, "load_by_timedb not yet implemented");
         }
 
         @Override
-        public LoadByGraphdbResponse loadByGraphdb(Caller caller, LoadByGraphdbRequest req) throws ProtoException {
+        public UpdateMapByGraphdbResponse updateMapByGraphdb(Caller caller, UpdateMapByGraphdbRequest req) throws ProtoException {
             throw new ProtoException(ProtoException.UNIMPLEMENTED, "load_by_graphdb not yet implemented");
         }
 
         // --- Map mutation ---
 
         @Override
-        public FilterMapResponse filterMap(Caller caller, FilterMapRequest req) throws ProtoException {
+        public UpdateMapFilterResponse updateMapFilter(Caller caller, UpdateMapFilterRequest req) throws ProtoException {
             try {
                 long removed = store.filterMap(req.getMapId(), req.getSql());
-                return FilterMapResponse.newBuilder().setEventsRemoved(removed).build();
+                return UpdateMapFilterResponse.newBuilder().setEventsRemoved(removed).build();
             } catch (IllegalArgumentException e) {
                 throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
             } catch (Exception e) {
@@ -398,11 +394,11 @@ public class StratumHandler extends StratumVServiceBase {
         // --- Read-only query ---
 
         @Override
-        public QueryMapResponse queryMap(Caller caller, QueryMapRequest req) throws ProtoException {
+        public ExecuteMapQueryResponse executeMapQuery(Caller caller, ExecuteMapQueryRequest req) throws ProtoException {
             try {
                 int limit = req.getLimit() > 0 ? req.getLimit() : 100;
                 Object[] result = (Object[]) store.queryMap(req.getMapId(), req.getSql(), limit);
-                return QueryMapResponse.newBuilder()
+                return ExecuteMapQueryResponse.newBuilder()
                         .setResultsJson((String) result[1])
                         .setTotalRows((Long) result[0])
                         .build();
@@ -416,8 +412,9 @@ public class StratumHandler extends StratumVServiceBase {
         // --- Operator queries ---
 
         @Override
-        public ListActiveSessionsResponse listActiveSessions(Caller caller,
-                                                             ListActiveSessionsRequest req) throws ProtoException {
+        public CollectionRuntime.Page<SessionSummary> listActiveSessions(Caller caller,
+                                                                         ListActiveSessionsRequest req,
+                                                                         CollectionRuntime.PageParams page) throws ProtoException {
             try {
                 int idleSecs  = config != null ? config.getActiveSessionIdleSeconds() : 300;
                 long cutoffMs = System.currentTimeMillis() - (long) idleSecs * 1000;
@@ -425,75 +422,47 @@ public class StratumHandler extends StratumVServiceBase {
                 preds.startMs = cutoffMs;
                 List<SensorEvent> events = eventStore.query(preds);
                 List<SessionSummary> sessions = buildSessionSummaries(events);
-                // Sort by last_seen_ms DESC for stable pagination.
-                sessions.sort(java.util.Comparator.comparingLong(SessionSummary::getLastSeenMs).reversed()
-                        .thenComparing(SessionSummary::getSessionId));
-
-                int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 50;
-                int offset   = decodePageOffset(req.getPageToken());
-                List<SessionSummary> page = new ArrayList<>();
-                String nextToken = pageSlice(sessions, offset, pageSize, page);
-                return ListActiveSessionsResponse.newBuilder()
-                        .addAllSessions(page)
-                        .setNextPageToken(nextToken)
-                        .build();
+                return pageSorted(sessions, page, s -> List.of(i64Key(s.getLastSeenMs()), s.getSessionId()));
             } catch (Exception e) {
                 throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
             }
         }
 
         @Override
-        public GetSessionEventsResponse getSessionEvents(Caller caller,
-                                                         GetSessionEventsRequest req) throws ProtoException {
+        public CollectionRuntime.Page<SensorEvent> listSessionEvents(Caller caller,
+                                                                     GetSessionEventsRequest req,
+                                                                     CollectionRuntime.PageParams page) throws ProtoException {
             try {
                 EventStore.SqlPredicates preds = new EventStore.SqlPredicates();
                 preds.sessionId = req.getSessionId();
                 applyTimeRange(preds, req.hasTimeRange() ? req.getTimeRange() : null);
                 List<SensorEvent> events = eventStore.query(preds);
-                // Chronological order for session replay.
-                events.sort(java.util.Comparator.comparingLong(SensorEvent::getTimestampMs));
-
-                int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 200;
-                int offset   = decodePageOffset(req.getPageToken());
-                List<SensorEvent> page = new ArrayList<>();
-                String nextToken = pageSlice(events, offset, pageSize, page);
-                return GetSessionEventsResponse.newBuilder()
-                        .addAllEvents(page)
-                        .setNextPageToken(nextToken)
-                        .build();
+                return pageSorted(events, page, e -> List.of(i64Key(e.getTimestampMs()), e.getEventId()));
             } catch (Exception e) {
                 throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
             }
         }
 
         @Override
-        public GetUserSessionsResponse getUserSessions(Caller caller,
-                                                       GetUserSessionsRequest req) throws ProtoException {
+        public CollectionRuntime.Page<SessionSummary> listUserSessions(Caller caller,
+                                                                       GetUserSessionsRequest req,
+                                                                       CollectionRuntime.PageParams page) throws ProtoException {
             try {
                 EventStore.SqlPredicates preds = new EventStore.SqlPredicates();
                 preds.email = req.getEmail();
                 applyTimeRange(preds, req.hasTimeRange() ? req.getTimeRange() : null);
                 List<SensorEvent> events = eventStore.query(preds);
                 List<SessionSummary> sessions = buildSessionSummaries(events);
-                sessions.sort(java.util.Comparator.comparingLong(SessionSummary::getLastSeenMs).reversed()
-                        .thenComparing(SessionSummary::getSessionId));
-
-                int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 50;
-                int offset   = decodePageOffset(req.getPageToken());
-                List<SessionSummary> page = new ArrayList<>();
-                String nextToken = pageSlice(sessions, offset, pageSize, page);
-                return GetUserSessionsResponse.newBuilder()
-                        .addAllSessions(page)
-                        .setNextPageToken(nextToken)
-                        .build();
+                return pageSorted(sessions, page, s -> List.of(i64Key(s.getLastSeenMs()), s.getSessionId()));
             } catch (Exception e) {
                 throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
             }
         }
 
         @Override
-        public QueryByTimeRangeResponse queryByTimeRange(Caller caller,
-                                                         QueryByTimeRangeRequest req) throws ProtoException {
+        public CollectionRuntime.Page<SensorEvent> listEventsByTimeRange(Caller caller,
+                                                                         ListEventsByTimeRangeRequest req,
+                                                                         CollectionRuntime.PageParams page) throws ProtoException {
             EventTimeRange tr = req.getTimeRange();
             if (tr.getStartMs() <= 0 || tr.getEndMs() <= 0 || tr.getStartMs() >= tr.getEndMs()) {
                 throw new ProtoException(ProtoException.INVALID_ARGUMENT,
@@ -503,16 +472,7 @@ public class StratumHandler extends StratumVServiceBase {
                 EventStore.SqlPredicates preds = new EventStore.SqlPredicates();
                 applyTimeRange(preds, tr);
                 List<SensorEvent> events = eventStore.query(preds);
-                events.sort(java.util.Comparator.comparingLong(SensorEvent::getTimestampMs));
-
-                int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 200;
-                int offset   = decodePageOffset(req.getPageToken());
-                List<SensorEvent> page = new ArrayList<>();
-                String nextToken = pageSlice(events, offset, pageSize, page);
-                return QueryByTimeRangeResponse.newBuilder()
-                        .addAllEvents(page)
-                        .setNextPageToken(nextToken)
-                        .build();
+                return pageSorted(events, page, e -> List.of(i64Key(e.getTimestampMs()), e.getEventId()));
             } catch (ProtoException pe) {
                 throw pe;
             } catch (Exception e) {
@@ -521,31 +481,23 @@ public class StratumHandler extends StratumVServiceBase {
         }
 
         @Override
-        public QueryByEmailResponse queryByEmail(Caller caller,
-                                                 QueryByEmailRequest req) throws ProtoException {
+        public CollectionRuntime.Page<SensorEvent> listEventsByEmail(Caller caller,
+                                                                     ListEventsByEmailRequest req,
+                                                                     CollectionRuntime.PageParams page) throws ProtoException {
             try {
                 EventStore.SqlPredicates preds = new EventStore.SqlPredicates();
                 preds.email = req.getEmail();
                 applyTimeRange(preds, req.hasTimeRange() ? req.getTimeRange() : null);
                 List<SensorEvent> events = eventStore.query(preds);
-                events.sort(java.util.Comparator.comparingLong(SensorEvent::getTimestampMs));
-
-                int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 200;
-                int offset   = decodePageOffset(req.getPageToken());
-                List<SensorEvent> page = new ArrayList<>();
-                String nextToken = pageSlice(events, offset, pageSize, page);
-                return QueryByEmailResponse.newBuilder()
-                        .addAllEvents(page)
-                        .setNextPageToken(nextToken)
-                        .build();
+                return pageSorted(events, page, e -> List.of(i64Key(e.getTimestampMs()), e.getEventId()));
             } catch (Exception e) {
                 throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
             }
         }
 
         @Override
-        public void watchLiveSessions(Caller caller, WatchLiveSessionsRequest req,
-                                      StreamObserver<WatchLiveSessionsEvent> obs) throws ProtoException {
+        public void subscribeLiveSessions(Caller caller, WatchLiveSessionsRequest req,
+                                          StreamObserver<WatchLiveSessionsEvent> obs) throws ProtoException {
             LiveWatcher w = new LiveWatcher(obs, req.getFilterEmail(), req.getIncludeRawEvents());
             liveWatchers.add(w);
             if (obs instanceof io.grpc.stub.ServerCallStreamObserver) {
@@ -620,20 +572,36 @@ public class StratumHandler extends StratumVServiceBase {
     // Pagination helpers
     // -----------------------------------------------------------------------
 
-    private static int decodePageOffset(String token) {
-        if (token == null || token.isEmpty()) return 0;
-        try { return Integer.parseInt(new String(Base64.getDecoder().decode(token))); }
-        catch (Exception e) { return 0; }
+    private static String i64Key(long value) {
+        return String.format("%020d", Math.max(0L, value));
     }
 
-    private static String encodePageToken(int offset) {
-        return Base64.getEncoder().encodeToString(Integer.toString(offset).getBytes());
+    private static int compareKeys(List<String> left, List<String> right) {
+        int n = Math.min(left.size(), right.size());
+        for (int i = 0; i < n; i++) {
+            int cmp = left.get(i).compareTo(right.get(i));
+            if (cmp != 0) return cmp;
+        }
+        return Integer.compare(left.size(), right.size());
     }
 
-    private static <T> String pageSlice(List<T> all, int offset, int size, List<T> out) {
-        int from = Math.min(offset, all.size());
-        int to   = Math.min(from + size, all.size());
-        out.addAll(all.subList(from, to));
-        return to < all.size() ? encodePageToken(to) : "";
+    private static <T> CollectionRuntime.Page<T> pageSorted(
+            List<T> all,
+            CollectionRuntime.PageParams page,
+            Function<T, List<String>> keyFor) {
+        all.sort((a, b) -> compareKeys(keyFor.apply(a), keyFor.apply(b)));
+        int limit = (int) Math.max(1L, page.limit);
+        int start = 0;
+        if (page.after != null && page.after.keys != null) {
+            while (start < all.size() && compareKeys(keyFor.apply(all.get(start)), page.after.keys) <= 0) {
+                start++;
+            }
+        }
+        int end = Math.min(start + limit, all.size());
+        List<T> items = new ArrayList<>(all.subList(start, end));
+        CollectionRuntime.Cursor nextAfter = end < all.size() && !items.isEmpty()
+                ? new CollectionRuntime.Cursor(keyFor.apply(items.get(items.size() - 1)))
+                : null;
+        return new CollectionRuntime.Page<>(items, nextAfter, all.size());
     }
 }
