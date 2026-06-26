@@ -31,22 +31,22 @@ import org.slf4j.LoggerFactory;
 
 import com.hazelcast.map.IMap;
 
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.SensorEvent;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.AgentEvent;
 
 /**
  * CalciteEngine executes Calcite SQL queries over a Hazelcast working-set IMap.
  *
- * Schema: a single table named "events" with columns derived from SensorEvent:
+ * Schema: a single table named "events" with columns derived from AgentEvent:
  *   event_id         VARCHAR
  *   timestamp_ms     BIGINT
- *   email            VARCHAR
+ *   spiffe_id            VARCHAR
  *   session_id       VARCHAR
  *   agent_id         VARCHAR
  *   event_type       VARCHAR   (enum name)
  *   event_type_value INTEGER   (enum ordinal)
  *
  * Three entry points:
- *   query()        — returns matching SensorEvents (full proto objects)
+ *   query()        — returns matching AgentEvents (full proto objects)
  *   queryToJson()  — returns matching rows as a JSON array string
  *   getMatchingIds() — returns the set of event_ids matching the SQL (for filterMap)
  */
@@ -67,23 +67,23 @@ public final class CalciteEngine {
 
     /**
      * Executes a Calcite SQL query over the given working-set IMap.
-     * Returns the full SensorEvent proto for each matching row.
+     * Returns the full AgentEvent proto for each matching row.
      */
-    public static List<SensorEvent> query(IMap<String, byte[]> imap, String sql) throws Exception {
+    public static List<AgentEvent> query(IMap<String, byte[]> imap, String sql) throws Exception {
         Collection<byte[]> snapshot = new ArrayList<>(imap.values());
 
         try (Connection conn = newConnection()) {
             CalciteConnection calciteConn = conn.unwrap(CalciteConnection.class);
             registerSchema(calciteConn, snapshot);
 
-            List<SensorEvent> results = new ArrayList<>();
+            List<AgentEvent> results = new ArrayList<>();
             try (Statement stmt = conn.createStatement();
                  ResultSet rs = stmt.executeQuery(sql)) {
                 while (rs.next()) {
                     String eventId = rs.getString(COL_EVENT_ID + 1);
                     byte[] raw = imap.get(eventId);
                     if (raw != null) {
-                        results.add(SensorEvent.parseFrom(raw));
+                        results.add(AgentEvent.parseFrom(raw));
                     }
                 }
             }
@@ -178,7 +178,7 @@ public final class CalciteEngine {
     private static void registerSchema(CalciteConnection calciteConn,
                                        Collection<byte[]> snapshot) throws Exception {
         SchemaPlus rootSchema = calciteConn.getRootSchema();
-        rootSchema.add("stratum", new SensorEventSchema(snapshot));
+        rootSchema.add("stratum", new AgentEventSchema(snapshot));
         calciteConn.setSchema("stratum");
     }
 
@@ -194,27 +194,27 @@ public final class CalciteEngine {
     // Calcite schema — wraps the IMap snapshot
     // -----------------------------------------------------------------------
 
-    static final class SensorEventSchema extends AbstractSchema {
+    static final class AgentEventSchema extends AbstractSchema {
         private final Collection<byte[]> snapshot;
 
-        SensorEventSchema(Collection<byte[]> snapshot) {
+        AgentEventSchema(Collection<byte[]> snapshot) {
             this.snapshot = snapshot;
         }
 
         @Override
         protected java.util.Map<String, org.apache.calcite.schema.Table> getTableMap() {
-            return java.util.Map.of("events", new SensorEventTable(snapshot));
+            return java.util.Map.of("events", new AgentEventTable(snapshot));
         }
     }
 
     // -----------------------------------------------------------------------
-    // Calcite table — scans the snapshot, exposes SensorEvent fields as columns
+    // Calcite table — scans the snapshot, exposes AgentEvent fields as columns
     // -----------------------------------------------------------------------
 
-    static final class SensorEventTable extends AbstractTable implements ScannableTable {
+    static final class AgentEventTable extends AbstractTable implements ScannableTable {
         private final Collection<byte[]> snapshot;
 
-        SensorEventTable(Collection<byte[]> snapshot) {
+        AgentEventTable(Collection<byte[]> snapshot) {
             this.snapshot = snapshot;
         }
 
@@ -223,7 +223,7 @@ public final class CalciteEngine {
             RelDataTypeFactory.Builder builder = typeFactory.builder();
             builder.add("event_id",         typeFactory.createSqlType(SqlTypeName.VARCHAR));
             builder.add("timestamp_ms",     typeFactory.createSqlType(SqlTypeName.BIGINT));
-            builder.add("email",            typeFactory.createSqlType(SqlTypeName.VARCHAR));
+            builder.add("spiffe_id",            typeFactory.createSqlType(SqlTypeName.VARCHAR));
             builder.add("session_id",       typeFactory.createSqlType(SqlTypeName.VARCHAR));
             builder.add("agent_id",         typeFactory.createSqlType(SqlTypeName.VARCHAR));
             builder.add("event_type",       typeFactory.createSqlType(SqlTypeName.VARCHAR));
@@ -236,7 +236,7 @@ public final class CalciteEngine {
             return new AbstractEnumerable<Object[]>() {
                 @Override
                 public Enumerator<Object[]> enumerator() {
-                    return new SensorEventEnumerator(snapshot.iterator());
+                    return new AgentEventEnumerator(snapshot.iterator());
                 }
             };
         }
@@ -246,11 +246,11 @@ public final class CalciteEngine {
     // Calcite enumerator — deserializes each row on demand
     // -----------------------------------------------------------------------
 
-    static final class SensorEventEnumerator implements Enumerator<Object[]> {
+    static final class AgentEventEnumerator implements Enumerator<Object[]> {
         private final java.util.Iterator<byte[]> iterator;
         private Object[] current;
 
-        SensorEventEnumerator(java.util.Iterator<byte[]> iterator) {
+        AgentEventEnumerator(java.util.Iterator<byte[]> iterator) {
             this.iterator = iterator;
         }
 
@@ -264,11 +264,11 @@ public final class CalciteEngine {
             while (iterator.hasNext()) {
                 byte[] raw = iterator.next();
                 try {
-                    SensorEvent ev = SensorEvent.parseFrom(raw);
+                    AgentEvent ev = AgentEvent.parseFrom(raw);
                     current = toRow(ev);
                     return true;
                 } catch (Exception e) {
-                    log.warn("skipping unparseable SensorEvent in Calcite scan", e);
+                    log.warn("skipping unparseable AgentEvent in Calcite scan", e);
                 }
             }
             return false;
@@ -282,11 +282,11 @@ public final class CalciteEngine {
         @Override
         public void close() {}
 
-        private static Object[] toRow(SensorEvent ev) {
+        private static Object[] toRow(AgentEvent ev) {
             return new Object[]{
                 ev.getEventId(),
                 ev.getTimestampMs(),
-                ev.getEmail(),
+                ev.getSpiffeId(),
                 ev.getSessionId(),
                 ev.getAgentId(),
                 ev.getEventType().name(),

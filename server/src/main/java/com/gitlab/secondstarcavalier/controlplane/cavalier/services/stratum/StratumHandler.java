@@ -14,44 +14,44 @@ import org.slf4j.LoggerFactory;
 import io.grpc.stub.StreamObserver;
 
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.ServiceManager;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.vservices.claudesensor.StratumQuery;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.vservices.agentsensor.StratumQuery;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.libs.collection.CollectionRuntime;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.services.stratum.Stratum;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.services.stratum.Helpers;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.CreateMapRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.CreateMapResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.DeleteMapRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.DeleteMapResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.EventTimeRange;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ExecuteMapQueryRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ExecuteMapQueryResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.GetMapDetailRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.GetMapDetailResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.GetSessionEventsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.GetUserSessionsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ListActiveSessionsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ListMapsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ListMapsResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.MapSizeRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.MapSizeResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.MergeRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.MergeResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ListEventsByEmailRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.ListEventsByTimeRangeRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.SensorEvent;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.SessionSummary;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapByGraphdbRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapByGraphdbResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapByIdsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapByIdsResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapBySqlRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapBySqlResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapByTimedbRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapByTimedbResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapFilterRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.UpdateMapFilterResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.WatchLiveSessionsEvent;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.WatchLiveSessionsRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.CreateMapRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.CreateMapResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.DeleteMapRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.DeleteMapResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.EventTimeRange;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.ExecuteMapQueryRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.ExecuteMapQueryResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.GetMapDetailRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.GetMapDetailResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.GetSessionEventsRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.GetUserSessionsRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.ListActiveSessionsRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.ListMapsRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.ListMapsResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.MapSizeRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.MapSizeResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.MergeRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.MergeResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.ListEventsByActorRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.ListEventsByTimeRangeRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.AgentEvent;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.SessionSummary;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapByGraphdbRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapByGraphdbResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapByIdsRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapByIdsResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapBySqlRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapBySqlResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapByTimedbRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapByTimedbResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapFilterRequest;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapFilterResponse;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.WatchLiveSessionsEvent;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.WatchLiveSessionsRequest;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.libs.servicemanager.Caller;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.libs.errors.ProtoException;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.libs.x509.X509;
@@ -67,7 +67,7 @@ import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.mode
  *      Hazelcast cluster) and WorkingSetStore (working-set Hazelcast cluster)
  *      from config defaults, then returns StratumQueryImpl for registration.
  *   2. handleConfig() — re-applies config when kernel delivers it.
- *   3. onEventStream() begins receiving SensorEvents from the EventBus.
+ *   3. onEventStream() begins receiving AgentEvents from the EventBus.
  *
  * EventBus subscription is auto-generated by tacplus from (spec.hot_store).
  */
@@ -83,17 +83,17 @@ public class StratumHandler extends StratumVServiceBase {
 
     private static final class LiveWatcher {
         final StreamObserver<WatchLiveSessionsEvent> obs;
-        final String filterEmail;
+        final String filterSpiffeId;
         final boolean includeRawEvents;
 
-        LiveWatcher(StreamObserver<WatchLiveSessionsEvent> obs, String filterEmail, boolean includeRawEvents) {
+        LiveWatcher(StreamObserver<WatchLiveSessionsEvent> obs, String filterSpiffeId, boolean includeRawEvents) {
             this.obs = obs;
-            this.filterEmail = filterEmail;
+            this.filterSpiffeId = filterSpiffeId;
             this.includeRawEvents = includeRawEvents;
         }
 
-        boolean matches(SensorEvent ev) {
-            return filterEmail == null || filterEmail.isEmpty() || filterEmail.equals(ev.getEmail());
+        boolean matches(AgentEvent ev) {
+            return filterSpiffeId == null || filterSpiffeId.isEmpty() || filterSpiffeId.equals(ev.getSpiffeId());
         }
 
         // gRPC ServerCallStreamObserver must not receive concurrent onNext calls.
@@ -195,7 +195,7 @@ public class StratumHandler extends StratumVServiceBase {
     // -----------------------------------------------------------------------
 
     @Override
-    public void onEventStreamClaudesensorAgenticCodeEventBusEventStream(SensorEvent event, SubscriptionMeta meta) throws Exception {
+    public void onEventStreamAgentsensorAgentEventBusEventStream(AgentEvent event, SubscriptionMeta meta) throws Exception {
         eventStore.put(event);
         pushToLiveWatchers(event);
     }
@@ -203,13 +203,13 @@ public class StratumHandler extends StratumVServiceBase {
     @Override
     public void onEventStreamLlmsensorLlmEventBusEventStream(Llmsensor.LlmEvent ev, SubscriptionMeta meta) throws Exception {
         eventStore.putLlmRaw(ev.getEventId(), ev.toByteArray());
-        log.debug("stored llm event: event_id={} email={}", ev.getEventId(), ev.getEmail());
+        log.debug("stored llm event: event_id={} spiffe_id={}", ev.getEventId(), ev.getSpiffeId());
     }
 
     @Override
     public void onEventStreamScmsensorScmEventBusEventStream(Scmsensor.ScmEvent ev, SubscriptionMeta meta) throws Exception {
         eventStore.putScmRaw(ev.getEventId(), ev.toByteArray());
-        log.debug("stored scm event: event_id={} email={}", ev.getEventId(), ev.getEmail());
+        log.debug("stored scm event: event_id={} spiffe_id={}", ev.getEventId(), ev.getSpiffeId());
     }
 
     /**
@@ -222,7 +222,7 @@ public class StratumHandler extends StratumVServiceBase {
         log.warn("unhandled event stream topic: {} (offset={})", topic, meta.offset);
     }
 
-    private void pushToLiveWatchers(SensorEvent event) {
+    private void pushToLiveWatchers(AgentEvent event) {
         if (liveWatchers.isEmpty()) return;
         long nowMs = System.currentTimeMillis();
         int idleSecs = config != null ? config.getActiveSessionIdleSeconds() : 300;
@@ -342,8 +342,8 @@ public class StratumHandler extends StratumVServiceBase {
         public UpdateMapBySqlResponse updateMapBySql(Caller caller, UpdateMapBySqlRequest req) throws ProtoException {
             try {
                 EventStore.SqlPredicates preds = EventStore.SqlParser.parse(req.getSql());
-                List<SensorEvent> events = eventStore.query(preds);
-                for (SensorEvent ev : events) {
+                List<AgentEvent> events = eventStore.query(preds);
+                for (AgentEvent ev : events) {
                     store.putEvent(req.getMapId(), ev);
                 }
                 log.info("load_by_sql into {}: {} events loaded", req.getMapId(), events.size());
@@ -420,7 +420,7 @@ public class StratumHandler extends StratumVServiceBase {
                 long cutoffMs = System.currentTimeMillis() - (long) idleSecs * 1000;
                 EventStore.SqlPredicates preds = new EventStore.SqlPredicates();
                 preds.startMs = cutoffMs;
-                List<SensorEvent> events = eventStore.query(preds);
+                List<AgentEvent> events = eventStore.query(preds);
                 List<SessionSummary> sessions = buildSessionSummaries(events);
                 return pageSorted(sessions, page, s -> List.of(i64Key(s.getLastSeenMs()), s.getSessionId()));
             } catch (Exception e) {
@@ -429,14 +429,14 @@ public class StratumHandler extends StratumVServiceBase {
         }
 
         @Override
-        public CollectionRuntime.Page<SensorEvent> listSessionEvents(Caller caller,
+        public CollectionRuntime.Page<AgentEvent> listSessionEvents(Caller caller,
                                                                      GetSessionEventsRequest req,
                                                                      CollectionRuntime.PageParams page) throws ProtoException {
             try {
                 EventStore.SqlPredicates preds = new EventStore.SqlPredicates();
                 preds.sessionId = req.getSessionId();
                 applyTimeRange(preds, req.hasTimeRange() ? req.getTimeRange() : null);
-                List<SensorEvent> events = eventStore.query(preds);
+                List<AgentEvent> events = eventStore.query(preds);
                 return pageSorted(events, page, e -> List.of(i64Key(e.getTimestampMs()), e.getEventId()));
             } catch (Exception e) {
                 throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
@@ -449,9 +449,9 @@ public class StratumHandler extends StratumVServiceBase {
                                                                        CollectionRuntime.PageParams page) throws ProtoException {
             try {
                 EventStore.SqlPredicates preds = new EventStore.SqlPredicates();
-                preds.email = req.getEmail();
+                preds.spiffe_id = req.getSpiffeId();
                 applyTimeRange(preds, req.hasTimeRange() ? req.getTimeRange() : null);
-                List<SensorEvent> events = eventStore.query(preds);
+                List<AgentEvent> events = eventStore.query(preds);
                 List<SessionSummary> sessions = buildSessionSummaries(events);
                 return pageSorted(sessions, page, s -> List.of(i64Key(s.getLastSeenMs()), s.getSessionId()));
             } catch (Exception e) {
@@ -460,7 +460,7 @@ public class StratumHandler extends StratumVServiceBase {
         }
 
         @Override
-        public CollectionRuntime.Page<SensorEvent> listEventsByTimeRange(Caller caller,
+        public CollectionRuntime.Page<AgentEvent> listEventsByTimeRange(Caller caller,
                                                                          ListEventsByTimeRangeRequest req,
                                                                          CollectionRuntime.PageParams page) throws ProtoException {
             EventTimeRange tr = req.getTimeRange();
@@ -471,7 +471,7 @@ public class StratumHandler extends StratumVServiceBase {
             try {
                 EventStore.SqlPredicates preds = new EventStore.SqlPredicates();
                 applyTimeRange(preds, tr);
-                List<SensorEvent> events = eventStore.query(preds);
+                List<AgentEvent> events = eventStore.query(preds);
                 return pageSorted(events, page, e -> List.of(i64Key(e.getTimestampMs()), e.getEventId()));
             } catch (ProtoException pe) {
                 throw pe;
@@ -481,14 +481,14 @@ public class StratumHandler extends StratumVServiceBase {
         }
 
         @Override
-        public CollectionRuntime.Page<SensorEvent> listEventsByEmail(Caller caller,
-                                                                     ListEventsByEmailRequest req,
+        public CollectionRuntime.Page<AgentEvent> listEventsByActor(Caller caller,
+                                                                     ListEventsByActorRequest req,
                                                                      CollectionRuntime.PageParams page) throws ProtoException {
             try {
                 EventStore.SqlPredicates preds = new EventStore.SqlPredicates();
-                preds.email = req.getEmail();
+                preds.spiffe_id = req.getSpiffeId();
                 applyTimeRange(preds, req.hasTimeRange() ? req.getTimeRange() : null);
-                List<SensorEvent> events = eventStore.query(preds);
+                List<AgentEvent> events = eventStore.query(preds);
                 return pageSorted(events, page, e -> List.of(i64Key(e.getTimestampMs()), e.getEventId()));
             } catch (Exception e) {
                 throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
@@ -498,7 +498,7 @@ public class StratumHandler extends StratumVServiceBase {
         @Override
         public void subscribeLiveSessions(Caller caller, WatchLiveSessionsRequest req,
                                           StreamObserver<WatchLiveSessionsEvent> obs) throws ProtoException {
-            LiveWatcher w = new LiveWatcher(obs, req.getFilterEmail(), req.getIncludeRawEvents());
+            LiveWatcher w = new LiveWatcher(obs, req.getFilterSpiffeId(), req.getIncludeRawEvents());
             liveWatchers.add(w);
             if (obs instanceof io.grpc.stub.ServerCallStreamObserver) {
                 ((io.grpc.stub.ServerCallStreamObserver<?>) obs)
@@ -512,17 +512,17 @@ public class StratumHandler extends StratumVServiceBase {
     // Session summary helpers
     // -----------------------------------------------------------------------
 
-    private List<SessionSummary> buildSessionSummaries(List<SensorEvent> events) {
+    private List<SessionSummary> buildSessionSummaries(List<AgentEvent> events) {
         long nowMs     = System.currentTimeMillis();
         int idleThresh = config != null ? config.getActiveSessionIdleSeconds() : 300;
         Map<String, SessionSummary.Builder> bySession = new LinkedHashMap<>();
-        for (SensorEvent ev : events) {
+        for (AgentEvent ev : events) {
             if (ev.getSessionId().isEmpty()) continue;
             bySession.compute(ev.getSessionId(), (k, b) -> {
                 if (b == null) {
                     b = SessionSummary.newBuilder()
                             .setSessionId(ev.getSessionId())
-                            .setEmail(ev.getEmail())
+                            .setSpiffeId(ev.getSpiffeId())
                             .setWorkingDirectory(ev.getWorkingDirectory())
                             .setSensorType(ev.getSensorType())
                             .setFirstSeenMs(ev.getTimestampMs())
@@ -547,12 +547,12 @@ public class StratumHandler extends StratumVServiceBase {
         return result;
     }
 
-    private static SessionSummary buildQuickSummary(SensorEvent ev, long nowMs, int idleThresh) {
+    private static SessionSummary buildQuickSummary(AgentEvent ev, long nowMs, int idleThresh) {
         long idleSecs = (nowMs - ev.getTimestampMs()) / 1000;
         boolean active = idleSecs <= idleThresh;
         return SessionSummary.newBuilder()
                 .setSessionId(ev.getSessionId())
-                .setEmail(ev.getEmail())
+                .setSpiffeId(ev.getSpiffeId())
                 .setWorkingDirectory(ev.getWorkingDirectory())
                 .setSensorType(ev.getSensorType())
                 .setLastSeenMs(ev.getTimestampMs())

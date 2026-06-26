@@ -14,11 +14,11 @@ import com.hazelcast.config.NetworkConfig;
 /**
  * StratumMapConfig builds the Hazelcast Config for the stratum hot event store.
  *
- * Data model: IMap<event_id, SensorEvent> named "events" in OBJECT format.
+ * Data model: IMap<event_id, AgentEvent> named "events" in OBJECT format.
  *
  * Indexes:
  *   SORTED: timestampMs        — range scans for retention cleanup and time-range queries
- *   HASH:   email              — per-engineer lookups
+ *   HASH:   spiffe_id              — per-engineer lookups
  *   HASH:   sessionId          — per-session lookups
  *   HASH:   agentId            — per-agent lookups
  *   HASH:   eventTypeValue     — event type filtering
@@ -54,13 +54,13 @@ public final class StratumMapConfig {
             }
         }
 
-        // events map: OBJECT in-memory format so Hazelcast reflects directly on SensorEvent
+        // events map: OBJECT in-memory format so Hazelcast reflects directly on AgentEvent
         // getters for predicate evaluation — no serialization overhead for in-JVM queries.
         MapConfig mapCfg = new MapConfig(MAP_NAME);
         mapCfg.setInMemoryFormat(InMemoryFormat.OBJECT);
 
         mapCfg.addIndexConfig(new IndexConfig(IndexType.SORTED, "timestampMs"));
-        mapCfg.addIndexConfig(new IndexConfig(IndexType.HASH,   "email"));
+        mapCfg.addIndexConfig(new IndexConfig(IndexType.HASH,   "spiffe_id"));
         mapCfg.addIndexConfig(new IndexConfig(IndexType.HASH,   "sessionId"));
         mapCfg.addIndexConfig(new IndexConfig(IndexType.HASH,   "agentId"));
         mapCfg.addIndexConfig(new IndexConfig(IndexType.HASH,

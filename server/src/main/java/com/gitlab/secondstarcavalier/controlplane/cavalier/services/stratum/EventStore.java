@@ -22,8 +22,8 @@ import com.hazelcast.map.IMap;
 import com.hazelcast.query.Predicate;
 import com.hazelcast.query.Predicates;
 
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.SensorEvent;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.SensorEventType;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.AgentEvent;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.SensorEventType;
 
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.hazelcast.StratumMapConfig;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.hazelcast.StratumEpochExtractor;
@@ -32,11 +32,11 @@ import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.haze
 /**
  * EventStore manages the Hazelcast IMap that backs stratum's hot event store.
  *
- * Data model: IMap<event_id, SensorEvent> named "events".
+ * Data model: IMap<event_id, AgentEvent> named "events".
  *
  * Indexes (via ValueExtractor or Hazelcast native attribute reflection):
  *   - SORTED:  epoch (StratumEpochExtractor), timestampMs
- *   - HASH:    email, sessionId, agentId, eventTypeValue (StratumEventTypeExtractor)
+ *   - HASH:    spiffe_id, sessionId, agentId, eventTypeValue (StratumEventTypeExtractor)
  *
  * Retention:
  *   Runs on cleanup_interval_seconds. Deletes entries where
@@ -50,7 +50,7 @@ public class EventStore {
     private static final Logger log = LoggerFactory.getLogger(EventStore.class);
 
     private HazelcastInstance hz;
-    private IMap<String, SensorEvent> events;
+    private IMap<String, AgentEvent> events;
     private IMap<String, byte[]> llmEvents;
     private IMap<String, byte[]> scmEvents;
     private int retentionDays;
@@ -94,9 +94,9 @@ public class EventStore {
     // -----------------------------------------------------------------------
 
     /**
-     * Stores a SensorEvent in the hot store. Idempotent on event_id.
+     * Stores a AgentEvent in the hot store. Idempotent on event_id.
      */
-    public void put(SensorEvent event) {
+    public void put(AgentEvent event) {
         events.put(event.getEventId(), event);
     }
 
@@ -118,7 +118,7 @@ public class EventStore {
     // Query
     // -----------------------------------------------------------------------
 
-    public Optional<SensorEvent> getByKey(String eventId) {
+    public Optional<AgentEvent> getByKey(String eventId) {
         return Optional.ofNullable(events.get(eventId));
     }
 
@@ -126,21 +126,21 @@ public class EventStore {
      * Executes a filter query using the SqlParser to extract predicates.
      * Results are sorted by (timestampMs DESC, event_id ASC).
      */
-    public List<SensorEvent> query(SqlPredicates preds) {
-        Predicate<String, SensorEvent> predicate = buildPredicate(preds);
-        Collection<SensorEvent> raw = (predicate != null) ? events.values(predicate) : events.values();
-        List<SensorEvent> sorted = new ArrayList<>(raw);
+    public List<AgentEvent> query(SqlPredicates preds) {
+        Predicate<String, AgentEvent> predicate = buildPredicate(preds);
+        Collection<AgentEvent> raw = (predicate != null) ? events.values(predicate) : events.values();
+        List<AgentEvent> sorted = new ArrayList<>(raw);
         sorted.sort(Comparator
-                .comparingLong(SensorEvent::getTimestampMs).reversed()
-                .thenComparing(SensorEvent::getEventId));
+                .comparingLong(AgentEvent::getTimestampMs).reversed()
+                .thenComparing(AgentEvent::getEventId));
         return sorted;
     }
 
     @SuppressWarnings("unchecked")
-    private Predicate<String, SensorEvent> buildPredicate(SqlPredicates p) {
-        List<Predicate<String, SensorEvent>> parts = new ArrayList<>();
+    private Predicate<String, AgentEvent> buildPredicate(SqlPredicates p) {
+        List<Predicate<String, AgentEvent>> parts = new ArrayList<>();
 
-        if (p.email     != null) parts.add(Predicates.equal("email", p.email));
+        if (p.spiffe_id     != null) parts.add(Predicates.equal("spiffe_id", p.spiffe_id));
         if (p.sessionId != null) parts.add(Predicates.equal("sessionId", p.sessionId));
         if (p.agentId   != null) parts.add(Predicates.equal("agentId", p.agentId));
         if (p.eventType != null) parts.add(Predicates.equal(
@@ -208,7 +208,7 @@ public class EventStore {
     // -----------------------------------------------------------------------
 
     static final class SqlPredicates {
-        String          email;
+        String          spiffe_id;
         String          sessionId;
         String          agentId;
         SensorEventType eventType;
@@ -222,7 +222,7 @@ public class EventStore {
             if (sql == null) return p;
             String upper = sql.toUpperCase();
 
-            p.email     = extractStringPredicate(sql, "email");
+            p.spiffe_id     = extractStringPredicate(sql, "spiffe_id");
             p.sessionId = extractStringPredicate(sql, "session_id");
             p.agentId   = extractStringPredicate(sql, "agent_id");
 

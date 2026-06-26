@@ -21,14 +21,14 @@ import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.map.IMap;
 
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.services.stratum.Stratum;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.MapDetail;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.MapEntry;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.claudesensor.Claudesensor.SensorEvent;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.MapDetail;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.MapEntry;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.AgentEvent;
 
 /**
  * WorkingSetStore manages the Hazelcast namespaces for stratum's working sets:
  *
- *   ws:<map_id>   — working-set maps: IMap<event_id, byte[] SensorEvent>
+ *   ws:<map_id>   — working-set maps: IMap<event_id, byte[] AgentEvent>
  *                   In-memory only, idle TTL eviction.
  *
  * Map IDs are chosen by the caller and must be unique.
@@ -150,17 +150,17 @@ public class WorkingSetStore {
         long minTs = Long.MAX_VALUE;
         long maxTs = Long.MIN_VALUE;
         Map<String, Long> typeBreakdown = new HashMap<>();
-        Map<String, Long> emailCount   = new HashMap<>();
+        Map<String, Long> spiffe_idCount   = new HashMap<>();
         Map<String, Long> sessionCount = new HashMap<>();
         Map<String, Long> agentCount   = new HashMap<>();
 
         for (byte[] raw : imap.values()) {
             try {
-                SensorEvent ev = SensorEvent.parseFrom(raw);
+                AgentEvent ev = AgentEvent.parseFrom(raw);
                 if (ev.getTimestampMs() < minTs) minTs = ev.getTimestampMs();
                 if (ev.getTimestampMs() > maxTs) maxTs = ev.getTimestampMs();
                 typeBreakdown.merge(ev.getEventType().name(), 1L, Long::sum);
-                if (!ev.getEmail().isEmpty())     emailCount.merge(ev.getEmail(), 1L, Long::sum);
+                if (!ev.getSpiffeId().isEmpty())     spiffe_idCount.merge(ev.getSpiffeId(), 1L, Long::sum);
                 if (!ev.getSessionId().isEmpty()) sessionCount.merge(ev.getSessionId(), 1L, Long::sum);
                 if (!ev.getAgentId().isEmpty())   agentCount.merge(ev.getAgentId(), 1L, Long::sum);
             } catch (Exception ignored) {}
@@ -173,7 +173,7 @@ public class WorkingSetStore {
                 .setTimeRangeStartMs(size > 0 ? minTs : 0)
                 .setTimeRangeEndMs(size > 0 ? maxTs : 0);
         typeBreakdown.forEach(b::putEventTypeBreakdown);
-        topN(emailCount,   5).forEach(b::addTopEmails);
+        topN(spiffe_idCount,   5).forEach(b::addTopSpiffeIds);
         topN(sessionCount, 5).forEach(b::addTopSessions);
         topN(agentCount,   5).forEach(b::addTopAgents);
         return b.build();
@@ -191,10 +191,10 @@ public class WorkingSetStore {
     }
 
     /**
-     * Puts a SensorEvent into a working-set map (keyed by event_id, deduplicating).
+     * Puts a AgentEvent into a working-set map (keyed by event_id, deduplicating).
      * The map must already exist (created via createMap).
      */
-    public void putEvent(String mapId, SensorEvent event) {
+    public void putEvent(String mapId, AgentEvent event) {
         hz.getMap(WS_PREFIX + mapId).put(event.getEventId(), event.toByteArray());
     }
 
