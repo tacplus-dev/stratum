@@ -64,6 +64,15 @@ public class StratumCodegenMojo extends AbstractMojo {
             VServiceWiringGenerator.generate(out, services);
             getLog().info("Generated StratumVServiceBase.java");
 
+            List<EventTopicDiscovery.TopicEvent> events =
+                    EventTopicDiscovery.discover(vservicesDir);
+            getLog().info("Discovered " + events.size() + " EventBus topic event type(s):");
+            for (EventTopicDiscovery.TopicEvent ev : events) {
+                getLog().info("  " + ev);
+            }
+            EventStoreGenerator.generate(out, events);
+            getLog().info("Generated StratumEventStores.java");
+
         } catch (IOException e) {
             throw new MojoExecutionException("Stratum codegen failed", e);
         }

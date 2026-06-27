@@ -25,7 +25,12 @@ import com.hazelcast.config.NetworkConfig;
  */
 public final class StratumMapConfig {
 
-    public static final String MAP_NAME     = "events";
+    // Must equal the generated StratumEventStores map name for agentsensor.AgentEvent
+    // (EventStoreGenerator.mapName = "<package>.<EventType>"). This map is shared:
+    // the generated store writes it, the (agent-specific, read-path) query reads it.
+    // The OBJECT format + agent indexes below are read-path concerns and remain
+    // hand-written until the StratumQuery read side is also generated.
+    public static final String MAP_NAME     = "agentsensor.AgentEvent";
     public static final String CLUSTER_NAME = "stratum-events";
 
     private StratumMapConfig() {}

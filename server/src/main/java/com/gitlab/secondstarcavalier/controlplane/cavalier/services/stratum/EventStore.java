@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.protobuf.Message;
 import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.map.IMap;
@@ -50,9 +51,11 @@ public class EventStore {
     private static final Logger log = LoggerFactory.getLogger(EventStore.class);
 
     private HazelcastInstance hz;
+    // Generated, vservice-neutral write path: one typed IMap per EventBus topic.
+    private final StratumEventStores stores = new StratumEventStores();
+    // Agent-specific read path (StratumQuery), pending generation: reads the same
+    // Hazelcast map the generated store writes for agentsensor.AgentEvent.
     private IMap<String, AgentEvent> events;
-    private IMap<String, byte[]> llmEvents;
-    private IMap<String, byte[]> scmEvents;
     private int retentionDays;
 
     private final ScheduledExecutorService cleaner = Executors.newSingleThreadScheduledExecutor(
@@ -77,9 +80,8 @@ public class EventStore {
         this.retentionDays = retentionDays;
 
         hz = Hazelcast.newHazelcastInstance(StratumMapConfig.build(seedMembers));
+        stores.init(hz);
         events = hz.getMap(StratumMapConfig.MAP_NAME);
-        llmEvents = hz.getMap("llm-events");
-        scmEvents = hz.getMap("scm-events");
 
         cleaner.scheduleWithFixedDelay(
                 this::runRetentionCleanupIfLeader,
@@ -94,24 +96,12 @@ public class EventStore {
     // -----------------------------------------------------------------------
 
     /**
-     * Stores a AgentEvent in the hot store. Idempotent on event_id.
+     * Stores any subscribed event into its generated typed store, keyed by
+     * event_id. Vservice-neutral: the typed dispatch lives in the generated
+     * StratumEventStores, so this code names no vservice.
      */
-    public void put(AgentEvent event) {
-        events.put(event.getEventId(), event);
-    }
-
-    /**
-     * Stores a raw LlmEvent (protobuf bytes) keyed by event_id.
-     */
-    public void putLlmRaw(String eventId, byte[] bytes) {
-        llmEvents.put(eventId, bytes);
-    }
-
-    /**
-     * Stores a raw ScmEvent (protobuf bytes) keyed by event_id.
-     */
-    public void putScmRaw(String eventId, byte[] bytes) {
-        scmEvents.put(eventId, bytes);
+    public boolean store(Message event) {
+        return stores.store(event);
     }
 
     // -----------------------------------------------------------------------
@@ -162,7 +152,7 @@ public class EventStore {
     // Stats
     // -----------------------------------------------------------------------
 
-    public long eventCount()    { return events.size(); }
+    public long eventCount()    { return stores.totalCount(); }
     public int  clusterSize()   { return hz.getCluster().getMembers().size(); }
     public long lastCleanupMs() { return lastCleanupMs.get(); }
 
@@ -183,9 +173,9 @@ public class EventStore {
         log.info("retention cleanup: removing events with timestampMs < {} (retention_days={})",
                 cutoffMs, retentionDays);
         try {
-            long before  = events.size();
-            events.removeAll(Predicates.lessThan("timestampMs", cutoffMs));
-            long removed = before - events.size();
+            long before  = stores.totalCount();
+            stores.runRetention(cutoffMs);
+            long removed = before - stores.totalCount();
             lastCleanupMs.set(System.currentTimeMillis());
             lastCleanupRemoved.set(removed);
             log.info("retention cleanup complete: removed {} entries", removed);

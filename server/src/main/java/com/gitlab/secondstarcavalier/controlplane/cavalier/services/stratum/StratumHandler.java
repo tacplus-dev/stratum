@@ -55,8 +55,6 @@ import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.mode
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.libs.servicemanager.Caller;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.libs.errors.ProtoException;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.libs.x509.X509;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.llmsensor.Llmsensor;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.scmsensor.Scmsensor;
 
 /**
  * StratumHandler wires together EventStore, WorkingSetStore, and the gRPC
@@ -194,32 +192,24 @@ public class StratumHandler extends StratumVServiceBase {
     // EventBus subscription (auto-wired by (spec.hot_store))
     // -----------------------------------------------------------------------
 
-    @Override
-    public void onEventStreamAgentsensorAgentEventBusEventStream(AgentEvent event, SubscriptionMeta meta) throws Exception {
-        eventStore.put(event);
-        pushToLiveWatchers(event);
-    }
-
-    @Override
-    public void onEventStreamLlmsensorLlmEventBusEventStream(Llmsensor.LlmEvent ev, SubscriptionMeta meta) throws Exception {
-        eventStore.putLlmRaw(ev.getEventId(), ev.toByteArray());
-        log.debug("stored llm event: event_id={} spiffe_id={}", ev.getEventId(), ev.getSpiffeId());
-    }
-
-    @Override
-    public void onEventStreamScmsensorScmEventBusEventStream(Scmsensor.ScmEvent ev, SubscriptionMeta meta) throws Exception {
-        eventStore.putScmRaw(ev.getEventId(), ev.toByteArray());
-        log.debug("stored scm event: event_id={} spiffe_id={}", ev.getEventId(), ev.getSpiffeId());
-    }
-
     /**
-     * Fallback handler for any new vservice sensors added in the future.
-     * The generated Handler routes unhandled topics here via the typed default
-     * methods, so new sensors are surfaced (logged) until a typed override is added.
+     * Single, vservice-neutral ingest path. The model-generated Handler routes
+     * every typed onEventStream* topic here by default, so we do NOT override
+     * the per-vservice methods. Each event is stored via the generated typed
+     * store — adding or removing a vservice (or .off-ing its proto) needs no
+     * change here.
      */
     @Override
     public void handleEventStreamMessage(String topic, com.google.protobuf.Message event, SubscriptionMeta meta) throws Exception {
-        log.warn("unhandled event stream topic: {} (offset={})", topic, meta.offset);
+        if (!eventStore.store(event)) {
+            log.warn("unhandled event stream topic: {} (offset={})", topic, meta.offset);
+            return;
+        }
+        // WatchLiveSessions live-streaming is an agentsensor read-side feature;
+        // it remains here until the StratumQuery read path is also generated.
+        if (event instanceof AgentEvent) {
+            pushToLiveWatchers((AgentEvent) event);
+        }
     }
 
     private void pushToLiveWatchers(AgentEvent event) {
