@@ -294,6 +294,18 @@ public final class RecordMapImplGenerator {
                 w.println("        }");
                 w.println("        return Stratum.RecordCount.newBuilder().setCount(n).build();");
                 w.println("    }");
+
+                // subscribe<T>Count — live count: emit the current count, then a new
+                // count on each matching add/evict (Hazelcast entry listener via the
+                // RecordCountStream helper). Verb Subscribe → plain server stream.
+                w.println();
+                w.println("    @Override");
+                w.println("    public void " + lower("Subscribe" + t + "Count")
+                        + "(Caller caller, Stratum.Subscribe" + t + "CountRequest req,");
+                w.println("            io.grpc.stub.StreamObserver<Stratum.RecordCount> obs) throws ProtoException {");
+                w.println("        Stratum." + t + "Filter f = req.getFilter();");
+                w.println("        RecordCountStream.subscribe(stores()." + acc + "(), ev -> " + matchFn + "(f, ev), obs);");
+                w.println("    }");
             }
         }
 
