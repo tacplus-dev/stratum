@@ -276,6 +276,24 @@ public final class RecordMapImplGenerator {
                 w.println("        return new CollectionRuntime.WatchSource<>(");
                 w.println("                java.util.UUID.randomUUID().toString(), snap.iterator(), rev, changes);");
                 w.println("    }");
+
+                // get<T>Count — typed record count by filter, computed server-side over
+                // the record store (no working-set map, no client materialization).
+                w.println();
+                w.println("    @Override");
+                w.println("    public Stratum.RecordCount " + lower("Get" + t + "Count")
+                        + "(Caller caller, Stratum.Get" + t + "CountRequest req) throws ProtoException {");
+                w.println("        Stratum." + t + "Filter f = req.getFilter();");
+                w.println("        long n = 0;");
+                w.println("        try {");
+                w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) {");
+                w.println("                if (" + matchFn + "(f, ev)) n++;");
+                w.println("            }");
+                w.println("        } catch (Exception ex) {");
+                w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
+                w.println("        }");
+                w.println("        return Stratum.RecordCount.newBuilder().setCount(n).build();");
+                w.println("    }");
             }
         }
 
