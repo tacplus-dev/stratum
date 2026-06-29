@@ -234,30 +234,51 @@ public final class RecordMapImplGenerator {
                 w.println("                .setMapId(req.getMapId()).setSize(n).build();");
                 w.println("    }");
 
-                // watch<T> — live standing query: snapshot of matching records, then
+                // watch<T> — live standing query: a snapshot of matching records, then
                 // a live stream of matching records as they are ingested.
+                //
+                // SUBSCRIBE BEFORE SNAPSHOT: opening the hub subscription first closes the
+                // gap where a record stored between the snapshot and a (lazily-invoked)
+                // subscription would be lost. The overlap that subscribe-first creates —
+                // a record in both the snapshot and the live queue — is removed by
+                // deduping the live stream against the snapshot's record keys, so the
+                // client sees each record exactly once (no gap, no duplicate).
                 w.println();
                 w.println("    @Override");
                 w.println("    public CollectionRuntime.WatchSource<" + fqn + ", Stratum." + t + "WatchChange> "
                         + lower("Watch" + t) + "(Caller caller, Stratum.Watch" + t + "Request req) throws ProtoException {");
                 w.println("        Stratum." + t + "Filter f = req.getFilter();");
-                w.println("        java.util.List<" + fqn + "> snap = new ArrayList<>();");
-                w.println("        try {");
-                w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) {");
-                w.println("                if (" + matchFn + "(f, ev)) snap.add(ev);");
-                w.println("            }");
-                w.println("        } catch (Exception ex) {");
-                w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
-                w.println("        }");
-                w.println("        long rev = hub().currentRevision();");
-                w.println("        java.util.function.Supplier<java.util.Iterator<Stratum." + t + "WatchChange>> changes = () ->");
-                w.println("            hub().changes(");
+                w.println("        final java.util.Set<String> seen = new java.util.HashSet<>();");
+                w.println("        final java.util.Iterator<Stratum." + t + "WatchChange> liveRaw = hub().changes(");
                 w.println("                m -> (m instanceof " + fqn + ") && " + matchFn + "(f, (" + fqn + ") m),");
                 w.println("                (m, r) -> Stratum." + t + "WatchChange.newBuilder()");
                 w.println("                        .setType(Stratum.RecordChangeType.RECORD_CHANGE_TYPE_ADD)");
                 w.println("                        .setItem((" + fqn + ") m)");
                 w.println("                        .setRevision(r)");
                 w.println("                        .build());");
+                w.println("        java.util.List<" + fqn + "> snap = new ArrayList<>();");
+                w.println("        try {");
+                w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) {");
+                w.println("                if (" + matchFn + "(f, ev)) { snap.add(ev); seen.add(ev." + keyGetter + "()); }");
+                w.println("            }");
+                w.println("        } catch (Exception ex) {");
+                w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
+                w.println("        }");
+                w.println("        long rev = hub().currentRevision();");
+                w.println("        java.util.function.Supplier<java.util.Iterator<Stratum." + t + "WatchChange>> changes = () ->");
+                w.println("            new java.util.Iterator<Stratum." + t + "WatchChange>() {");
+                w.println("                private Stratum." + t + "WatchChange nx;");
+                w.println("                public boolean hasNext() {");
+                w.println("                    while (nx == null && liveRaw.hasNext()) {");
+                w.println("                        Stratum." + t + "WatchChange c = liveRaw.next();");
+                w.println("                        if (!seen.contains(c.getItem()." + keyGetter + "())) nx = c;");
+                w.println("                    }");
+                w.println("                    return nx != null;");
+                w.println("                }");
+                w.println("                public Stratum." + t + "WatchChange next() {");
+                w.println("                    Stratum." + t + "WatchChange c = nx; nx = null; return c;");
+                w.println("                }");
+                w.println("            };");
                 w.println("        return new CollectionRuntime.WatchSource<>(");
                 w.println("                java.util.UUID.randomUUID().toString(), snap.iterator(), rev, changes);");
                 w.println("    }");
