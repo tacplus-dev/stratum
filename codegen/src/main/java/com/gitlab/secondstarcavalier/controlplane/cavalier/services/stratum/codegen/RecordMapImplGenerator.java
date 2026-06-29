@@ -40,8 +40,10 @@ public final class RecordMapImplGenerator {
     private static final String MODEL_BASE = HOST_PKG + ".model";
     private static final String MODEL_TYPES_VSERVICES = MODEL_BASE + ".types.vservices";
     private static final String STRATUM_MSGS = MODEL_BASE + ".types.services.stratum.Stratum";
+    // RecordMap is stratum's own service (services/stratum.proto), so its handler
+    // interface is on the services path, not vservices.
     private static final String RECORDMAP_IFACE =
-            MODEL_BASE + ".s2sm.internal.grpc.servers.vservices.stratum.RecordMap";
+            MODEL_BASE + ".s2sm.internal.grpc.servers.services.stratum.RecordMap";
     private static final String CALLER = MODEL_BASE + ".libs.servicemanager.Caller";
     private static final String PROTO_EXCEPTION = MODEL_BASE + ".types.libs.errors.ProtoException";
     private static final String COLLECTION_RUNTIME = MODEL_BASE + ".libs.collection.CollectionRuntime";

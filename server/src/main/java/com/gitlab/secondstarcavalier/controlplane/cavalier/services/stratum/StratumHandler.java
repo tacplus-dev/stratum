@@ -121,7 +121,7 @@ public class StratumHandler extends StratumVServiceBase {
     }
 
     @Override
-    protected com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.vservices.stratum.RecordMap.RecordMapHandler provideRecordMapHandler() {
+    public com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.RecordMap.RecordMapHandler getRecordMapGrpcImpl() {
         try {
             if (store == null || eventStore == null) {
                 initFromConfig(Helpers.configDefaults(Stratum.Config.getDefaultInstance()).build());
@@ -133,6 +133,11 @@ public class StratumHandler extends StratumVServiceBase {
         // Suppliers, not captured references: initFromConfig rebuilds the stores on
         // config updates, and the generated impl must always see the current ones.
         return new StratumRecordMaps(() -> store, () -> eventStore.stores());
+    }
+
+    @Override
+    public void handleRecordMapConfig(Stratum.Config cfg) throws Exception {
+        initFromConfig(cfg);
     }
 
     @Override
