@@ -31,6 +31,19 @@ import java.util.stream.Stream;
  */
 public final class EventTopicDiscovery {
 
+    /** A (spec.query_field) filter criterion on a record field. */
+    public static final class QueryField {
+        public final String name;      // proto field name, e.g. "spiffe_id"
+        public final String protoType; // scalar proto type, e.g. "string", "int64"
+        public final boolean range;    // true = RANGE (from/to), false = EQ
+
+        public QueryField(String name, String protoType, boolean range) {
+            this.name = name;
+            this.protoType = protoType;
+            this.range = range;
+        }
+    }
+
     /** A discovered EventBus topic event type. */
     public static final class TopicEvent {
         /** Proto package of the vservice, e.g. "agentsensor". */
@@ -39,16 +52,24 @@ public final class EventTopicDiscovery {
         public final String eventType;
         /** Relative proto path, e.g. "vservices/agent-sensor.proto". */
         public final String protoRelPath;
+        /** Record key field (spec.record key), e.g. "event_id" — "" if unknown. */
+        public final String recordKey;
+        /** Queryable fields (spec.query_field) — empty if the record declares none. */
+        public final List<QueryField> queryFields;
 
-        public TopicEvent(String protoPackage, String eventType, String protoRelPath) {
+        public TopicEvent(String protoPackage, String eventType, String protoRelPath,
+                          String recordKey, List<QueryField> queryFields) {
             this.protoPackage = protoPackage;
             this.eventType = eventType;
             this.protoRelPath = protoRelPath;
+            this.recordKey = recordKey;
+            this.queryFields = queryFields;
         }
 
         @Override
         public String toString() {
-            return protoPackage + "." + eventType + " (" + protoRelPath + ")";
+            return protoPackage + "." + eventType + " (" + protoRelPath + ")"
+                    + (queryFields.isEmpty() ? "" : " query=" + queryFields.size());
         }
     }
 
@@ -59,6 +80,13 @@ public final class EventTopicDiscovery {
     // Field carrying the topic, e.g.  AgentEvent event_stream = 1 [(spec.topic) = true];
     private static final Pattern TOPIC_FIELD = Pattern.compile(
             "([\\w.]+)\\s+\\w+\\s*=\\s*\\d+\\s*\\[[^\\]]*\\(spec\\.topic\\)\\s*=\\s*true");
+    // spec.record key, e.g.  option (spec.record) = { key: "event_id" ... }
+    private static final Pattern RECORD_KEY = Pattern.compile(
+            "\\(spec\\.record\\)\\s*=\\s*\\{.*?key:\\s*\"(\\w+)\"", Pattern.DOTALL);
+    // A field carrying (spec.query_field), e.g.
+    //   string spiffe_id = 4 [(spec.query_field) = {op: QUERY_OP_EQ}];
+    private static final Pattern QUERY_FIELD = Pattern.compile(
+            "(\\w[\\w.]*)\\s+(\\w+)\\s*=\\s*\\d+\\s*\\[[^\\]]*\\(spec\\.query_field\\)\\s*=\\s*\\{([^}]*)\\}");
 
     private EventTopicDiscovery() {}
 
@@ -95,11 +123,14 @@ public final class EventTopicDiscovery {
             }
         }
 
+        // First pass: collect every message's brace-balanced body by name, so a
+        // wrapper can be resolved to its (possibly earlier or later) event message.
+        java.util.Map<String, String> bodies = new java.util.LinkedHashMap<>();
         int i = 0;
         while (i < lines.size()) {
             Matcher msgStart = MESSAGE_START.matcher(lines.get(i).trim());
             if (msgStart.find()) {
-                // Collect the message block (brace-balanced).
+                String name = msgStart.group(1);
                 StringBuilder block = new StringBuilder();
                 int depth = 0;
                 int j = i;
@@ -113,21 +144,48 @@ public final class EventTopicDiscovery {
                     j++;
                     if (depth == 0 && j > i) break;
                 }
-                String body = block.toString();
-                if (EVENTBUS_TAG.matcher(body).find()) {
-                    Matcher topic = TOPIC_FIELD.matcher(body);
-                    if (topic.find()) {
-                        String type = topic.group(1);
-                        // Same-package events only (skip e.g. trace.TraceEvent).
-                        if (!type.contains(".")) {
-                            result.add(new TopicEvent(protoPackage, type, relPath));
-                        }
-                    }
-                }
+                bodies.put(name, block.toString());
                 i = j;
             } else {
                 i++;
             }
         }
+
+        // Second pass: each wrapper's (spec.topic) field names the event type; the
+        // event message (same package) carries the spec.record key + any
+        // spec.query_field filter criteria.
+        for (String body : bodies.values()) {
+            if (!EVENTBUS_TAG.matcher(body).find()) {
+                continue;
+            }
+            Matcher topic = TOPIC_FIELD.matcher(body);
+            if (!topic.find()) {
+                continue;
+            }
+            String type = topic.group(1);
+            if (type.contains(".")) {
+                continue; // same-package events only (skip e.g. trace.TraceEvent)
+            }
+            String eventBody = bodies.getOrDefault(type, "");
+            result.add(new TopicEvent(protoPackage, type, relPath,
+                    parseRecordKey(eventBody), parseQueryFields(eventBody)));
+        }
+    }
+
+    private static String parseRecordKey(String eventBody) {
+        Matcher m = RECORD_KEY.matcher(eventBody);
+        return m.find() ? m.group(1) : "";
+    }
+
+    private static List<QueryField> parseQueryFields(String eventBody) {
+        List<QueryField> fields = new ArrayList<>();
+        Matcher m = QUERY_FIELD.matcher(eventBody);
+        while (m.find()) {
+            String protoType = m.group(1);
+            String name = m.group(2);
+            boolean range = m.group(3).contains("QUERY_OP_RANGE");
+            fields.add(new QueryField(name, protoType, range));
+        }
+        return fields;
     }
 }

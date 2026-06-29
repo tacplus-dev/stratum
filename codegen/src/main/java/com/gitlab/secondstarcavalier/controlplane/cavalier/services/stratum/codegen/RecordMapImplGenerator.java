@@ -184,9 +184,57 @@ public final class RecordMapImplGenerator {
             w.println("        return Stratum.RecordMapStats.newBuilder()");
             w.println("                .setMapId(req.getMapId()).setSize(0).build();");
             w.println("    }");
+
+            // update<T>MapByQuery — populate a map by a typed filter. Emitted only
+            // when the record declares (spec.query_field) criteria. Getter-based
+            // filtering over the typed hot store (no Hazelcast attribute-name coupling).
+            if (!e.queryFields.isEmpty()) {
+                String keyGetter = "get" + pascal(e.recordKey);
+                w.println();
+                w.println("    @Override");
+                w.println("    public Stratum.RecordMapStats " + lower("Update" + t + "MapByQuery")
+                        + "(Caller caller, Stratum.Update" + t + "MapByQueryRequest req) throws ProtoException {");
+                w.println("        Stratum." + t + "Filter f = req.getFilter();");
+                w.println("        long n = 0;");
+                w.println("        try {");
+                w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) {");
+                for (EventTopicDiscovery.QueryField qf : e.queryFields) {
+                    String P = pascal(qf.name);
+                    if (qf.range) {
+                        // numeric range: skip when out of [from, to]
+                        w.println("                if (f.has" + P + "From() && ev.get" + P + "() < f.get" + P + "From()) continue;");
+                        w.println("                if (f.has" + P + "To() && ev.get" + P + "() > f.get" + P + "To()) continue;");
+                    } else if ("string".equals(qf.protoType)) {
+                        w.println("                if (f.has" + P + "() && !ev.get" + P + "().equals(f.get" + P + "())) continue;");
+                    } else {
+                        w.println("                if (f.has" + P + "() && ev.get" + P + "() != f.get" + P + "()) continue;");
+                    }
+                }
+                w.println("                store().putEvent(req.getMapId(), ev." + keyGetter + "(), ev.toByteArray());");
+                w.println("                n++;");
+                w.println("            }");
+                w.println("        } catch (Exception ex) {");
+                w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
+                w.println("        }");
+                w.println("        return Stratum.RecordMapStats.newBuilder()");
+                w.println("                .setMapId(req.getMapId()).setSize(n).build();");
+                w.println("    }");
+            }
         }
 
         w.println("}");
+    }
+
+    /** snake_case proto field -> PascalCase getter stem (spiffe_id -> SpiffeId). */
+    private static String pascal(String snake) {
+        StringBuilder b = new StringBuilder();
+        boolean up = true;
+        for (char c : snake.toCharArray()) {
+            if (c == '_') { up = true; continue; }
+            b.append(up ? Character.toUpperCase(c) : c);
+            up = false;
+        }
+        return b.toString();
     }
 
     // ----- naming helpers (mirror EventStoreGenerator) -----
