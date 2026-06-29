@@ -73,6 +73,11 @@ public class StratumCodegenMojo extends AbstractMojo {
             EventStoreGenerator.generate(out, events);
             getLog().info("Generated StratumEventStores.java");
 
+            // The record map plane (RecordMap) is backed by the same record types
+            // the hot store holds, so it reuses the topic-event discovery.
+            RecordMapImplGenerator.generate(out, events);
+            getLog().info("Generated StratumRecordMaps.java");
+
         } catch (IOException e) {
             throw new MojoExecutionException("Stratum codegen failed", e);
         }

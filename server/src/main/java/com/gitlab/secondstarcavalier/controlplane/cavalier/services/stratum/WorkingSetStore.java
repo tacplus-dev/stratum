@@ -199,6 +199,15 @@ public class WorkingSetStore {
     }
 
     /**
+     * Vservice-neutral working-set insert: stores the raw record bytes under the
+     * given key. Used by the generated RecordMap plane (StratumRecordMaps), which
+     * holds any record type, keyed by its record key. The map must already exist.
+     */
+    public void putEvent(String mapId, String key, byte[] recordBytes) {
+        hz.getMap(WS_PREFIX + mapId).put(key, recordBytes);
+    }
+
+    /**
      * Merges all events from srcMapId into destMapId. srcMap is unchanged.
      * Returns the number of events added (new, not overwritten).
      */

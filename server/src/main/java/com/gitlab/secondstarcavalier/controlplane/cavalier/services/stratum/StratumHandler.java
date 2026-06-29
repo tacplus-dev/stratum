@@ -121,6 +121,21 @@ public class StratumHandler extends StratumVServiceBase {
     }
 
     @Override
+    protected com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.vservices.stratum.RecordMap.RecordMapHandler provideRecordMapHandler() {
+        try {
+            if (store == null || eventStore == null) {
+                initFromConfig(Helpers.configDefaults(Stratum.Config.getDefaultInstance()).build());
+            }
+        } catch (Exception e) {
+            log.error("failed to initialize stratum", e);
+            throw new RuntimeException("stratum init failed", e);
+        }
+        // Suppliers, not captured references: initFromConfig rebuilds the stores on
+        // config updates, and the generated impl must always see the current ones.
+        return new StratumRecordMaps(() -> store, () -> eventStore.stores());
+    }
+
+    @Override
     protected void handleConfig(Stratum.Config cfg) throws Exception {
         initFromConfig(cfg);
     }

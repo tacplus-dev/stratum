@@ -156,6 +156,9 @@ public class EventStore {
     public int  clusterSize()   { return hz.getCluster().getMembers().size(); }
     public long lastCleanupMs() { return lastCleanupMs.get(); }
 
+    /** The generated typed per-record hot stores — used by the RecordMap plane. */
+    public StratumEventStores stores() { return stores; }
+
     // -----------------------------------------------------------------------
     // Retention cleanup
     // -----------------------------------------------------------------------
