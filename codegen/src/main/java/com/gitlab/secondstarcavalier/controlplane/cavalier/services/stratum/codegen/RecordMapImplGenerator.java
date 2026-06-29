@@ -90,15 +90,19 @@ public final class RecordMapImplGenerator {
         w.println();
         w.println("    private final Supplier<WorkingSetStore> storeSupplier;");
         w.println("    private final Supplier<StratumEventStores> storesSupplier;");
+        w.println("    private final Supplier<RecordWatchHub> watchHubSupplier;");
         w.println();
         w.println("    public " + CLASS_NAME + "(Supplier<WorkingSetStore> storeSupplier,");
-        w.println("                            Supplier<StratumEventStores> storesSupplier) {");
+        w.println("                            Supplier<StratumEventStores> storesSupplier,");
+        w.println("                            Supplier<RecordWatchHub> watchHubSupplier) {");
         w.println("        this.storeSupplier = storeSupplier;");
         w.println("        this.storesSupplier = storesSupplier;");
+        w.println("        this.watchHubSupplier = watchHubSupplier;");
         w.println("    }");
         w.println();
         w.println("    private WorkingSetStore store() { return storeSupplier.get(); }");
         w.println("    private StratumEventStores stores() { return storesSupplier.get(); }");
+        w.println("    private RecordWatchHub hub() { return watchHubSupplier.get(); }");
 
         for (EventTopicDiscovery.TopicEvent e : records) {
             String t = e.eventType;     // e.g. AgentEvent
@@ -190,6 +194,27 @@ public final class RecordMapImplGenerator {
             // filtering over the typed hot store (no Hazelcast attribute-name coupling).
             if (!e.queryFields.isEmpty()) {
                 String keyGetter = "get" + pascal(e.recordKey);
+                String matchFn = lower("Match" + t);
+
+                // match<T>: true when a record satisfies the typed filter (shared by
+                // update<T>MapByQuery and watch<T>). Getter-based, no Hazelcast attrs.
+                w.println();
+                w.println("    private static boolean " + matchFn + "(Stratum." + t + "Filter f, " + fqn + " ev) {");
+                for (EventTopicDiscovery.QueryField qf : e.queryFields) {
+                    String P = pascal(qf.name);
+                    if (qf.range) {
+                        w.println("        if (f.has" + P + "From() && ev.get" + P + "() < f.get" + P + "From()) return false;");
+                        w.println("        if (f.has" + P + "To() && ev.get" + P + "() > f.get" + P + "To()) return false;");
+                    } else if ("string".equals(qf.protoType)) {
+                        w.println("        if (f.has" + P + "() && !ev.get" + P + "().equals(f.get" + P + "())) return false;");
+                    } else {
+                        w.println("        if (f.has" + P + "() && ev.get" + P + "() != f.get" + P + "()) return false;");
+                    }
+                }
+                w.println("        return true;");
+                w.println("    }");
+
+                // update<T>MapByQuery — populate a map from the typed filter.
                 w.println();
                 w.println("    @Override");
                 w.println("    public Stratum.RecordMapStats " + lower("Update" + t + "MapByQuery")
@@ -198,18 +223,7 @@ public final class RecordMapImplGenerator {
                 w.println("        long n = 0;");
                 w.println("        try {");
                 w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) {");
-                for (EventTopicDiscovery.QueryField qf : e.queryFields) {
-                    String P = pascal(qf.name);
-                    if (qf.range) {
-                        // numeric range: skip when out of [from, to]
-                        w.println("                if (f.has" + P + "From() && ev.get" + P + "() < f.get" + P + "From()) continue;");
-                        w.println("                if (f.has" + P + "To() && ev.get" + P + "() > f.get" + P + "To()) continue;");
-                    } else if ("string".equals(qf.protoType)) {
-                        w.println("                if (f.has" + P + "() && !ev.get" + P + "().equals(f.get" + P + "())) continue;");
-                    } else {
-                        w.println("                if (f.has" + P + "() && ev.get" + P + "() != f.get" + P + "()) continue;");
-                    }
-                }
+                w.println("                if (!" + matchFn + "(f, ev)) continue;");
                 w.println("                store().putEvent(req.getMapId(), ev." + keyGetter + "(), ev.toByteArray());");
                 w.println("                n++;");
                 w.println("            }");
@@ -218,6 +232,34 @@ public final class RecordMapImplGenerator {
                 w.println("        }");
                 w.println("        return Stratum.RecordMapStats.newBuilder()");
                 w.println("                .setMapId(req.getMapId()).setSize(n).build();");
+                w.println("    }");
+
+                // watch<T> — live standing query: snapshot of matching records, then
+                // a live stream of matching records as they are ingested.
+                w.println();
+                w.println("    @Override");
+                w.println("    public CollectionRuntime.WatchSource<" + fqn + ", Stratum." + t + "WatchChange> "
+                        + lower("Watch" + t) + "(Caller caller, Stratum.Watch" + t + "Request req) throws ProtoException {");
+                w.println("        Stratum." + t + "Filter f = req.getFilter();");
+                w.println("        java.util.List<" + fqn + "> snap = new ArrayList<>();");
+                w.println("        try {");
+                w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) {");
+                w.println("                if (" + matchFn + "(f, ev)) snap.add(ev);");
+                w.println("            }");
+                w.println("        } catch (Exception ex) {");
+                w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
+                w.println("        }");
+                w.println("        long rev = hub().currentRevision();");
+                w.println("        java.util.function.Supplier<java.util.Iterator<Stratum." + t + "WatchChange>> changes = () ->");
+                w.println("            hub().changes(");
+                w.println("                m -> (m instanceof " + fqn + ") && " + matchFn + "(f, (" + fqn + ") m),");
+                w.println("                (m, r) -> Stratum." + t + "WatchChange.newBuilder()");
+                w.println("                        .setType(Stratum.RecordChangeType.RECORD_CHANGE_TYPE_ADD)");
+                w.println("                        .setItem((" + fqn + ") m)");
+                w.println("                        .setRevision(r)");
+                w.println("                        .build());");
+                w.println("        return new CollectionRuntime.WatchSource<>(");
+                w.println("                java.util.UUID.randomUUID().toString(), snap.iterator(), rev, changes);");
                 w.println("    }");
             }
         }

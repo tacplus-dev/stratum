@@ -78,6 +78,8 @@ public class StratumHandler extends StratumVServiceBase {
     private EventStore      eventStore;
     private WorkingSetStore store;
     private final CopyOnWriteArrayList<LiveWatcher> liveWatchers = new CopyOnWriteArrayList<>();
+    // Vservice-neutral live fan-out for the generated RecordMap Watch<T> handlers.
+    private final RecordWatchHub recordWatchHub = new RecordWatchHub();
 
     private static final class LiveWatcher {
         final StreamObserver<WatchLiveSessionsEvent> obs;
@@ -132,7 +134,7 @@ public class StratumHandler extends StratumVServiceBase {
         }
         // Suppliers, not captured references: initFromConfig rebuilds the stores on
         // config updates, and the generated impl must always see the current ones.
-        return new StratumRecordMaps(() -> store, () -> eventStore.stores());
+        return new StratumRecordMaps(() -> store, () -> eventStore.stores(), () -> recordWatchHub);
     }
 
     @Override
@@ -225,6 +227,8 @@ public class StratumHandler extends StratumVServiceBase {
             log.warn("unhandled event stream topic: {} (offset={})", topic, meta.offset);
             return;
         }
+        // Live fan-out to RecordMap Watch<T> subscriptions (vservice-neutral).
+        recordWatchHub.publish(event);
         // WatchLiveSessions live-streaming is an agentsensor read-side feature;
         // it remains here until the StratumQuery read path is also generated.
         if (event instanceof AgentEvent) {
