@@ -590,7 +590,8 @@ public class StratumHandler extends StratumVServiceBase {
         return Integer.compare(left.size(), right.size());
     }
 
-    private static <T> CollectionRuntime.Page<T> pageSorted(
+    // Package-private: reused by the generated StratumRecordMaps (RecordMap.list<T>).
+    static <T> CollectionRuntime.Page<T> pageSorted(
             List<T> all,
             CollectionRuntime.PageParams page,
             Function<T, List<String>> keyFor) {

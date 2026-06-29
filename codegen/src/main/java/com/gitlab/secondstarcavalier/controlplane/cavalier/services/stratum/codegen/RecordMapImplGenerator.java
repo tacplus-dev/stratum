@@ -10,13 +10,14 @@ import java.util.List;
 /**
  * Generates StratumRecordMaps.java — the implementation of the generated
  * RecordMap service (the typed map plane). For every record type T (an EventBus
- * topic event the record store holds) it emits the five RecordMap RPC handlers:
+ * topic event the record store holds) it emits the five RecordMap RPC handlers
+ * (canonical verbs from the tacplus verb registry):
  *
- *   new<T>Map      → create a working-set map (UUID id)
- *   add<T>ByKeys   → hydrate records from the typed hot store into the map
- *   merge<T>       → union two maps
- *   pull<T>        → the only data-returning op: typed records out of the map
- *   cleanup<T>     → drop the map
+ *   create<T>Map        → create a working-set map (UUID id)
+ *   update<T>MapByKeys  → hydrate records from the typed hot store into the map
+ *   merge<T>            → union two maps
+ *   list<T>             → the only data-returning op: a typed PAGE of records
+ *   delete<T>Map        → drop the map
  *
  * All per-type knowledge lives here (generated); StratumHandler only returns an
  * instance via provideRecordMapHandler(), so the hand-written service names no
@@ -24,9 +25,13 @@ import java.util.List;
  * generic WorkingSetStore (working-set maps) + the generated StratumEventStores
  * (typed hot IMaps).
  *
- * NOTE (Phase 3, increment 1): pull returns the whole map (paging fields on the
- * request are accepted but not yet honored); Filter/AddByQuery, AddBy{Graphdb,
- * Timedb} federation, and Modify are follow-on increments.
+ * list<T> is a COLLECTION_MODE_PAGE read: it pages the working-set entries by
+ * their map key (which is the record key — vservice-neutral, no per-type field
+ * accessor) via StratumHandler.pageSorted, then parses only the page's bytes back
+ * to the typed record.
+ *
+ * NOTE (Phase 3, increment 1): Filter/UpdateByQuery, UpdateBy{Graphdb,Timedb}
+ * federation, Modify, and Watch are follow-on increments.
  */
 public final class RecordMapImplGenerator {
 
@@ -39,6 +44,7 @@ public final class RecordMapImplGenerator {
             MODEL_BASE + ".s2sm.internal.grpc.servers.vservices.stratum.RecordMap";
     private static final String CALLER = MODEL_BASE + ".libs.servicemanager.Caller";
     private static final String PROTO_EXCEPTION = MODEL_BASE + ".types.libs.errors.ProtoException";
+    private static final String COLLECTION_RUNTIME = MODEL_BASE + ".libs.collection.CollectionRuntime";
     private static final String CLASS_NAME = "StratumRecordMaps";
 
     private RecordMapImplGenerator() {}
@@ -60,11 +66,14 @@ public final class RecordMapImplGenerator {
         w.println();
         w.println("package " + HOST_PKG + ";");
         w.println();
+        w.println("import java.util.ArrayList;");
+        w.println("import java.util.Map;");
         w.println("import java.util.UUID;");
         w.println("import java.util.function.Supplier;");
         w.println("import com.hazelcast.map.IMap;");
         w.println("import " + CALLER + ";");
         w.println("import " + PROTO_EXCEPTION + ";");
+        w.println("import " + COLLECTION_RUNTIME + ";");
         w.println("import " + STRATUM_MSGS + ";");
         w.println("import " + RECORDMAP_IFACE + ";");
         w.println();
@@ -90,15 +99,15 @@ public final class RecordMapImplGenerator {
         w.println("    private StratumEventStores stores() { return storesSupplier.get(); }");
 
         for (EventTopicDiscovery.TopicEvent e : records) {
-            String t = e.eventType;                 // e.g. AgentEvent
-            String fqn = fqn(e);                     // typed FQN for parse + cast
-            String acc = field(e);                   // stores accessor, e.g. agentsensorAgentEvent
+            String t = e.eventType;     // e.g. AgentEvent
+            String fqn = fqn(e);         // typed FQN for parse
+            String acc = field(e);       // stores accessor, e.g. agentsensorAgentEvent
 
-            // new<T>Map
+            // create<T>Map
             w.println();
             w.println("    @Override");
-            w.println("    public Stratum.RecordMapHandle " + lower("New" + t + "Map")
-                    + "(Caller caller, Stratum.New" + t + "MapRequest req) throws ProtoException {");
+            w.println("    public Stratum.RecordMapHandle " + lower("Create" + t + "Map")
+                    + "(Caller caller, Stratum.Create" + t + "MapRequest req) throws ProtoException {");
             w.println("        String mapId = UUID.randomUUID().toString();");
             w.println("        try {");
             w.println("            store().createMap(mapId);");
@@ -108,11 +117,11 @@ public final class RecordMapImplGenerator {
             w.println("        return Stratum.RecordMapHandle.newBuilder().setMapId(mapId).build();");
             w.println("    }");
 
-            // add<T>ByKeys
+            // update<T>MapByKeys
             w.println();
             w.println("    @Override");
-            w.println("    public Stratum.RecordMapStats " + lower("Add" + t + "ByKeys")
-                    + "(Caller caller, Stratum.Add" + t + "ByKeysRequest req) throws ProtoException {");
+            w.println("    public Stratum.RecordMapStats " + lower("Update" + t + "MapByKeys")
+                    + "(Caller caller, Stratum.Update" + t + "MapByKeysRequest req) throws ProtoException {");
             w.println("        long n = 0;");
             w.println("        for (String key : req.getKeysList()) {");
             w.println("            " + fqn + " ev = stores()." + acc + "().get(key);");
@@ -140,27 +149,30 @@ public final class RecordMapImplGenerator {
             w.println("                .setMapId(req.getTargetMapId()).setSize(n).build();");
             w.println("    }");
 
-            // pull<T> — the only data-returning op
+            // list<T> — the only data-returning op (PAGE collection)
             w.println();
             w.println("    @Override");
-            w.println("    public Stratum.Pull" + t + "Response " + lower("Pull" + t)
-                    + "(Caller caller, Stratum.Pull" + t + "Request req) throws ProtoException {");
-            w.println("        Stratum.Pull" + t + "Response.Builder out = Stratum.Pull" + t + "Response.newBuilder();");
+            w.println("    public CollectionRuntime.Page<" + fqn + "> " + lower("List" + t)
+                    + "(Caller caller, Stratum.List" + t + "Request req, CollectionRuntime.PageParams page) throws ProtoException {");
             w.println("        try {");
             w.println("            IMap<String, byte[]> ws = store().getWorkingSetMap(req.getMapId());");
-            w.println("            for (byte[] raw : ws.values()) {");
-            w.println("                out.addItems(" + fqn + ".parseFrom(raw));");
+            w.println("            java.util.List<Map.Entry<String, byte[]>> entries = new ArrayList<>(ws.entrySet());");
+            w.println("            CollectionRuntime.Page<Map.Entry<String, byte[]>> raw =");
+            w.println("                    StratumHandler.pageSorted(entries, page, en -> java.util.List.of(en.getKey()));");
+            w.println("            java.util.List<" + fqn + "> items = new ArrayList<>(raw.items.size());");
+            w.println("            for (Map.Entry<String, byte[]> en : raw.items) {");
+            w.println("                items.add(" + fqn + ".parseFrom(en.getValue()));");
             w.println("            }");
+            w.println("            return new CollectionRuntime.Page<>(items, raw.nextAfter, raw.total);");
             w.println("        } catch (Exception ex) {");
             w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
             w.println("        }");
-            w.println("        return out.build();");
             w.println("    }");
 
-            // cleanup<T>
+            // delete<T>Map
             w.println();
             w.println("    @Override");
-            w.println("    public Stratum.RecordMapStats " + lower("Cleanup" + t)
+            w.println("    public Stratum.RecordMapStats " + lower("Delete" + t + "Map")
                     + "(Caller caller, Stratum.RecordMapHandle req) throws ProtoException {");
             w.println("        try {");
             w.println("            store().deleteMap(req.getMapId());");
