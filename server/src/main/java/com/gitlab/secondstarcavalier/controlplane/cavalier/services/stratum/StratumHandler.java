@@ -14,60 +14,28 @@ import org.slf4j.LoggerFactory;
 import io.grpc.stub.StreamObserver;
 
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.ServiceManager;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.vservices.agentsensor.StratumQuery;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.libs.collection.CollectionRuntime;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.services.stratum.Stratum;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.services.stratum.Helpers;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.CreateMapRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.CreateMapResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.DeleteMapRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.DeleteMapResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.EventTimeRange;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.ExecuteMapQueryRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.ExecuteMapQueryResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.GetMapDetailRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.GetMapDetailResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.GetSessionEventsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.GetUserSessionsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.ListActiveSessionsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.ListMapsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.ListMapsResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.MapSizeRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.MapSizeResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.MergeRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.MergeResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.ListEventsByActorRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.ListEventsByTimeRangeRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.AgentEvent;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.SessionSummary;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapByGraphdbRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapByGraphdbResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapByIdsRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapByIdsResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapBySqlRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapBySqlResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapByTimedbRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapByTimedbResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapFilterRequest;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.UpdateMapFilterResponse;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.WatchLiveSessionsEvent;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.WatchLiveSessionsRequest;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.libs.servicemanager.Caller;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.libs.errors.ProtoException;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.libs.x509.X509;
 
 /**
- * StratumHandler wires together EventStore, WorkingSetStore, and the gRPC
- * StratumQuery service.
+ * StratumHandler wires together EventStore, WorkingSetStore, and the generated,
+ * vservice-neutral RecordMap service.
  *
  * Startup sequence:
- *   1. provideStratumQueryHandler() — initialises EventStore (hot event
+ *   1. getRecordMapGrpcImpl() — lazily initialises EventStore (hot event
  *      Hazelcast cluster) and WorkingSetStore (working-set Hazelcast cluster)
- *      from config defaults, then returns StratumQueryImpl for registration.
+ *      from config defaults, then returns StratumRecordMaps for registration.
  *   2. handleConfig() — re-applies config when kernel delivers it.
- *   3. onEventStream() begins receiving AgentEvents from the EventBus.
+ *   3. onEventStream() begins receiving records from the EventBus, storing them
+ *      and publishing to the RecordWatchHub for live Watch<T> subscriptions.
  *
  * EventBus subscription is auto-generated by tacplus from (spec.hot_store).
+ * Session-level aggregation (active/user sessions, live session streams) moved
+ * to argus, which derives it from records via the RecordMap query/Watch plane.
  */
 public class StratumHandler extends StratumVServiceBase {
 
@@ -77,30 +45,9 @@ public class StratumHandler extends StratumVServiceBase {
     private volatile Stratum.Config config;
     private EventStore      eventStore;
     private WorkingSetStore store;
-    private final CopyOnWriteArrayList<LiveWatcher> liveWatchers = new CopyOnWriteArrayList<>();
     // Vservice-neutral live fan-out for the generated RecordMap Watch<T> handlers.
     private final RecordWatchHub recordWatchHub = new RecordWatchHub();
 
-    private static final class LiveWatcher {
-        final StreamObserver<WatchLiveSessionsEvent> obs;
-        final String filterSpiffeId;
-        final boolean includeRawEvents;
-
-        LiveWatcher(StreamObserver<WatchLiveSessionsEvent> obs, String filterSpiffeId, boolean includeRawEvents) {
-            this.obs = obs;
-            this.filterSpiffeId = filterSpiffeId;
-            this.includeRawEvents = includeRawEvents;
-        }
-
-        boolean matches(AgentEvent ev) {
-            return filterSpiffeId == null || filterSpiffeId.isEmpty() || filterSpiffeId.equals(ev.getSpiffeId());
-        }
-
-        // gRPC ServerCallStreamObserver must not receive concurrent onNext calls.
-        synchronized void send(WatchLiveSessionsEvent evt) {
-            obs.onNext(evt);
-        }
-    }
 
     public StratumHandler(ServiceManager sm) {
         this.sm = sm;
@@ -109,18 +56,6 @@ public class StratumHandler extends StratumVServiceBase {
     // -----------------------------------------------------------------------
     // StratumVServiceBase — vservice wiring
     // -----------------------------------------------------------------------
-
-    @Override
-    protected StratumQuery.StratumQueryHandler provideStratumQueryHandler() {
-        try {
-            Stratum.Config cfg = Helpers.configDefaults(Stratum.Config.getDefaultInstance()).build();
-            initFromConfig(cfg);
-        } catch (Exception e) {
-            log.error("failed to initialize stratum", e);
-            throw new RuntimeException("stratum init failed", e);
-        }
-        return new StratumQueryImpl();
-    }
 
     @Override
     public com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.RecordMap.RecordMapHandler getRecordMapGrpcImpl() {
@@ -229,35 +164,8 @@ public class StratumHandler extends StratumVServiceBase {
         }
         // Live fan-out to RecordMap Watch<T> subscriptions (vservice-neutral).
         recordWatchHub.publish(event);
-        // WatchLiveSessions live-streaming is an agentsensor read-side feature;
-        // it remains here until the StratumQuery read path is also generated.
-        if (event instanceof AgentEvent) {
-            pushToLiveWatchers((AgentEvent) event);
-        }
     }
 
-    private void pushToLiveWatchers(AgentEvent event) {
-        if (liveWatchers.isEmpty()) return;
-        long nowMs = System.currentTimeMillis();
-        int idleSecs = config != null ? config.getActiveSessionIdleSeconds() : 300;
-        // Note: sessionUpdated contains a single-event snapshot (not a full session aggregate).
-        // Clients should treat it as a "live heartbeat" rather than authoritative session state.
-        // Use listActiveSessions or getSessionEvents for full aggregates.
-        SessionSummary summary = buildQuickSummary(event, nowMs, idleSecs);
-        WatchLiveSessionsEvent updateEvt = WatchLiveSessionsEvent.newBuilder()
-                .setSessionUpdated(summary).build();
-        WatchLiveSessionsEvent rawEvt = WatchLiveSessionsEvent.newBuilder()
-                .setLiveEvent(event).build();
-        for (LiveWatcher w : liveWatchers) {
-            if (!w.matches(event)) continue;
-            try {
-                if (w.includeRawEvents) w.send(rawEvt);
-                w.send(updateEvt);
-            } catch (Exception e) {
-                liveWatchers.remove(w);
-            }
-        }
-    }
 
     @Override
     public void shutdown() {
@@ -266,321 +174,6 @@ public class StratumHandler extends StratumVServiceBase {
         if (store != null)      store.shutdown();
     }
 
-    // -----------------------------------------------------------------------
-    // gRPC service implementation
-    // -----------------------------------------------------------------------
-
-    private class StratumQueryImpl implements StratumQuery.StratumQueryHandler {
-
-        // --- Map lifecycle ---
-
-        @Override
-        public CreateMapResponse createMap(Caller caller, CreateMapRequest req) throws ProtoException {
-            try {
-                store.createMap(req.getMapId());
-                return CreateMapResponse.getDefaultInstance();
-            } catch (IllegalArgumentException e) {
-                throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
-            } catch (Exception e) {
-                throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-            }
-        }
-
-        @Override
-        public DeleteMapResponse deleteMap(Caller caller, DeleteMapRequest req) throws ProtoException {
-            try {
-                store.deleteMap(req.getMapId());
-                return DeleteMapResponse.getDefaultInstance();
-            } catch (IllegalArgumentException e) {
-                throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
-            } catch (Exception e) {
-                throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-            }
-        }
-
-        @Override
-        public ListMapsResponse listMaps(Caller caller, ListMapsRequest req) throws ProtoException {
-            try {
-                return ListMapsResponse.newBuilder().addAllMaps(store.listMaps()).build();
-            } catch (Exception e) {
-                throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-            }
-        }
-
-        @Override
-        public GetMapDetailResponse getMapDetail(Caller caller, GetMapDetailRequest req) throws ProtoException {
-            try {
-                return GetMapDetailResponse.newBuilder()
-                        .setDetail(store.describeMap(req.getMapId())).build();
-            } catch (IllegalArgumentException e) {
-                throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
-            } catch (Exception e) {
-                throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-            }
-        }
-
-        @Override
-        public MapSizeResponse getMapSize(Caller caller, MapSizeRequest req) throws ProtoException {
-            try {
-                long[] sz = store.mapSize(req.getMapId());
-                return MapSizeResponse.newBuilder()
-                        .setEventCount(sz[0])
-                        .setSizeMb(sz[1])
-                        .build();
-            } catch (IllegalArgumentException e) {
-                throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
-            } catch (Exception e) {
-                throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-            }
-        }
-
-        // --- Loading ---
-
-        @Override
-        public UpdateMapByIdsResponse updateMapByIds(Caller caller, UpdateMapByIdsRequest req) throws ProtoException {
-            try {
-                long[] added = {0};
-                for (String id : req.getEventIdsList()) {
-                    eventStore.getByKey(id).ifPresent(ev -> {
-                        store.putEvent(req.getMapId(), ev);
-                        added[0]++;
-                    });
-                }
-                return UpdateMapByIdsResponse.newBuilder().setEventsAdded(added[0]).build();
-            } catch (Exception e) {
-                throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-            }
-        }
-
-        @Override
-        public UpdateMapBySqlResponse updateMapBySql(Caller caller, UpdateMapBySqlRequest req) throws ProtoException {
-            try {
-                EventStore.SqlPredicates preds = EventStore.SqlParser.parse(req.getSql());
-                List<AgentEvent> events = eventStore.query(preds);
-                for (AgentEvent ev : events) {
-                    store.putEvent(req.getMapId(), ev);
-                }
-                log.info("load_by_sql into {}: {} events loaded", req.getMapId(), events.size());
-                return UpdateMapBySqlResponse.newBuilder().setEventsAdded(events.size()).build();
-            } catch (IllegalArgumentException e) {
-                throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
-            } catch (Exception e) {
-                throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-            }
-        }
-
-        @Override
-        public UpdateMapByTimedbResponse updateMapByTimedb(Caller caller, UpdateMapByTimedbRequest req) throws ProtoException {
-            throw new ProtoException(ProtoException.UNIMPLEMENTED, "load_by_timedb not yet implemented");
-        }
-
-        @Override
-        public UpdateMapByGraphdbResponse updateMapByGraphdb(Caller caller, UpdateMapByGraphdbRequest req) throws ProtoException {
-            throw new ProtoException(ProtoException.UNIMPLEMENTED, "load_by_graphdb not yet implemented");
-        }
-
-        // --- Map mutation ---
-
-        @Override
-        public UpdateMapFilterResponse updateMapFilter(Caller caller, UpdateMapFilterRequest req) throws ProtoException {
-            try {
-                long removed = store.filterMap(req.getMapId(), req.getSql());
-                return UpdateMapFilterResponse.newBuilder().setEventsRemoved(removed).build();
-            } catch (IllegalArgumentException e) {
-                throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
-            } catch (Exception e) {
-                throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-            }
-        }
-
-        @Override
-        public MergeResponse merge(Caller caller, MergeRequest req) throws ProtoException {
-            try {
-                long added = store.merge(req.getSrcMapId(), req.getDestMapId());
-                return MergeResponse.newBuilder().setEventsAdded(added).build();
-            } catch (IllegalArgumentException e) {
-                throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
-            } catch (Exception e) {
-                throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-            }
-        }
-
-        // --- Read-only query ---
-
-        @Override
-        public ExecuteMapQueryResponse executeMapQuery(Caller caller, ExecuteMapQueryRequest req) throws ProtoException {
-            try {
-                int limit = req.getLimit() > 0 ? req.getLimit() : 100;
-                Object[] result = (Object[]) store.queryMap(req.getMapId(), req.getSql(), limit);
-                return ExecuteMapQueryResponse.newBuilder()
-                        .setResultsJson((String) result[1])
-                        .setTotalRows((Long) result[0])
-                        .build();
-            } catch (IllegalArgumentException e) {
-                throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
-            } catch (Exception e) {
-                throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-            }
-        }
-
-        // --- Operator queries ---
-
-        @Override
-        public CollectionRuntime.Page<SessionSummary> listActiveSessions(Caller caller,
-                                                                         ListActiveSessionsRequest req,
-                                                                         CollectionRuntime.PageParams page) throws ProtoException {
-            try {
-                int idleSecs  = config != null ? config.getActiveSessionIdleSeconds() : 300;
-                long cutoffMs = System.currentTimeMillis() - (long) idleSecs * 1000;
-                EventStore.SqlPredicates preds = new EventStore.SqlPredicates();
-                preds.startMs = cutoffMs;
-                List<AgentEvent> events = eventStore.query(preds);
-                List<SessionSummary> sessions = buildSessionSummaries(events);
-                return pageSorted(sessions, page, s -> List.of(i64Key(s.getLastSeenMs()), s.getSessionId()));
-            } catch (Exception e) {
-                throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-            }
-        }
-
-        @Override
-        public CollectionRuntime.Page<AgentEvent> listSessionEvents(Caller caller,
-                                                                     GetSessionEventsRequest req,
-                                                                     CollectionRuntime.PageParams page) throws ProtoException {
-            try {
-                EventStore.SqlPredicates preds = new EventStore.SqlPredicates();
-                preds.sessionId = req.getSessionId();
-                applyTimeRange(preds, req.hasTimeRange() ? req.getTimeRange() : null);
-                List<AgentEvent> events = eventStore.query(preds);
-                return pageSorted(events, page, e -> List.of(i64Key(e.getTimestampMs()), e.getEventId()));
-            } catch (Exception e) {
-                throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-            }
-        }
-
-        @Override
-        public CollectionRuntime.Page<SessionSummary> listUserSessions(Caller caller,
-                                                                       GetUserSessionsRequest req,
-                                                                       CollectionRuntime.PageParams page) throws ProtoException {
-            try {
-                EventStore.SqlPredicates preds = new EventStore.SqlPredicates();
-                preds.spiffe_id = req.getSpiffeId();
-                applyTimeRange(preds, req.hasTimeRange() ? req.getTimeRange() : null);
-                List<AgentEvent> events = eventStore.query(preds);
-                List<SessionSummary> sessions = buildSessionSummaries(events);
-                return pageSorted(sessions, page, s -> List.of(i64Key(s.getLastSeenMs()), s.getSessionId()));
-            } catch (Exception e) {
-                throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-            }
-        }
-
-        @Override
-        public CollectionRuntime.Page<AgentEvent> listEventsByTimeRange(Caller caller,
-                                                                         ListEventsByTimeRangeRequest req,
-                                                                         CollectionRuntime.PageParams page) throws ProtoException {
-            EventTimeRange tr = req.getTimeRange();
-            if (tr.getStartMs() <= 0 || tr.getEndMs() <= 0 || tr.getStartMs() >= tr.getEndMs()) {
-                throw new ProtoException(ProtoException.INVALID_ARGUMENT,
-                        "time_range requires start_ms < end_ms, both > 0");
-            }
-            try {
-                EventStore.SqlPredicates preds = new EventStore.SqlPredicates();
-                applyTimeRange(preds, tr);
-                List<AgentEvent> events = eventStore.query(preds);
-                return pageSorted(events, page, e -> List.of(i64Key(e.getTimestampMs()), e.getEventId()));
-            } catch (ProtoException pe) {
-                throw pe;
-            } catch (Exception e) {
-                throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-            }
-        }
-
-        @Override
-        public CollectionRuntime.Page<AgentEvent> listEventsByActor(Caller caller,
-                                                                     ListEventsByActorRequest req,
-                                                                     CollectionRuntime.PageParams page) throws ProtoException {
-            try {
-                EventStore.SqlPredicates preds = new EventStore.SqlPredicates();
-                preds.spiffe_id = req.getSpiffeId();
-                applyTimeRange(preds, req.hasTimeRange() ? req.getTimeRange() : null);
-                List<AgentEvent> events = eventStore.query(preds);
-                return pageSorted(events, page, e -> List.of(i64Key(e.getTimestampMs()), e.getEventId()));
-            } catch (Exception e) {
-                throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-            }
-        }
-
-        @Override
-        public void subscribeLiveSessions(Caller caller, WatchLiveSessionsRequest req,
-                                          StreamObserver<WatchLiveSessionsEvent> obs) throws ProtoException {
-            LiveWatcher w = new LiveWatcher(obs, req.getFilterSpiffeId(), req.getIncludeRawEvents());
-            liveWatchers.add(w);
-            if (obs instanceof io.grpc.stub.ServerCallStreamObserver) {
-                ((io.grpc.stub.ServerCallStreamObserver<?>) obs)
-                        .setOnCancelHandler(() -> liveWatchers.remove(w));
-            }
-            // Never calls onCompleted() — stays open until client disconnects.
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Session summary helpers
-    // -----------------------------------------------------------------------
-
-    private List<SessionSummary> buildSessionSummaries(List<AgentEvent> events) {
-        long nowMs     = System.currentTimeMillis();
-        int idleThresh = config != null ? config.getActiveSessionIdleSeconds() : 300;
-        Map<String, SessionSummary.Builder> bySession = new LinkedHashMap<>();
-        for (AgentEvent ev : events) {
-            if (ev.getSessionId().isEmpty()) continue;
-            bySession.compute(ev.getSessionId(), (k, b) -> {
-                if (b == null) {
-                    b = SessionSummary.newBuilder()
-                            .setSessionId(ev.getSessionId())
-                            .setSpiffeId(ev.getSpiffeId())
-                            .setWorkingDirectory(ev.getWorkingDirectory())
-                            .setSensorType(ev.getSensorType())
-                            .setFirstSeenMs(ev.getTimestampMs())
-                            .setLastSeenMs(ev.getTimestampMs())
-                            .setLatestEventType(ev.getEventType());
-                }
-                // Events arrive DESC by timestamp; track both ends.
-                if (ev.getTimestampMs() < b.getFirstSeenMs()) b.setFirstSeenMs(ev.getTimestampMs());
-                if (ev.getTimestampMs() > b.getLastSeenMs()) {
-                    b.setLastSeenMs(ev.getTimestampMs()).setLatestEventType(ev.getEventType());
-                }
-                if (ev.getDepth() > b.getMaxDepth()) b.setMaxDepth(ev.getDepth());
-                return b.setEventCount(b.getEventCount() + 1);
-            });
-        }
-        List<SessionSummary> result = new ArrayList<>(bySession.size());
-        for (SessionSummary.Builder b : bySession.values()) {
-            long idleSecs = (nowMs - b.getLastSeenMs()) / 1000;
-            boolean active = idleSecs <= idleThresh;
-            result.add(b.setIsActive(active).setIdleSeconds(active ? 0 : idleSecs).build());
-        }
-        return result;
-    }
-
-    private static SessionSummary buildQuickSummary(AgentEvent ev, long nowMs, int idleThresh) {
-        long idleSecs = (nowMs - ev.getTimestampMs()) / 1000;
-        boolean active = idleSecs <= idleThresh;
-        return SessionSummary.newBuilder()
-                .setSessionId(ev.getSessionId())
-                .setSpiffeId(ev.getSpiffeId())
-                .setWorkingDirectory(ev.getWorkingDirectory())
-                .setSensorType(ev.getSensorType())
-                .setLastSeenMs(ev.getTimestampMs())
-                .setLatestEventType(ev.getEventType())
-                .setIsActive(active)
-                .setIdleSeconds(active ? 0 : idleSecs)
-                .build();
-    }
-
-    private static void applyTimeRange(EventStore.SqlPredicates preds, EventTimeRange range) {
-        if (range == null || range == EventTimeRange.getDefaultInstance()) return;
-        if (range.getStartMs() > 0) preds.startMs = range.getStartMs();
-        if (range.getEndMs()   > 0) preds.endMs   = range.getEndMs();
-    }
 
     // -----------------------------------------------------------------------
     // Pagination helpers
