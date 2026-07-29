@@ -9,29 +9,29 @@ import java.util.List;
 
 /**
  * Generates StratumRecordMaps.java — the implementation of the generated
- * RecordMap service (the typed map plane). For every record type T (an EventBus
- * topic event the record store holds) it emits the five RecordMap RPC handlers
- * (canonical verbs from the tacplus verb registry):
+ * RecordMap service (the record-store query plane). For every record type T (an
+ * EventBus topic event the record store holds) it emits the query-handle RPC
+ * handlers the generated RecordMap.RecordMapHandler declares:
  *
- *   create<T>Map        → create a working-set map (UUID id)
- *   update<T>MapByKeys  → hydrate records from the typed hot store into the map
- *   merge<T>            → union two maps
- *   list<T>             → the only data-returning op: a typed PAGE of records
- *   delete<T>Map        → drop the map
+ *   open<T>Query    → register the caller's filter under a fresh query_id (handle)
+ *   refine<T>       → replace the handle's filter (narrow); filterable types only
+ *   count<T>        → count records matching the handle's filter
+ *   sample<T>       → seeded random sample of matching records
+ *   pull<T>         → typed PAGE of matching records
+ *   watch<T>        → snapshot of matches + a live stream of matching records
+ *   subscribe<T>Count → live count on each matching add/evict
+ *   close<T>        → drop the handle
  *
- * All per-type knowledge lives here (generated); StratumHandler only returns an
- * instance via provideRecordMapHandler(), so the hand-written service names no
- * vservice — the same invariant EventStoreGenerator satisfies. Backed by the
- * generic WorkingSetStore (working-set maps) + the generated StratumEventStores
- * (typed hot IMaps).
+ * The handle→filter registry lives in this instance (queries). All per-type
+ * knowledge is generated here; StratumHandler only returns an instance via
+ * getRecordMapGrpcImpl(), so the hand-written service names no vservice. Backed by
+ * the generated StratumEventStores (typed hot IMaps) + RecordWatchHub (live
+ * changes). Records return SOURCE RECORDS directly (the store holds them); a
+ * federation caller may instead read keys and hydrate — both use the same filter.
  *
- * list<T> is a COLLECTION_MODE_PAGE read: it pages the working-set entries by
- * their map key (which is the record key — vservice-neutral, no per-type field
- * accessor) via StratumHandler.pageSorted, then parses only the page's bytes back
- * to the typed record.
- *
- * NOTE (Phase 3, increment 1): Filter/UpdateByQuery, UpdateBy{Graphdb,Timedb}
- * federation, Modify, and Watch are follow-on increments.
+ * match<T>/pull<T>/watch<T> are getter-based over the typed store (no Hazelcast
+ * attribute-name coupling); pull<T> pages via StratumHandler.pageSorted keyed by
+ * the record key.
  */
 public final class RecordMapImplGenerator {
 
@@ -44,9 +44,9 @@ public final class RecordMapImplGenerator {
     // interface is on the services path, not vservices.
     private static final String RECORDMAP_IFACE =
             MODEL_BASE + ".s2sm.internal.grpc.servers.services.stratum.RecordMap";
-    private static final String CALLER = MODEL_BASE + ".libs.servicemanager.Caller";
-    private static final String PROTO_EXCEPTION = MODEL_BASE + ".types.libs.errors.ProtoException";
-    private static final String COLLECTION_RUNTIME = MODEL_BASE + ".libs.collection.CollectionRuntime";
+    private static final String CALLER = MODEL_BASE + ".chassis.servicemanager.Caller";
+    private static final String PROTO_EXCEPTION = MODEL_BASE + ".types.sys.errors.ProtoException";
+    private static final String COLLECTION_RUNTIME = MODEL_BASE + ".chassis.collection.CollectionRuntime";
     private static final String CLASS_NAME = "StratumRecordMaps";
 
     private RecordMapImplGenerator() {}
@@ -69,10 +69,9 @@ public final class RecordMapImplGenerator {
         w.println("package " + HOST_PKG + ";");
         w.println();
         w.println("import java.util.ArrayList;");
-        w.println("import java.util.Map;");
         w.println("import java.util.UUID;");
+        w.println("import java.util.concurrent.ConcurrentHashMap;");
         w.println("import java.util.function.Supplier;");
-        w.println("import com.hazelcast.map.IMap;");
         w.println("import " + CALLER + ";");
         w.println("import " + PROTO_EXCEPTION + ";");
         w.println("import " + COLLECTION_RUNTIME + ";");
@@ -80,126 +79,52 @@ public final class RecordMapImplGenerator {
         w.println("import " + RECORDMAP_IFACE + ";");
         w.println();
         w.println("/**");
-        w.println(" * Typed map-plane implementation (RecordMap). One RPC family per record");
-        w.println(" * type, backed by the generic WorkingSetStore + typed StratumEventStores.");
+        w.println(" * Record-store query-plane implementation (RecordMap). One RPC family per");
+        w.println(" * record type; open<T>Query registers the caller's filter under a query_id");
+        w.println(" * (handle) and every other op operates on that handle. Backed by the typed");
+        w.println(" * StratumEventStores + RecordWatchHub.");
         w.println(" *");
         w.println(" * The stores are resolved per call via suppliers: StratumHandler rebuilds");
-        w.println(" * them on every config update, so a captured reference would go stale.");
+        w.println(" * them on every config update, so a captured reference would go stale. The");
+        w.println(" * handle registry lives in this instance (obtained once via");
+        w.println(" * getRecordMapGrpcImpl and registered for the service lifetime).");
         w.println(" */");
         w.println("public final class " + CLASS_NAME + " implements RecordMap.RecordMapHandler {");
         w.println();
-        w.println("    private final Supplier<WorkingSetStore> storeSupplier;");
         w.println("    private final Supplier<StratumEventStores> storesSupplier;");
-        w.println("    private final Supplier<RecordWatchHub> watchHubSupplier;");
+        w.println("    // query_id -> the caller's typed filter (Stratum.<T>Filter), or Boolean.TRUE");
+        w.println("    // for filterless record types (match-all).");
+        w.println("    private final ConcurrentHashMap<String, Object> queries = new ConcurrentHashMap<>();");
         w.println();
-        w.println("    public " + CLASS_NAME + "(Supplier<WorkingSetStore> storeSupplier,");
-        w.println("                            Supplier<StratumEventStores> storesSupplier,");
-        w.println("                            Supplier<RecordWatchHub> watchHubSupplier) {");
-        w.println("        this.storeSupplier = storeSupplier;");
+        w.println("    public " + CLASS_NAME + "(Supplier<StratumEventStores> storesSupplier) {");
         w.println("        this.storesSupplier = storesSupplier;");
-        w.println("        this.watchHubSupplier = watchHubSupplier;");
         w.println("    }");
         w.println();
-        w.println("    private WorkingSetStore store() { return storeSupplier.get(); }");
         w.println("    private StratumEventStores stores() { return storesSupplier.get(); }");
-        w.println("    private RecordWatchHub hub() { return watchHubSupplier.get(); }");
+        w.println();
+        w.println("    private Object requireQuery(String queryId) throws ProtoException {");
+        w.println("        Object q = queries.get(queryId);");
+        w.println("        if (q == null) throw new ProtoException(ProtoException.NOT_FOUND, \"unknown query_id: \" + queryId);");
+        w.println("        return q;");
+        w.println("    }");
 
         for (EventTopicDiscovery.TopicEvent e : records) {
-            String t = e.eventType;     // e.g. AgentEvent
-            String fqn = fqn(e);         // typed FQN for parse
-            String acc = field(e);       // stores accessor, e.g. agentsensorAgentEvent
+            String t = e.eventType;      // e.g. AgentEvent
+            String fqn = fqn(e);          // typed FQN
+            String acc = field(e);        // stores accessor, e.g. agentsensorAgentEvent
+            String keyGetter = "get" + pascal(e.recordKey);
+            boolean hasFilter = !e.queryFields.isEmpty();
+            String filterTy = "Stratum." + t + "Filter";
+            String matchFn = lower("Match" + t);
+            // Java expressions for "does record ev match the handle's predicate".
+            String matchExpr = hasFilter ? (matchFn + "(f, ev)") : "true";
+            String matchCast = hasFilter ? (matchFn + "(f, (" + fqn + ") m)") : "true";
 
-            // create<T>Map
-            w.println();
-            w.println("    @Override");
-            w.println("    public Stratum.RecordMapHandle " + lower("Create" + t + "Map")
-                    + "(Caller caller, Stratum.Create" + t + "MapRequest req) throws ProtoException {");
-            w.println("        String mapId = UUID.randomUUID().toString();");
-            w.println("        try {");
-            w.println("            store().createMap(mapId);");
-            w.println("        } catch (Exception ex) {");
-            w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
-            w.println("        }");
-            w.println("        return Stratum.RecordMapHandle.newBuilder().setMapId(mapId).build();");
-            w.println("    }");
-
-            // update<T>MapByKeys
-            w.println();
-            w.println("    @Override");
-            w.println("    public Stratum.RecordMapStats " + lower("Update" + t + "MapByKeys")
-                    + "(Caller caller, Stratum.Update" + t + "MapByKeysRequest req) throws ProtoException {");
-            w.println("        long n = 0;");
-            w.println("        for (String key : req.getKeysList()) {");
-            w.println("            " + fqn + " ev = stores()." + acc + "().get(key);");
-            w.println("            if (ev != null) {");
-            w.println("                store().putEvent(req.getMapId(), key, ev.toByteArray());");
-            w.println("                n++;");
-            w.println("            }");
-            w.println("        }");
-            w.println("        return Stratum.RecordMapStats.newBuilder()");
-            w.println("                .setMapId(req.getMapId()).setSize(n).build();");
-            w.println("    }");
-
-            // merge<T>
-            w.println();
-            w.println("    @Override");
-            w.println("    public Stratum.RecordMapStats " + lower("Merge" + t)
-                    + "(Caller caller, Stratum.Merge" + t + "Request req) throws ProtoException {");
-            w.println("        long n;");
-            w.println("        try {");
-            w.println("            n = store().merge(req.getSourceMapId(), req.getTargetMapId());");
-            w.println("        } catch (Exception ex) {");
-            w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
-            w.println("        }");
-            w.println("        return Stratum.RecordMapStats.newBuilder()");
-            w.println("                .setMapId(req.getTargetMapId()).setSize(n).build();");
-            w.println("    }");
-
-            // list<T> — the only data-returning op (PAGE collection)
-            w.println();
-            w.println("    @Override");
-            w.println("    public CollectionRuntime.Page<" + fqn + "> " + lower("List" + t)
-                    + "(Caller caller, Stratum.List" + t + "Request req, CollectionRuntime.PageParams page) throws ProtoException {");
-            w.println("        try {");
-            w.println("            IMap<String, byte[]> ws = store().getWorkingSetMap(req.getMapId());");
-            w.println("            java.util.List<Map.Entry<String, byte[]>> entries = new ArrayList<>(ws.entrySet());");
-            w.println("            CollectionRuntime.Page<Map.Entry<String, byte[]>> raw =");
-            w.println("                    StratumHandler.pageSorted(entries, page, en -> java.util.List.of(en.getKey()));");
-            w.println("            java.util.List<" + fqn + "> items = new ArrayList<>(raw.items.size());");
-            w.println("            for (Map.Entry<String, byte[]> en : raw.items) {");
-            w.println("                items.add(" + fqn + ".parseFrom(en.getValue()));");
-            w.println("            }");
-            w.println("            return new CollectionRuntime.Page<>(items, raw.nextAfter, raw.total);");
-            w.println("        } catch (Exception ex) {");
-            w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
-            w.println("        }");
-            w.println("    }");
-
-            // delete<T>Map
-            w.println();
-            w.println("    @Override");
-            w.println("    public Stratum.RecordMapStats " + lower("Delete" + t + "Map")
-                    + "(Caller caller, Stratum.RecordMapHandle req) throws ProtoException {");
-            w.println("        try {");
-            w.println("            store().deleteMap(req.getMapId());");
-            w.println("        } catch (Exception ex) {");
-            w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
-            w.println("        }");
-            w.println("        return Stratum.RecordMapStats.newBuilder()");
-            w.println("                .setMapId(req.getMapId()).setSize(0).build();");
-            w.println("    }");
-
-            // update<T>MapByQuery — populate a map by a typed filter. Emitted only
-            // when the record declares (spec.query_field) criteria. Getter-based
-            // filtering over the typed hot store (no Hazelcast attribute-name coupling).
-            if (!e.queryFields.isEmpty()) {
-                String keyGetter = "get" + pascal(e.recordKey);
-                String matchFn = lower("Match" + t);
-
-                // match<T>: true when a record satisfies the typed filter (shared by
-                // update<T>MapByQuery and watch<T>). Getter-based, no Hazelcast attrs.
+            // match<T>: true when a record satisfies the typed filter. Getter-based,
+            // no Hazelcast attribute coupling. Only for filterable record types.
+            if (hasFilter) {
                 w.println();
-                w.println("    private static boolean " + matchFn + "(Stratum." + t + "Filter f, " + fqn + " ev) {");
+                w.println("    private static boolean " + matchFn + "(" + filterTy + " f, " + fqn + " ev) {");
                 for (EventTopicDiscovery.QueryField qf : e.queryFields) {
                     String P = pascal(qf.name);
                     if (qf.range) {
@@ -214,99 +139,110 @@ public final class RecordMapImplGenerator {
                 w.println("        return true;");
                 w.println("    }");
 
-                // update<T>MapByQuery — populate a map from the typed filter.
+                // <t>Filter(queryId): fetch + cast the handle's stored filter.
                 w.println();
-                w.println("    @Override");
-                w.println("    public Stratum.RecordMapStats " + lower("Update" + t + "MapByQuery")
-                        + "(Caller caller, Stratum.Update" + t + "MapByQueryRequest req) throws ProtoException {");
-                w.println("        Stratum." + t + "Filter f = req.getFilter();");
-                w.println("        long n = 0;");
-                w.println("        try {");
-                w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) {");
-                w.println("                if (!" + matchFn + "(f, ev)) continue;");
-                w.println("                store().putEvent(req.getMapId(), ev." + keyGetter + "(), ev.toByteArray());");
-                w.println("                n++;");
-                w.println("            }");
-                w.println("        } catch (Exception ex) {");
-                w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
-                w.println("        }");
-                w.println("        return Stratum.RecordMapStats.newBuilder()");
-                w.println("                .setMapId(req.getMapId()).setSize(n).build();");
-                w.println("    }");
-
-                // watch<T> — live standing query: a snapshot of matching records, then
-                // a live stream of matching records as they are ingested.
-                //
-                // Ordering for no lost events: (1) subscribe to the hub eagerly, (2) read
-                // the snapshot revision `rev`, (3) take the snapshot. The wrapper resumes
-                // the live stream at `rev` (CollectionRuntime delivers only revision > rev),
-                // so every record ingested after this point arrives live and nothing is
-                // dropped. We deliberately do NOT key-dedup the live stream against the
-                // snapshot: that would suppress later changes to a snapshot key forever.
-                // The only overlap is a record ingested in the tiny window between reading
-                // `rev` and the values() snapshot — at-least-once at the snapshot boundary,
-                // the standard watch contract (snapshot_done carries `rev` for client-side
-                // dedup). Exactly-once would require records to carry an ingest sequence.
-                w.println();
-                w.println("    @Override");
-                w.println("    public CollectionRuntime.WatchSource<" + fqn + ", Stratum." + t + "WatchChange> "
-                        + lower("Watch" + t) + "(Caller caller, Stratum.Watch" + t + "Request req) throws ProtoException {");
-                w.println("        Stratum." + t + "Filter f = req.getFilter();");
-                w.println("        final java.util.Iterator<Stratum." + t + "WatchChange> liveRaw = hub().changes(");
-                w.println("                m -> (m instanceof " + fqn + ") && " + matchFn + "(f, (" + fqn + ") m),");
-                w.println("                (m, r) -> Stratum." + t + "WatchChange.newBuilder()");
-                w.println("                        .setType(Stratum.RecordChangeType.RECORD_CHANGE_TYPE_ADD)");
-                w.println("                        .setItem((" + fqn + ") m)");
-                w.println("                        .setRevision(r)");
-                w.println("                        .build());");
-                w.println("        // Snapshot revision read BEFORE the snapshot: the wrapper resumes the");
-                w.println("        // live stream at this revision (delivers only revision > rev), so any");
-                w.println("        // event after this point arrives live (no gap). Records already at or");
-                w.println("        // before rev are in the snapshot.");
-                w.println("        long rev = hub().currentRevision();");
-                w.println("        java.util.List<" + fqn + "> snap = new ArrayList<>();");
-                w.println("        try {");
-                w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) {");
-                w.println("                if (" + matchFn + "(f, ev)) snap.add(ev);");
-                w.println("            }");
-                w.println("        } catch (Exception ex) {");
-                w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
-                w.println("        }");
-                w.println("        java.util.function.Supplier<java.util.Iterator<Stratum." + t + "WatchChange>> changes = () -> liveRaw;");
-                w.println("        return new CollectionRuntime.WatchSource<>(");
-                w.println("                java.util.UUID.randomUUID().toString(), snap.iterator(), rev, changes);");
-                w.println("    }");
-
-                // get<T>Count — typed record count by filter, computed server-side over
-                // the record store (no working-set map, no client materialization).
-                w.println();
-                w.println("    @Override");
-                w.println("    public Stratum.RecordCount " + lower("Get" + t + "Count")
-                        + "(Caller caller, Stratum.Get" + t + "CountRequest req) throws ProtoException {");
-                w.println("        Stratum." + t + "Filter f = req.getFilter();");
-                w.println("        long n = 0;");
-                w.println("        try {");
-                w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) {");
-                w.println("                if (" + matchFn + "(f, ev)) n++;");
-                w.println("            }");
-                w.println("        } catch (Exception ex) {");
-                w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
-                w.println("        }");
-                w.println("        return Stratum.RecordCount.newBuilder().setCount(n).build();");
-                w.println("    }");
-
-                // subscribe<T>Count — live count: emit the current count, then a new
-                // count on each matching add/evict (Hazelcast entry listener via the
-                // RecordCountStream helper). Verb Subscribe → plain server stream.
-                w.println();
-                w.println("    @Override");
-                w.println("    public void " + lower("Subscribe" + t + "Count")
-                        + "(Caller caller, Stratum.Subscribe" + t + "CountRequest req,");
-                w.println("            io.grpc.stub.StreamObserver<Stratum.RecordCount> obs) throws ProtoException {");
-                w.println("        Stratum." + t + "Filter f = req.getFilter();");
-                w.println("        RecordCountStream.subscribe(stores()." + acc + "(), ev -> " + matchFn + "(f, ev), obs);");
+                w.println("    private " + filterTy + " " + lower(t) + "Filter(String queryId) throws ProtoException {");
+                w.println("        return (" + filterTy + ") requireQuery(queryId);");
                 w.println("    }");
             }
+
+            // Emitted at the top of every store-scanning body: bind `f` to the
+            // handle's filter (or validate existence for filterless types).
+            String bindFilter = hasFilter
+                    ? ("        " + filterTy + " f = " + lower(t) + "Filter(req.getQueryId());")
+                    : "        requireQuery(req.getQueryId());";
+
+            // open<T>Query — register the filter under a fresh handle.
+            w.println();
+            w.println("    @Override");
+            w.println("    public Stratum.QueryHandle " + lower("Open" + t + "Query")
+                    + "(Caller caller, Stratum.Open" + t + "QueryRequest req) throws ProtoException {");
+            w.println("        String qid = UUID.randomUUID().toString();");
+            w.println("        queries.put(qid, " + (hasFilter ? "req.getFilter()" : "Boolean.TRUE") + ");");
+            w.println("        return Stratum.QueryHandle.newBuilder().setQueryId(qid).build();");
+            w.println("    }");
+
+            // count<T>
+            w.println();
+            w.println("    @Override");
+            w.println("    public Stratum.RecordCount " + lower("Count" + t)
+                    + "(Caller caller, Stratum.QueryHandle req) throws ProtoException {");
+            w.println(bindFilter);
+            w.println("        long n = 0;");
+            w.println("        try {");
+            w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + matchExpr + ") n++;");
+            w.println("        } catch (Exception ex) {");
+            w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
+            w.println("        }");
+            w.println("        return Stratum.RecordCount.newBuilder().setCount(n).build();");
+            w.println("    }");
+
+            // sample<T> — seeded random sample of matching records.
+            w.println();
+            w.println("    @Override");
+            w.println("    public Stratum.Sample" + t + "Response " + lower("Sample" + t)
+                    + "(Caller caller, Stratum.Sample" + t + "Request req) throws ProtoException {");
+            w.println(hasFilter
+                    ? ("        " + filterTy + " f = " + lower(t) + "Filter(req.getQueryId());")
+                    : "        requireQuery(req.getQueryId());");
+            w.println("        java.util.List<" + fqn + "> matches = new ArrayList<>();");
+            w.println("        try {");
+            w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + matchExpr + ") matches.add(ev);");
+            w.println("        } catch (Exception ex) {");
+            w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
+            w.println("        }");
+            w.println("        java.util.Collections.shuffle(matches, new java.util.Random(req.getSeed()));");
+            w.println("        int lim = req.getN() > 0 ? Math.min(req.getN(), matches.size()) : matches.size();");
+            w.println("        return Stratum.Sample" + t + "Response.newBuilder()");
+            w.println("                .addAllItems(matches.subList(0, lim)).build();");
+            w.println("    }");
+
+            // pull<T> — typed PAGE of matching records, sorted by record key.
+            w.println();
+            w.println("    @Override");
+            w.println("    public CollectionRuntime.Page<" + fqn + "> " + lower("Pull" + t)
+                    + "(Caller caller, Stratum.Pull" + t + "Request req, CollectionRuntime.PageParams page) throws ProtoException {");
+            w.println(hasFilter
+                    ? ("        " + filterTy + " f = " + lower(t) + "Filter(req.getQueryId());")
+                    : "        requireQuery(req.getQueryId());");
+            w.println("        java.util.List<" + fqn + "> matches = new ArrayList<>();");
+            w.println("        try {");
+            w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + matchExpr + ") matches.add(ev);");
+            w.println("        } catch (Exception ex) {");
+            w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
+            w.println("        }");
+            w.println("        return StratumHandler.pageSorted(matches, page, ev -> java.util.List.of(ev." + keyGetter + "()));");
+            w.println("    }");
+
+            // close<T> — drop the handle.
+            w.println();
+            w.println("    @Override");
+            w.println("    public Stratum.QueryStats " + lower("Close" + t)
+                    + "(Caller caller, Stratum.QueryHandle req) throws ProtoException {");
+            w.println("        queries.remove(req.getQueryId());");
+            w.println("        return Stratum.QueryStats.newBuilder().setQueryId(req.getQueryId()).setSize(0).build();");
+            w.println("    }");
+
+            // refine<T> — replace the handle's filter (narrow-only by contract).
+            // Filterable record types only.
+            if (hasFilter) {
+                w.println();
+                w.println("    @Override");
+                w.println("    public Stratum.QueryStats " + lower("Refine" + t)
+                        + "(Caller caller, Stratum.Refine" + t + "Request req) throws ProtoException {");
+                w.println("        requireQuery(req.getQueryId());");
+                w.println("        " + filterTy + " f = req.getFilter();");
+                w.println("        queries.put(req.getQueryId(), f);");
+                w.println("        long n = 0;");
+                w.println("        try {");
+                w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + matchExpr + ") n++;");
+                w.println("        } catch (Exception ex) {");
+                w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
+                w.println("        }");
+                w.println("        return Stratum.QueryStats.newBuilder().setQueryId(req.getQueryId()).setSize(n).build();");
+                w.println("    }");
+            }
+
         }
 
         w.println("}");

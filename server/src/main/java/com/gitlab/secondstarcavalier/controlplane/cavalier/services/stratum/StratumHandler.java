@@ -14,12 +14,14 @@ import org.slf4j.LoggerFactory;
 import io.grpc.stub.StreamObserver;
 
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.ServiceManager;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.libs.collection.CollectionRuntime;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.chassis.collection.CollectionRuntime;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.services.stratum.Stratum;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.services.stratum.Helpers;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.libs.servicemanager.Caller;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.libs.errors.ProtoException;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.libs.x509.X509;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.vservices.agentsensor.StratumQuery;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.chassis.servicemanager.Caller;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.sys.errors.ProtoException;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.sys.x509.X509;
 
 /**
  * StratumHandler wires together EventStore, WorkingSetStore, and the generated,
@@ -69,7 +71,7 @@ public class StratumHandler extends StratumVServiceBase {
         }
         // Suppliers, not captured references: initFromConfig rebuilds the stores on
         // config updates, and the generated impl must always see the current ones.
-        return new StratumRecordMaps(() -> store, () -> eventStore.stores(), () -> recordWatchHub);
+        return new StratumRecordMaps(() -> eventStore.stores());
     }
 
     @Override
@@ -80,6 +82,40 @@ public class StratumHandler extends StratumVServiceBase {
     @Override
     protected void handleConfig(Stratum.Config cfg) throws Exception {
         initFromConfig(cfg);
+    }
+
+    /**
+     * StratumQuery map-plane RPCs were superseded by RecordMap in Phase 4.
+     * The vservice proto still declares the service (tag: "stratum"), so the
+     * generated base requires an implementation. All methods return UNIMPLEMENTED
+     * until the map-plane is re-evaluated or the proto tag is changed.
+     */
+    @Override
+    protected StratumQuery.StratumQueryHandler provideStratumQueryHandler() {
+        return new StratumQuery.StratumQueryHandler() {
+            private ProtoException unimplemented() {
+                return new ProtoException(ProtoException.UNIMPLEMENTED,
+                        "StratumQuery superseded by RecordMap");
+            }
+            @Override public Agentsensor.CreateMapResponse createMap(Caller c,Agentsensor.CreateMapRequest r) throws ProtoException { throw unimplemented(); }
+            @Override public Agentsensor.DeleteMapResponse deleteMap(Caller c,Agentsensor.DeleteMapRequest r) throws ProtoException { throw unimplemented(); }
+            @Override public Agentsensor.ListMapsResponse listMaps(Caller c,Agentsensor.ListMapsRequest r) throws ProtoException { throw unimplemented(); }
+            @Override public Agentsensor.GetMapDetailResponse getMapDetail(Caller c,Agentsensor.GetMapDetailRequest r) throws ProtoException { throw unimplemented(); }
+            @Override public Agentsensor.MapSizeResponse getMapSize(Caller c,Agentsensor.MapSizeRequest r) throws ProtoException { throw unimplemented(); }
+            @Override public Agentsensor.UpdateMapByIdsResponse updateMapByIds(Caller c,Agentsensor.UpdateMapByIdsRequest r) throws ProtoException { throw unimplemented(); }
+            @Override public Agentsensor.UpdateMapBySqlResponse updateMapBySql(Caller c,Agentsensor.UpdateMapBySqlRequest r) throws ProtoException { throw unimplemented(); }
+            @Override public Agentsensor.UpdateMapByTimedbResponse updateMapByTimedb(Caller c,Agentsensor.UpdateMapByTimedbRequest r) throws ProtoException { throw unimplemented(); }
+            @Override public Agentsensor.UpdateMapByGraphdbResponse updateMapByGraphdb(Caller c,Agentsensor.UpdateMapByGraphdbRequest r) throws ProtoException { throw unimplemented(); }
+            @Override public Agentsensor.UpdateMapFilterResponse updateMapFilter(Caller c,Agentsensor.UpdateMapFilterRequest r) throws ProtoException { throw unimplemented(); }
+            @Override public Agentsensor.MergeResponse merge(Caller c,Agentsensor.MergeRequest r) throws ProtoException { throw unimplemented(); }
+            @Override public Agentsensor.ExecuteMapQueryResponse executeMapQuery(Caller c,Agentsensor.ExecuteMapQueryRequest r) throws ProtoException { throw unimplemented(); }
+            @Override public CollectionRuntime.Page<Agentsensor.SessionSummary> listActiveSessions(Caller c,Agentsensor.ListActiveSessionsRequest r, CollectionRuntime.PageParams p) throws ProtoException { throw unimplemented(); }
+            @Override public CollectionRuntime.Page<Agentsensor.AgentEvent> listSessionEvents(Caller c,Agentsensor.GetSessionEventsRequest r, CollectionRuntime.PageParams p) throws ProtoException { throw unimplemented(); }
+            @Override public CollectionRuntime.Page<Agentsensor.SessionSummary> listUserSessions(Caller c,Agentsensor.GetUserSessionsRequest r, CollectionRuntime.PageParams p) throws ProtoException { throw unimplemented(); }
+            @Override public CollectionRuntime.Page<Agentsensor.AgentEvent> listEventsByTimeRange(Caller c,Agentsensor.ListEventsByTimeRangeRequest r, CollectionRuntime.PageParams p) throws ProtoException { throw unimplemented(); }
+            @Override public CollectionRuntime.Page<Agentsensor.AgentEvent> listEventsByActor(Caller c,Agentsensor.ListEventsByActorRequest r, CollectionRuntime.PageParams p) throws ProtoException { throw unimplemented(); }
+            @Override public void subscribeLiveSessions(Caller c,Agentsensor.WatchLiveSessionsRequest r, StreamObserver<Agentsensor.WatchLiveSessionsEvent> obs) throws ProtoException { throw unimplemented(); }
+        };
     }
 
     @Override
