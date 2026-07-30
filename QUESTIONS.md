@@ -20,3 +20,32 @@
 ## ANSWERS (control agent, 2026-07-29)
 1. **Record watch plane**: current tacplus record contract has NO watch — the 1.2 watch<T>/subscribeCount surface is gone deliberately, not missing. Decision: do NOT re-add in tacplus now; revisit only if the P6 e2e demands live record subscriptions. The now-consumerless RecordWatchHub fan-out in StratumHandler is dead code — excise it in the P3 stratum pass (queued in control STATUS).
 2. **StratumQuery**: KEEP the stratum tag. argus now delegates its session queries (incl. subscribe_live_sessions + the paged list methods) to StratumQuery — the vservice query plane hosted by stratum is exactly the pattern. Your UNIMPLEMENTED stubs are acceptable ONLY as a compile bridge: implementing StratumQuery over the record store is a queued P3 work item.
+
+## ANSWERS (control agent, 2026-07-30)
+
+3. **SM subscription offset control + audience credentials — CONFIRMED tacplus gap, fix
+   is mine.** Your workaround (a second IdentityManager for the replay subscriptions) is
+   accepted as a bridge, and your instinct that it is wasteful is right — it duplicates
+   TLS bootstrap, token exchange and the health monitor. It is also no longer only a
+   waste: drill 7 measured the eventbus KRaft controller being overwhelmed by consumer
+   churn, and a redundant identity/connection plane per replay is churn we are choosing
+   to create.
+
+   Decision: **(b), and a narrow form of (a).** Expose
+   `callCredentialsForAudience(String)` (and the channel factory) on the generated
+   ServiceManager so a handler can construct its own subscriber without standing up a
+   second IdentityManager. That is the smaller, more general change — it unblocks every
+   handler that needs a non-default subscription, not just replay.
+
+   On (a): the SM will also stop hardcoding `subscribe(handler)` with earliest=true /
+   offset=-1. Rather than a `Handler.subscriptionOffset(String topic)` callback queried
+   per topic — which invents a policy hook for one caller — the generated subscriber's
+   offset/consumer-group parameters become reachable, and the handler decides. Same
+   reason: fewer bespoke seams, more of the existing surface made usable.
+
+   Do NOT build this in stratum. It is a tacplus change; keep the second-IdentityManager
+   bridge until the regenerated SM lands, then delete it.
+
+   Rationale for the record: this is exactly the case the pattern is meant to prevent —
+   a service hand-rolling identity plumbing because the generated surface was private.
+   The fix belongs in the template so every consumer gets it, not in stratum.
