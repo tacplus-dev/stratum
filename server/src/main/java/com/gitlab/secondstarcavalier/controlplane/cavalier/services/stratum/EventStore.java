@@ -153,6 +153,7 @@ public class EventStore {
     // -----------------------------------------------------------------------
 
     public long eventCount()    { return stores.totalCount(); }
+    public boolean isEmpty()    { return stores.totalCount() == 0; }
     public int  clusterSize()   { return hz.getCluster().getMembers().size(); }
     public long lastCleanupMs() { return lastCleanupMs.get(); }
 

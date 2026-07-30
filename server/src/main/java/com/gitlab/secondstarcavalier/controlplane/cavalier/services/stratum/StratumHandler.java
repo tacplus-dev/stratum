@@ -3,6 +3,7 @@ package com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 import org.slf4j.Logger;
@@ -46,6 +47,8 @@ public class StratumHandler extends StratumVServiceBase {
     private EventStore      eventStore;
     private WorkingSetStore store;
     private volatile StratumQueryImpl queryImpl;
+    private final AtomicBoolean coldStartHandled = new AtomicBoolean(false);
+    private volatile ColdStartRebuilder coldStartRebuilder;
 
 
     public StratumHandler(ServiceManager sm) {
@@ -152,6 +155,15 @@ public class StratumHandler extends StratumVServiceBase {
 
         store = new WorkingSetStore(cfg);
         store.init();
+
+        // Cold-start rebuild: if the store is empty (fresh pod / no Hazelcast
+        // persistence), replay all events from eventbus starting at offset 0.
+        // Only runs once per process lifetime — subsequent config updates skip this.
+        if (coldStartHandled.compareAndSet(false, true)
+                && ColdStartRebuilder.isColdStart(eventStore.stores())) {
+            coldStartRebuilder = new ColdStartRebuilder();
+            coldStartRebuilder.startReplay(sm, this);
+        }
     }
 
     @Override
@@ -187,6 +199,8 @@ public class StratumHandler extends StratumVServiceBase {
     @Override
     public void shutdown() {
         log.info("stratum shutting down");
+        ColdStartRebuilder rebuilder = coldStartRebuilder;
+        if (rebuilder != null) rebuilder.shutdown();
         if (eventStore != null) eventStore.shutdown();
         if (store != null)      store.shutdown();
     }
