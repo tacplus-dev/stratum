@@ -22,6 +22,8 @@ import com.hazelcast.map.IMap;
 
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.services.stratum.Stratum;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.AgentEvent;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.MapEntry;
+import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.MapDetail;
 
 /**
  * WorkingSetStore manages the Hazelcast namespaces for stratum's working sets:
@@ -116,6 +118,67 @@ public class WorkingSetStore {
         log.info("deleted working-set map: {}", mapId);
     }
 
+
+    /**
+     * Returns summary metadata for all active working-set maps.
+     */
+    public List<MapEntry> listMaps() {
+        List<MapEntry> result = new ArrayList<>();
+        for (Map.Entry<String, Long> e : mapMeta.entrySet()) {
+            String mapId = e.getKey();
+            IMap<String, byte[]> imap = hz.getMap(WS_PREFIX + mapId);
+            long memBytes = imap.getLocalMapStats().getOwnedEntryMemoryCost();
+            result.add(MapEntry.newBuilder()
+                    .setMapId(mapId)
+                    .setEventCount(imap.size())
+                    .setSizeMb(memBytes / (1024 * 1024))
+                    .setCreatedMs(e.getValue())
+                    .build());
+        }
+        return result;
+    }
+
+    /**
+     * Returns detailed breakdown of a working-set map.
+     */
+    public MapDetail describeMap(String mapId) {
+        if (!mapMeta.containsKey(mapId)) {
+            throw new IllegalArgumentException("unknown map_id: " + mapId);
+        }
+        IMap<String, byte[]> imap = hz.getMap(WS_PREFIX + mapId);
+        long memBytes = imap.getLocalMapStats().getOwnedEntryMemoryCost();
+
+        long minTs = Long.MAX_VALUE;
+        long maxTs = Long.MIN_VALUE;
+        Map<String, Long> typeBreakdown = new HashMap<>();
+        Map<String, Long> spiffeIdCount = new HashMap<>();
+        Map<String, Long> sessionCount = new HashMap<>();
+        Map<String, Long> agentCount = new HashMap<>();
+
+        for (byte[] raw : imap.values()) {
+            try {
+                AgentEvent ev = AgentEvent.parseFrom(raw);
+                if (ev.getTimestampMs() < minTs) minTs = ev.getTimestampMs();
+                if (ev.getTimestampMs() > maxTs) maxTs = ev.getTimestampMs();
+                typeBreakdown.merge(ev.getEventType().name(), 1L, Long::sum);
+                if (!ev.getSpiffeId().isEmpty()) spiffeIdCount.merge(ev.getSpiffeId(), 1L, Long::sum);
+                if (!ev.getSessionId().isEmpty()) sessionCount.merge(ev.getSessionId(), 1L, Long::sum);
+                if (!ev.getAgentId().isEmpty()) agentCount.merge(ev.getAgentId(), 1L, Long::sum);
+            } catch (Exception ignored) {}
+        }
+
+        long size = imap.size();
+        MapDetail.Builder b = MapDetail.newBuilder()
+                .setEventCount(size)
+                .setSizeMb(memBytes / (1024 * 1024))
+                .setTimeRangeStartMs(size > 0 ? minTs : 0)
+                .setTimeRangeEndMs(size > 0 ? maxTs : 0);
+        typeBreakdown.forEach(b::putEventTypeBreakdown);
+        topN(spiffeIdCount, 5).forEach(b::addTopSpiffeIds);
+        topN(sessionCount, 5).forEach(b::addTopSessions);
+        topN(agentCount, 5).forEach(b::addTopAgents);
+        return b.build();
+    }
 
     /** Returns event_count and size_mb for a map without full iteration. */
     public long[] mapSize(String mapId) {
@@ -233,4 +296,11 @@ public class WorkingSetStore {
         return (long) cfg.getHazelcastMemoryMb() * 1024 * 1024;
     }
 
+    private static List<String> topN(Map<String, Long> counts, int n) {
+        return counts.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue(Comparator.reverseOrder()))
+                .limit(n)
+                .map(Map.Entry::getKey)
+                .toList();
+    }
 }

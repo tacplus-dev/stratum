@@ -14,21 +14,46 @@ scratchpad, async job management, a SQL engine across loaded data). The
 Supervisor is a persistent single brain — not a stateless request handler — and
 stratum provides the infrastructure for that persistence.
 
-## Current shape (post proto-split cutover, 2026-07-29)
+## Current shape (post StratumQuery implementation, 2026-07-29)
 
 - Language: Java. Declares `record_store` in `stratum.proto`; generates from
   `[proto-base, proto-app]` because it hosts records for base and app vservices
   alike (agentsensor, llmsensor, scmsensor, gitlabconnector).
 - **RecordMap plane** (generated): typed record maps per record type with keyset
   paging; stratum's service-local codegen (`stratum-codegen`, a registry.json
-  consumer — only tacplus reads protos) emits the store wiring.
-- **StratumQuery vservice** (hosted here): the query surface consumers use —
-  argus delegates its session queries (paged lists + `subscribe_live_sessions`)
-  to it. Implementation over the record store is the active P3 work item; the
-  current handlers are compile-bridge stubs and MUST become real before P4.
-- **Events in**: record-bearing topics arrive via eventbus subscriptions; the
-  1.2-era record watch plane is deliberately gone (no consumer; revisited only
-  if the e2e demands live record subscriptions).
+  consumer — only tacplus reads protos) emits the store wiring
+  (`StratumRecordMaps`).
+- **StratumQuery vservice** (hosted here, real implementation):
+  - **Storage**: `EventStore` — a Hazelcast `IMap<event_id, AgentEvent>` with
+    SORTED indexes on epoch/timestampMs and HASH indexes on spiffe_id,
+    sessionId, agentId, eventType. Retention cleanup deletes events older than
+    `retention_days` on a configurable interval.
+  - **Session aggregation** (`StratumQueryImpl.buildSessionSummaries`): folds
+    AgentEvent records grouped by `session_id` into `SessionSummary`. Each
+    summary tracks first/last timestamps, event count, max call depth,
+    latest event type, and active/idle state (idle = now − last_seen_ms >
+    `active_session_idle_seconds`, default 900s). Aggregation is deterministic
+    and stateless — recomputed per query from the Hazelcast map, not cached.
+  - **Paged queries**: `listActiveSessions`, `listSessionEvents`,
+    `listUserSessions`, `listEventsByTimeRange`, `listEventsByActor` — all use
+    Hazelcast predicate queries + `pageSorted` keyset pagination (composite
+    keys: `[i64(timestamp), event_id]` for events,
+    `[i64(last_seen_ms), session_id]` for sessions). Fail-closed: missing
+    required params → INVALID_ARGUMENT.
+  - **Live streaming** (`subscribeLiveSessions`): server-streaming driven by
+    the ingest path (`handleEventStreamMessage`). Each incoming AgentEvent is
+    pushed to registered watchers via an in-process `CopyOnWriteArrayList`
+    fan-out. Watchers receive `WatchLiveSessionsEvent.session_updated`
+    (quick single-event snapshot) and optionally `live_event` (raw event).
+    Stream stays open until client disconnects.
+  - **Map-plane RPCs** (createMap, deleteMap, listMaps, getMapDetail,
+    getMapSize, updateMapByIds, updateMapBySql, updateMapFilter, merge,
+    executeMapQuery): delegated to `WorkingSetStore`, which manages
+    Hazelcast-backed working-set maps with idle TTL eviction. SQL filtering
+    and querying via `CalciteEngine`.
+- **Events in**: record-bearing topics arrive via eventbus subscriptions;
+  `handleEventStreamMessage` stores records and fans out AgentEvents to live
+  session watchers. The 1.2-era RecordWatchHub fan-out is excised (no consumer).
 
 ## Rewrite note
 
