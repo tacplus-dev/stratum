@@ -26,14 +26,14 @@ import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.mode
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.sys.healthreport.Healthreport.ServiceInstanceHealth;
 
 /**
- * ColdStartRebuilder detects when stratum's in-memory store is empty (cold
- * start / fresh pod) and rebuilds it by replaying all events from eventbus
- * starting at offset 0.
+ * ColdStartRebuilder replays all events from eventbus starting at offset 0
+ * on every startup, regardless of how many events survived in-memory.
  *
- * On a warm restart (Hazelcast cluster retained data), no replay is triggered.
- *
- * Idempotency: events are keyed by event_id in an IMap (put = upsert), so
- * replaying events that were already stored is safe.
+ * Replay is always safe: events are keyed by event_id in an IMap (put =
+ * upsert), so replaying events already in the store overwrites them with
+ * identical data. A partially-surviving store is converged to the full set
+ * from the log — no records are lost whether the store came back empty,
+ * partial, or complete.
  */
 final class ColdStartRebuilder {
 
@@ -45,18 +45,13 @@ final class ColdStartRebuilder {
     private final AtomicLong restoredCount = new AtomicLong(0);
 
     /**
-     * Returns true if the store is empty (cold start), false if populated (warm).
-     */
-    static boolean isColdStart(StratumEventStores stores) {
-        return isColdStart(stores.totalCount());
-    }
-
-    /**
-     * Pure decision: total record count of 0 means cold start.
+     * Always returns true: stratum replays from offset 0 on every startup.
+     * The count parameter is accepted (not ignored) so callers can log it,
+     * but it does not gate the decision.
      * Package-private for testing.
      */
-    static boolean isColdStart(long totalCount) {
-        return totalCount == 0;
+    static boolean shouldReplay(long totalCount) {
+        return true;
     }
 
     /**
@@ -69,12 +64,12 @@ final class ColdStartRebuilder {
      * tracking.
      */
     void startReplay(ServiceManager sm, Handler handler) {
-        log.info("COLD START detected: event store is empty, rebuilding from event log (offset=0)");
+        log.info("STARTUP REPLAY: replaying from event log (offset=0) to converge in-memory store");
 
         try {
             replayIdentity = IdentityManager.create(sm.getConfig());
         } catch (Exception e) {
-            log.error("COLD START: failed to create identity for replay — events will not be rebuilt", e);
+            log.error("STARTUP REPLAY: failed to create identity — events will not be replayed", e);
             return;
         }
 
@@ -82,7 +77,7 @@ final class ColdStartRebuilder {
         try {
             channelFactory = ServiceConnection.channelFactory(sm.getConfig());
         } catch (Exception e) {
-            log.error("COLD START: failed to create channel factory for replay", e);
+            log.error("STARTUP REPLAY: failed to create channel factory", e);
             closeReplayIdentity();
             return;
         }
@@ -95,7 +90,7 @@ final class ColdStartRebuilder {
                 (sub) -> sub.subscribe((event, meta) -> {
                     handler.handleEventStreamMessage("agentsensor.event_stream", event,
                             new Handler.SubscriptionMeta(meta.offset, meta.timestamp, meta.key, meta.topic, meta.partition));
-                    restoredCount.incrementAndGet();
+                    logProgress(restoredCount.incrementAndGet());
                 }, false, false, 0));
 
         startTopicReplay("gitlabconnector.event_stream", channelSupplier, credsSupplier,
@@ -103,7 +98,7 @@ final class ColdStartRebuilder {
                 (sub) -> sub.subscribe((event, meta) -> {
                     handler.handleEventStreamMessage("gitlabconnector.event_stream", event,
                             new Handler.SubscriptionMeta(meta.offset, meta.timestamp, meta.key, meta.topic, meta.partition));
-                    restoredCount.incrementAndGet();
+                    logProgress(restoredCount.incrementAndGet());
                 }, false, false, 0));
 
         startTopicReplay("llmsensor.event_stream", channelSupplier, credsSupplier,
@@ -111,7 +106,7 @@ final class ColdStartRebuilder {
                 (sub) -> sub.subscribe((event, meta) -> {
                     handler.handleEventStreamMessage("llmsensor.event_stream", event,
                             new Handler.SubscriptionMeta(meta.offset, meta.timestamp, meta.key, meta.topic, meta.partition));
-                    restoredCount.incrementAndGet();
+                    logProgress(restoredCount.incrementAndGet());
                 }, false, false, 0));
 
         startTopicReplay("scmsensor.event_stream", channelSupplier, credsSupplier,
@@ -119,10 +114,16 @@ final class ColdStartRebuilder {
                 (sub) -> sub.subscribe((event, meta) -> {
                     handler.handleEventStreamMessage("scmsensor.event_stream", event,
                             new Handler.SubscriptionMeta(meta.offset, meta.timestamp, meta.key, meta.topic, meta.partition));
-                    restoredCount.incrementAndGet();
+                    logProgress(restoredCount.incrementAndGet());
                 }, false, false, 0));
 
-        log.info("COLD START: started {} replay subscription threads from offset 0", replayThreads.size());
+        log.info("STARTUP REPLAY: started {} subscription threads from offset 0", replayThreads.size());
+    }
+
+    private void logProgress(long count) {
+        if (count % 25 == 0) {
+            log.info("STARTUP REPLAY: upserted {} records so far", count);
+        }
     }
 
     @FunctionalInterface
@@ -138,10 +139,10 @@ final class ColdStartRebuilder {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } catch (Exception e) {
-                log.warn("COLD START: replay for {} ended: {}", topic, e.getMessage());
+                log.warn("STARTUP REPLAY: subscription for {} ended: {}", topic, e.getMessage());
             }
-            log.info("COLD START: replay thread for {} finished, total restored so far: {}", topic, restoredCount.get());
-        }, "cold-start-replay-" + topic);
+            log.info("STARTUP REPLAY: thread for {} finished, total upserted so far: {}", topic, restoredCount.get());
+        }, "startup-replay-" + topic);
         t.setDaemon(true);
         t.start();
         replayThreads.add(t);
@@ -185,14 +186,14 @@ final class ColdStartRebuilder {
                         var ep = entry.getGrpcEndpoint();
                         if (ep != null && !ep.getHost().isEmpty() && ep.getPort() > 0) {
                             String target = ep.getHost() + ":" + ep.getPort();
-                            log.info("COLD START: resolved eventbus endpoint: {}", target);
+                            log.info("STARTUP REPLAY: resolved eventbus endpoint: {}", target);
                             return channelFactory.create("eventbus", target);
                         }
                     }
                 }
-                log.warn("COLD START: no healthy eventbus found, retrying in {}ms", backoff);
+                log.warn("STARTUP REPLAY: no healthy eventbus found, retrying in {}ms", backoff);
             } catch (Exception e) {
-                log.warn("COLD START: failed to resolve eventbus: {}, retrying in {}ms", e.getMessage(), backoff);
+                log.warn("STARTUP REPLAY: failed to resolve eventbus: {}, retrying in {}ms", e.getMessage(), backoff);
             }
             try {
                 Thread.sleep(backoff);
@@ -222,7 +223,7 @@ final class ColdStartRebuilder {
         }
         replayThreads.clear();
         closeReplayIdentity();
-        log.info("COLD START: replay shutdown complete, total records restored: {}", restoredCount.get());
+        log.info("STARTUP REPLAY: shutdown complete, total upserted: {}", restoredCount.get());
     }
 
     private void closeReplayIdentity() {

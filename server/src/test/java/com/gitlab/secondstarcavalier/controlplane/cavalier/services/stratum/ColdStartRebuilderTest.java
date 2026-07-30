@@ -6,33 +6,35 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Unit tests for ColdStartRebuilder's cold-vs-warm decision.
- * Tests the pure decision logic (totalCount == 0 → cold, > 0 → warm)
- * without requiring Hazelcast or eventbus.
+ * Unit tests for ColdStartRebuilder's replay decision.
+ *
+ * Replay is always triggered on startup regardless of how many records
+ * survived in-memory (IMap put = upsert keyed by event_id, so replay is
+ * idempotent and converges a partially-surviving store to the full log).
  */
 class ColdStartRebuilderTest {
 
     @Test
-    void coldStart_zeroRecords_returnsTrue() {
-        assertTrue(ColdStartRebuilder.isColdStart(0L),
-                "empty store (totalCount==0) must be detected as cold start");
+    void emptyStore_replays() {
+        assertTrue(ColdStartRebuilder.shouldReplay(0L),
+                "empty store must replay");
     }
 
     @Test
-    void warmStart_manyRecords_returnsFalse() {
-        assertFalse(ColdStartRebuilder.isColdStart(40L),
-                "populated store (totalCount>0) must NOT be detected as cold start");
+    void partialStore_replays() {
+        assertTrue(ColdStartRebuilder.shouldReplay(28L),
+                "partially-populated store (e.g. 28 of 49 survived) must also replay");
     }
 
     @Test
-    void warmStart_singleRecord_returnsFalse() {
-        assertFalse(ColdStartRebuilder.isColdStart(1L),
-                "store with even one event should be treated as warm start");
+    void fullStore_replays() {
+        assertTrue(ColdStartRebuilder.shouldReplay(40L),
+                "fully-populated store must replay (idempotent upsert converges to same state)");
     }
 
     @Test
-    void warmStart_largeCount_returnsFalse() {
-        assertFalse(ColdStartRebuilder.isColdStart(100_000L),
-                "large store is a warm start");
+    void largeStore_replays() {
+        assertTrue(ColdStartRebuilder.shouldReplay(100_000L),
+                "large store must replay");
     }
 }

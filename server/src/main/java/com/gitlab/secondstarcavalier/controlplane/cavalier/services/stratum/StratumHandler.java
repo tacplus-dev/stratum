@@ -156,11 +156,11 @@ public class StratumHandler extends StratumVServiceBase {
         store = new WorkingSetStore(cfg);
         store.init();
 
-        // Cold-start rebuild: if the store is empty (fresh pod / no Hazelcast
-        // persistence), replay all events from eventbus starting at offset 0.
-        // Only runs once per process lifetime — subsequent config updates skip this.
-        if (coldStartHandled.compareAndSet(false, true)
-                && ColdStartRebuilder.isColdStart(eventStore.stores())) {
+        // Startup replay: replay all events from eventbus at offset 0 once per
+        // process lifetime. Idempotent (IMap put = upsert keyed by event_id), so
+        // a partially-surviving store converges to the full set from the log.
+        if (coldStartHandled.compareAndSet(false, true)) {
+            log.info("startup: store holds {} records before replay", eventStore.stores().totalCount());
             coldStartRebuilder = new ColdStartRebuilder();
             coldStartRebuilder.startReplay(sm, this);
         }
