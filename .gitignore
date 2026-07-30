@@ -36,3 +36,4 @@ backenddb-mock-runner.log
 # Claude Code
 .claude/
 proto
+launcher-linux-*
