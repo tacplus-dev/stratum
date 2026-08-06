@@ -18,12 +18,6 @@ import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.mode
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.subscribe.GitlabconnectorGitLabConnectorEventBusEventStreamSubscriber;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.subscribe.LlmsensorLlmEventBusEventStreamSubscriber;
 import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.subscribe.ScmsensorScmEventBusEventStreamSubscriber;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.chassis.service_im.IdentityManager;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.chassis.serviceconnection.ServiceConnection;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.services.kernel.Kernel;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.services.kernel.ServiceHealthStateServiceGrpc;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.sys.healthreport.Healthreport.InstanceStatus;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.sys.healthreport.Healthreport.ServiceInstanceHealth;
 
 /**
  * ColdStartRebuilder replays all events from eventbus starting at offset 0
@@ -41,7 +35,6 @@ final class ColdStartRebuilder {
     private static final String CONSUMER_GROUP = "stratum-rebuild";
 
     private final List<Thread> replayThreads = new ArrayList<>();
-    private IdentityManager replayIdentity;
     private final AtomicLong restoredCount = new AtomicLong(0);
 
     /**
@@ -66,24 +59,15 @@ final class ColdStartRebuilder {
     void startReplay(ServiceManager sm, Handler handler) {
         log.info("STARTUP REPLAY: replaying from event log (offset=0) to converge in-memory store");
 
-        try {
-            replayIdentity = IdentityManager.create(sm.getConfig());
-        } catch (Exception e) {
-            log.error("STARTUP REPLAY: failed to create identity — events will not be replayed", e);
-            return;
-        }
-
-        ServiceConnection.ChannelFactory channelFactory;
-        try {
-            channelFactory = ServiceConnection.channelFactory(sm.getConfig());
-        } catch (Exception e) {
-            log.error("STARTUP REPLAY: failed to create channel factory", e);
-            closeReplayIdentity();
-            return;
-        }
-
-        Supplier<Channel> channelSupplier = () -> resolveEventbus(sm, channelFactory);
-        Supplier<CallCredentials> credsSupplier = () -> replayIdentity.callCredentialsForAudience("eventbus");
+        // Use the ServiceManager's own identity and channel plumbing. This used to
+        // stand up a SECOND IdentityManager from sm.getConfig(), which duplicated TLS
+        // bootstrap, token exchange and the health monitor for the lifetime of the
+        // replay. Drill 7 measured the eventbus KRaft controller being overwhelmed by
+        // consumer churn, and a redundant identity plane per replay is that churn,
+        // self-inflicted. tacplus ea54a2ea made this surface public precisely so the
+        // duplicate could go.
+        Supplier<Channel> channelSupplier = () -> sm.resolveService("eventbus");
+        Supplier<CallCredentials> credsSupplier = () -> sm.callCredentialsForAudience("eventbus");
 
         startTopicReplay("agentsensor.event_stream", channelSupplier, credsSupplier,
                 new AgentsensorAgentEventBusEventStreamSubscriber(channelSupplier, credsSupplier, CONSUMER_GROUP),
@@ -148,63 +132,6 @@ final class ColdStartRebuilder {
         replayThreads.add(t);
     }
 
-    /**
-     * Resolves the eventbus endpoint via ServiceHealthState, same approach
-     * as the generated ServiceManager's resolveService.
-     */
-    private static io.grpc.ManagedChannel resolveEventbus(ServiceManager sm,
-            ServiceConnection.ChannelFactory channelFactory) {
-        long backoff = 2000;
-        final long maxBackoff = 30_000;
-        while (true) {
-            try {
-                var stub = ServiceHealthStateServiceGrpc.newBlockingStub(sm.conn())
-                        .withCallCredentials(new io.grpc.CallCredentials() {
-                            @Override
-                            public void applyRequestMetadata(RequestInfo requestInfo,
-                                    java.util.concurrent.Executor appExecutor,
-                                    io.grpc.CallCredentials.MetadataApplier applier) {
-                                appExecutor.execute(() -> {
-                                    try {
-                                        io.grpc.Metadata headers = new io.grpc.Metadata();
-                                        headers.put(
-                                                io.grpc.Metadata.Key.of("authorization",
-                                                        io.grpc.Metadata.ASCII_STRING_MARSHALLER),
-                                                "Bearer " + sm.getToken());
-                                        applier.apply(headers);
-                                    } catch (Exception e) {
-                                        applier.fail(io.grpc.Status.UNAUTHENTICATED.withCause(e));
-                                    }
-                                });
-                            }
-                        });
-                Kernel.InstancesEntriesResponse resp = stub.getAllInstances(
-                        Kernel.InstancesGetAllRequest.getDefaultInstance());
-                for (ServiceInstanceHealth entry : resp.getEntriesMap().values()) {
-                    if ("eventbus".equals(entry.getServiceId())
-                            && entry.getStatus() == InstanceStatus.INSTANCE_STATUS_HEALTHY) {
-                        var ep = entry.getGrpcEndpoint();
-                        if (ep != null && !ep.getHost().isEmpty() && ep.getPort() > 0) {
-                            String target = ep.getHost() + ":" + ep.getPort();
-                            log.info("STARTUP REPLAY: resolved eventbus endpoint: {}", target);
-                            return channelFactory.create("eventbus", target);
-                        }
-                    }
-                }
-                log.warn("STARTUP REPLAY: no healthy eventbus found, retrying in {}ms", backoff);
-            } catch (Exception e) {
-                log.warn("STARTUP REPLAY: failed to resolve eventbus: {}, retrying in {}ms", e.getMessage(), backoff);
-            }
-            try {
-                Thread.sleep(backoff);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                throw new RuntimeException("interrupted while resolving eventbus");
-            }
-            backoff = Math.min(backoff * 2, maxBackoff);
-        }
-    }
-
     long restoredCount() {
         return restoredCount.get();
     }
@@ -222,14 +149,7 @@ final class ColdStartRebuilder {
             }
         }
         replayThreads.clear();
-        closeReplayIdentity();
         log.info("STARTUP REPLAY: shutdown complete, total upserted: {}", restoredCount.get());
     }
 
-    private void closeReplayIdentity() {
-        if (replayIdentity != null) {
-            replayIdentity.close();
-            replayIdentity = null;
-        }
-    }
 }
