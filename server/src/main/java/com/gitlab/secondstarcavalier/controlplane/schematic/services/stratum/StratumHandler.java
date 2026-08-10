@@ -1,5 +1,5 @@
 // Copyright (c) 2024 Second Star Cavalier, LLC.
-package com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum;
+package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -11,15 +11,15 @@ import org.slf4j.LoggerFactory;
 
 import io.grpc.stub.StreamObserver;
 
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.ServiceManager;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.chassis.collection.CollectionRuntime;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.services.stratum.Stratum;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.services.stratum.Helpers;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.vservices.agentsensor.StratumQuery;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.chassis.servicemanager.Caller;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.sys.errors.ProtoException;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.sys.x509.X509;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.ServiceManager;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.collection.CollectionRuntime;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.services.stratum.Stratum;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.services.stratum.Helpers;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.vservices.agentsensor.StratumQuery;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.servicemanager.Caller;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.sys.errors.ProtoException;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.sys.x509.X509;
 
 /**
  * StratumHandler wires together EventStore, WorkingSetStore, the generated
@@ -60,7 +60,7 @@ public class StratumHandler extends StratumVServiceBase {
     // -----------------------------------------------------------------------
 
     @Override
-    public com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.RecordMap.RecordMapHandler getRecordMapGrpcImpl() {
+    public com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.RecordMap.RecordMapHandler getRecordMapGrpcImpl() {
         try {
             if (store == null || eventStore == null) {
                 initFromConfig(Helpers.configDefaults(Stratum.Config.getDefaultInstance()).build());
@@ -110,13 +110,13 @@ public class StratumHandler extends StratumVServiceBase {
     }
 
     @Override
-    public com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.StratumStateService.StratumStateServiceHandler getStratumStateGrpcImpl() {
-        return new com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.StratumStateService.StratumStateServiceHandler() {};
+    public com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.StratumStateService.StratumStateServiceHandler getStratumStateGrpcImpl() {
+        return new com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.StratumStateService.StratumStateServiceHandler() {};
     }
 
     @Override
-    public com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.StratumConfigStateService.StratumConfigStateServiceHandler getStratumConfigStateGrpcImpl() {
-        return new com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.StratumConfigStateService.StratumConfigStateServiceHandler() {
+    public com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.StratumConfigStateService.StratumConfigStateServiceHandler getStratumConfigStateGrpcImpl() {
+        return new com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.StratumConfigStateService.StratumConfigStateServiceHandler() {
             @Override
             public Stratum.Config getConfig(Caller caller) throws ProtoException {
                 Stratum.Config cfg = config;

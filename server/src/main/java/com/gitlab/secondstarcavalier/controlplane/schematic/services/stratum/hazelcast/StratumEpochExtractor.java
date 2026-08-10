@@ -1,5 +1,5 @@
 // Copyright (c) 2024 Second Star Cavalier, LLC.
-package com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.hazelcast;
+package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast;
 
 /**
  * StratumEpochExtractor provides constants for the timestampMs-based

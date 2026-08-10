@@ -1,5 +1,5 @@
 // Copyright (c) 2024 Second Star Cavalier, LLC.
-package com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum;
+package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -31,7 +31,7 @@ import org.slf4j.LoggerFactory;
 
 import com.hazelcast.map.IMap;
 
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.types.vservices.agentsensor.Agentsensor.AgentEvent;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor.AgentEvent;
 
 /**
  * CalciteEngine executes Calcite SQL queries over a Hazelcast working-set IMap.

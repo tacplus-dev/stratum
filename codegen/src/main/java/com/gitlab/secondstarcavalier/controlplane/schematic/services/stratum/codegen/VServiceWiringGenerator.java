@@ -1,5 +1,5 @@
 // Copyright (c) 2024 Second Star Cavalier, LLC.
-package com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.codegen;
+package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.codegen;
 
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -24,7 +24,7 @@ import java.util.List;
  */
 public class VServiceWiringGenerator {
 
-    private static final String HOST_PKG_BASE = "com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum";
+    private static final String HOST_PKG_BASE = "com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum";
     private static final String MODEL_BASE = HOST_PKG_BASE + ".model";
     private static final String SM_PREFIX = "s2sm";
 

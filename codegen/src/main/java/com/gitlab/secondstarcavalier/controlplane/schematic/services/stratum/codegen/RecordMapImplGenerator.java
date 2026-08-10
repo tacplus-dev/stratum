@@ -1,5 +1,5 @@
 // Copyright (c) 2024 Second Star Cavalier, LLC.
-package com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.codegen;
+package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.codegen;
 
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -36,7 +36,7 @@ import java.util.List;
 public final class RecordMapImplGenerator {
 
     private static final String HOST_PKG =
-            "com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum";
+            "com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum";
     private static final String MODEL_BASE = HOST_PKG + ".model";
     private static final String MODEL_TYPES_VSERVICES = MODEL_BASE + ".types.vservices";
     private static final String STRATUM_MSGS = MODEL_BASE + ".types.services.stratum.Stratum";

@@ -1,5 +1,5 @@
 // Copyright (c) 2024 Second Star Cavalier, LLC.
-package com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum;
+package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -12,12 +12,9 @@ import org.slf4j.LoggerFactory;
 import io.grpc.CallCredentials;
 import io.grpc.Channel;
 
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.Handler;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.ServiceManager;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.subscribe.AgentsensorAgentEventBusEventStreamSubscriber;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.subscribe.GitlabconnectorGitLabConnectorEventBusEventStreamSubscriber;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.subscribe.LlmsensorLlmEventBusEventStreamSubscriber;
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.subscribe.ScmsensorScmEventBusEventStreamSubscriber;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.Handler;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.ServiceManager;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.subscribe.AgentsensorAgentEventBusEventStreamSubscriber;
 
 /**
  * ColdStartRebuilder replays all events from eventbus starting at offset 0
@@ -69,34 +66,14 @@ final class ColdStartRebuilder {
         Supplier<Channel> channelSupplier = () -> sm.resolveService("eventbus");
         Supplier<CallCredentials> credsSupplier = () -> sm.callCredentialsForAudience("eventbus");
 
+        // Only agentsensor remains. gitlabconnector, llmsensor and scmsensor were
+        // vservices defined in proto-app -- the APPLICATION layer -- and a platform
+        // service replaying application event streams is exactly the coupling the
+        // schematic/application split removes. Their topics move with the app.
         startTopicReplay("agentsensor.event_stream", channelSupplier, credsSupplier,
                 new AgentsensorAgentEventBusEventStreamSubscriber(channelSupplier, credsSupplier, CONSUMER_GROUP),
                 (sub) -> sub.subscribe((event, meta) -> {
                     handler.handleEventStreamMessage("agentsensor.event_stream", event,
-                            new Handler.SubscriptionMeta(meta.offset, meta.timestamp, meta.key, meta.topic, meta.partition));
-                    logProgress(restoredCount.incrementAndGet());
-                }, false, false, 0));
-
-        startTopicReplay("gitlabconnector.event_stream", channelSupplier, credsSupplier,
-                new GitlabconnectorGitLabConnectorEventBusEventStreamSubscriber(channelSupplier, credsSupplier, CONSUMER_GROUP),
-                (sub) -> sub.subscribe((event, meta) -> {
-                    handler.handleEventStreamMessage("gitlabconnector.event_stream", event,
-                            new Handler.SubscriptionMeta(meta.offset, meta.timestamp, meta.key, meta.topic, meta.partition));
-                    logProgress(restoredCount.incrementAndGet());
-                }, false, false, 0));
-
-        startTopicReplay("llmsensor.event_stream", channelSupplier, credsSupplier,
-                new LlmsensorLlmEventBusEventStreamSubscriber(channelSupplier, credsSupplier, CONSUMER_GROUP),
-                (sub) -> sub.subscribe((event, meta) -> {
-                    handler.handleEventStreamMessage("llmsensor.event_stream", event,
-                            new Handler.SubscriptionMeta(meta.offset, meta.timestamp, meta.key, meta.topic, meta.partition));
-                    logProgress(restoredCount.incrementAndGet());
-                }, false, false, 0));
-
-        startTopicReplay("scmsensor.event_stream", channelSupplier, credsSupplier,
-                new ScmsensorScmEventBusEventStreamSubscriber(channelSupplier, credsSupplier, CONSUMER_GROUP),
-                (sub) -> sub.subscribe((event, meta) -> {
-                    handler.handleEventStreamMessage("scmsensor.event_stream", event,
                             new Handler.SubscriptionMeta(meta.offset, meta.timestamp, meta.key, meta.topic, meta.partition));
                     logProgress(restoredCount.incrementAndGet());
                 }, false, false, 0));

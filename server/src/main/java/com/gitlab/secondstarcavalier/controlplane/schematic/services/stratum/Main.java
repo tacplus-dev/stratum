@@ -1,7 +1,7 @@
 // Copyright (c) 2024 Second Star Cavalier, LLC.
-package com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum;
+package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum;
 
-import com.gitlab.secondstarcavalier.controlplane.cavalier.services.stratum.model.s2sm.ServiceManager;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.ServiceManager;
 
 /**
  * Entry point for the stratum service.
