@@ -35,13 +35,31 @@ final class ColdStartRebuilder {
     private final AtomicLong restoredCount = new AtomicLong(0);
 
     /**
-     * Always returns true: stratum replays from offset 0 on every startup.
-     * The count parameter is accepted (not ignored) so callers can log it,
-     * but it does not gate the decision.
+     * Replay the event log only on a COLD BOOT.
+     *
+     * A cold boot is: this member is alone in the cluster AND its store is
+     * empty. Anything else means the data is already reachable without a
+     * replay —
+     *
+     *   - peers present (clusterSize > 1): a restarting member rejoins and
+     *     Hazelcast rebalances the partitions onto it. In production, where the
+     *     service runs several instances, a single restart or failure is the
+     *     COMMON case and it must not drag the whole event log back through the
+     *     broker.
+     *   - store already populated: there is nothing to converge.
+     *
+     * This used to return true unconditionally — "stratum replays from offset 0
+     * on every startup" — and was never called from production code at all, only
+     * from tests that asserted it always replays. So every restart replayed the
+     * entire log: ~35s for 50 records, and linear in log length thereafter. At
+     * production volumes that is a service that takes minutes to become useful
+     * after a routine rolling update, for data its peers were holding the whole
+     * time.
+     *
      * Package-private for testing.
      */
-    static boolean shouldReplay(long totalCount) {
-        return true;
+    static boolean shouldReplay(long totalCount, int clusterSize) {
+        return clusterSize <= 1 && totalCount == 0;
     }
 
     /**

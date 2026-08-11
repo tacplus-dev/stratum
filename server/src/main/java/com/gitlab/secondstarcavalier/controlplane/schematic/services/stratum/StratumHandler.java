@@ -195,13 +195,24 @@ public class StratumHandler extends StratumVServiceBase {
         store = new WorkingSetStore(cfg);
         store.init();
 
-        // Startup replay: replay all events from eventbus at offset 0 once per
-        // process lifetime. Idempotent (IMap put = upsert keyed by event_id), so
-        // a partially-surviving store converges to the full set from the log.
+        // Startup replay, but ONLY on a cold boot — see
+        // ColdStartRebuilder.shouldReplay. With peers in the cluster a
+        // restarting member gets its partitions back from them, which is the
+        // common case in production and must not pull the whole event log
+        // through the broker. Replay is idempotent (IMap put = upsert keyed by
+        // event_id), so when it does run a partially-surviving store still
+        // converges.
         if (coldStartHandled.compareAndSet(false, true)) {
-            log.info("startup: store holds {} records before replay", eventStore.stores().totalCount());
-            coldStartRebuilder = new ColdStartRebuilder();
-            coldStartRebuilder.startReplay(sm, this);
+            long held = eventStore.eventCount();
+            int members = eventStore.clusterSize();
+            if (ColdStartRebuilder.shouldReplay(held, members)) {
+                log.info("cold boot: alone in the cluster with an empty store — replaying the event log");
+                coldStartRebuilder = new ColdStartRebuilder();
+                coldStartRebuilder.startReplay(sm, this);
+            } else {
+                log.info("warm start: {} records held, {} cluster member(s) — skipping event-log replay",
+                        held, members);
+            }
         }
     }
 

@@ -1,40 +1,46 @@
-// Copyright (c) 2024 Second Star Cavalier, LLC.
 package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.*;
-
 /**
- * Unit tests for ColdStartRebuilder's replay decision.
+ * Replay is for a COLD BOOT, not for every restart.
  *
- * Replay is always triggered on startup regardless of how many records
- * survived in-memory (IMap put = upsert keyed by event_id, so replay is
- * idempotent and converges a partially-surviving store to the full log).
+ * These tests previously asserted that shouldReplay returns true for every
+ * input — 0, 28, 40, 100_000 records alike — which was accurate: it returned a
+ * hardcoded true and production never called it. The effect was that a routine
+ * restart dragged the entire event log back through the broker (~35s for 50
+ * records, linear thereafter) for data the surviving peers were already
+ * holding.
  */
 class ColdStartRebuilderTest {
 
     @Test
-    void emptyStore_replays() {
-        assertTrue(ColdStartRebuilder.shouldReplay(0L),
-                "empty store must replay");
+    void replaysWhenAloneWithAnEmptyStore() {
+        // The only true cold boot: nobody else has the data.
+        assertTrue(ColdStartRebuilder.shouldReplay(0L, 1),
+                "a lone member with an empty store must rebuild from the log");
     }
 
     @Test
-    void partialStore_replays() {
-        assertTrue(ColdStartRebuilder.shouldReplay(28L),
-                "partially-populated store (e.g. 28 of 49 survived) must also replay");
+    void doesNotReplayWhenPeersArePresent() {
+        // The common production case: one instance of several restarts, and
+        // Hazelcast rebalances its partitions back from the peers.
+        assertFalse(ColdStartRebuilder.shouldReplay(0L, 2),
+                "a member that rejoins peers must not replay — the peers hold the data");
+        assertFalse(ColdStartRebuilder.shouldReplay(0L, 3),
+                "cluster size is what decides, not how many members there happen to be");
     }
 
     @Test
-    void fullStore_replays() {
-        assertTrue(ColdStartRebuilder.shouldReplay(40L),
-                "fully-populated store must replay (idempotent upsert converges to same state)");
-    }
-
-    @Test
-    void largeStore_replays() {
-        assertTrue(ColdStartRebuilder.shouldReplay(100_000L),
-                "large store must replay");
+    void doesNotReplayWhenTheStoreAlreadyHasData() {
+        // Nothing to converge, whether the data survived in-process or arrived
+        // from a peer before this ran.
+        assertFalse(ColdStartRebuilder.shouldReplay(28L, 1),
+                "a populated store needs no replay");
+        assertFalse(ColdStartRebuilder.shouldReplay(100_000L, 1),
+                "a large populated store especially needs no replay");
     }
 }
