@@ -372,7 +372,7 @@ final class StratumQueryImpl implements StratumQuery.StratumQueryHandler {
         }
         try {
             EventStore.SqlPredicates preds = new EventStore.SqlPredicates();
-            preds.spiffe_id = req.getSpiffeId();
+            preds.spiffeId = req.getSpiffeId();
             applyTimeRange(preds, req.hasTimeRange() ? req.getTimeRange() : null);
             List<AgentEvent> events = eventStore().query(preds);
             List<SessionSummary> sessions = buildSessionSummaries(events);
@@ -419,7 +419,7 @@ final class StratumQueryImpl implements StratumQuery.StratumQueryHandler {
         }
         try {
             EventStore.SqlPredicates preds = new EventStore.SqlPredicates();
-            preds.spiffe_id = req.getSpiffeId();
+            preds.spiffeId = req.getSpiffeId();
             applyTimeRange(preds, req.hasTimeRange() ? req.getTimeRange() : null);
             List<AgentEvent> events = eventStore().query(preds);
             return StratumHandler.pageSorted(events, page,

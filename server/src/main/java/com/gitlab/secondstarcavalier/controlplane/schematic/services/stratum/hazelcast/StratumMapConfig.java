@@ -64,8 +64,19 @@ public final class StratumMapConfig {
         MapConfig mapCfg = new MapConfig(MAP_NAME);
         mapCfg.setInMemoryFormat(InMemoryFormat.OBJECT);
 
+        // Attribute names are JavaBean PROPERTY names, not proto field names.
+        // Hazelcast resolves an index attribute by reflecting for a getter, so
+        // "spiffe_id" looks for getSpiffe_id() on the protobuf class, which does
+        // not exist — protoc emits getSpiffeId(). That single snake_case name
+        // among three camelCase siblings made EVERY put on this map throw
+        //
+        //   IllegalArgumentException: There is no suitable accessor for 'spiffe_id'
+        //
+        // so no AgentEvent was ever stored, the subscriber retried the same
+        // failure every second forever, and the record query returned an empty
+        // set that looked like "nothing has been published yet".
         mapCfg.addIndexConfig(new IndexConfig(IndexType.SORTED, "timestampMs"));
-        mapCfg.addIndexConfig(new IndexConfig(IndexType.HASH,   "spiffe_id"));
+        mapCfg.addIndexConfig(new IndexConfig(IndexType.HASH,   "spiffeId"));
         mapCfg.addIndexConfig(new IndexConfig(IndexType.HASH,   "sessionId"));
         mapCfg.addIndexConfig(new IndexConfig(IndexType.HASH,   "agentId"));
         mapCfg.addIndexConfig(new IndexConfig(IndexType.HASH,

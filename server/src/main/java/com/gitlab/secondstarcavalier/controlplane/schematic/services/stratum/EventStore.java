@@ -37,7 +37,7 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.haz
  *
  * Indexes (via ValueExtractor or Hazelcast native attribute reflection):
  *   - SORTED:  epoch (StratumEpochExtractor), timestampMs
- *   - HASH:    spiffe_id, sessionId, agentId, eventTypeValue (StratumEventTypeExtractor)
+ *   - HASH:    spiffeId, sessionId, agentId, eventTypeValue (StratumEventTypeExtractor)
  *
  * Retention:
  *   Runs on cleanup_interval_seconds. Deletes entries where
@@ -130,7 +130,10 @@ public class EventStore {
     private Predicate<String, AgentEvent> buildPredicate(SqlPredicates p) {
         List<Predicate<String, AgentEvent>> parts = new ArrayList<>();
 
-        if (p.spiffe_id     != null) parts.add(Predicates.equal("spiffe_id", p.spiffe_id));
+        // "spiffeId", not "spiffe_id": Hazelcast resolves a predicate attribute
+        // through the getter, and protoc emits getSpiffeId(). The snake_case form
+        // matched no accessor, so this predicate could never evaluate.
+        if (p.spiffeId != null) parts.add(Predicates.equal("spiffeId", p.spiffeId));
         if (p.sessionId != null) parts.add(Predicates.equal("sessionId", p.sessionId));
         if (p.agentId   != null) parts.add(Predicates.equal("agentId", p.agentId));
         if (p.eventType != null) parts.add(Predicates.equal(
@@ -202,7 +205,7 @@ public class EventStore {
     // -----------------------------------------------------------------------
 
     static final class SqlPredicates {
-        String          spiffe_id;
+        String          spiffeId;
         String          sessionId;
         String          agentId;
         SensorEventType eventType;
@@ -216,7 +219,7 @@ public class EventStore {
             if (sql == null) return p;
             String upper = sql.toUpperCase();
 
-            p.spiffe_id     = extractStringPredicate(sql, "spiffe_id");
+            p.spiffeId      = extractStringPredicate(sql, "spiffe_id");
             p.sessionId = extractStringPredicate(sql, "session_id");
             p.agentId   = extractStringPredicate(sql, "agent_id");
 
