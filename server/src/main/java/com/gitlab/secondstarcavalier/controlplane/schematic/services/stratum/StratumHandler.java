@@ -141,6 +141,45 @@ public class StratumHandler extends StratumVServiceBase {
     }
 
     private void initFromConfig(Stratum.Config cfg) {
+        // Nothing to do when the config has not actually changed.
+        //
+        // This method is reachable from SIX places: the initial config, the
+        // handleConfig hot-reload, handleRecordMapConfig, two lazy-init
+        // fallbacks and a request path. Every one of them used to build a new
+        // EventStore and WorkingSetStore, and each of those calls
+        // Hazelcast.newHazelcastInstance -- so a repeated config delivery left
+        // the previous members RUNNING. Observed live: "EventStore initialised"
+        // three times in one pod, giving six Hazelcast members
+        // (stratum-events x3, stratum-ws x3) on ports 5701-5706.
+        //
+        // That is not just wasted heap and threads. The orphans JOIN the same
+        // cluster -- Hazelcast reported Members{size:3} -- so partitions
+        // rebalance across members nobody holds a reference to, while the
+        // eventStore field points only at the newest. Reads and writes can land
+        // on different owners, which is exactly the "stored it, cannot read it
+        // back" behaviour that took three rounds to chase down.
+        if (this.config != null && this.config.equals(cfg) && eventStore != null && store != null) {
+            log.info("config unchanged — keeping the existing stores");
+            return;
+        }
+
+        // Replacing the stores means disposing of the old ones FIRST. Hazelcast
+        // members do not go away because the reference did.
+        if (coldStartRebuilder != null) {
+            try { coldStartRebuilder.shutdown(); } catch (Exception e) { log.warn("rebuilder shutdown: {}", e.getMessage()); }
+            coldStartRebuilder = null;
+        }
+        if (eventStore != null) {
+            log.info("re-initialising: shutting down the previous EventStore");
+            try { eventStore.shutdown(); } catch (Exception e) { log.warn("EventStore shutdown: {}", e.getMessage()); }
+            eventStore = null;
+        }
+        if (store != null) {
+            log.info("re-initialising: shutting down the previous WorkingSetStore");
+            try { store.shutdown(); } catch (Exception e) { log.warn("WorkingSetStore shutdown: {}", e.getMessage()); }
+            store = null;
+        }
+
         this.config = cfg;
         log.info("config: hazelcast_memory_mb={}, map_idle_ttl_seconds={}, max_maps={}, " +
                  "retention_days={}, cleanup_interval_seconds={}",
