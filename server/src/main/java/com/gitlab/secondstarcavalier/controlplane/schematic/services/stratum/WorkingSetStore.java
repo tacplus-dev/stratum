@@ -2,13 +2,13 @@
 package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,7 +32,7 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
  *                   In-memory only, idle TTL eviction.
  *
  * Map IDs are chosen by the caller and must be unique.
- * Thread safety: HazelcastInstance is thread-safe. mapMeta is a ConcurrentHashMap.
+ * Thread safety: HazelcastInstance is thread-safe; mapMeta is a Hazelcast IMap.
  */
 public class WorkingSetStore {
 
@@ -40,11 +40,37 @@ public class WorkingSetStore {
 
     static final String WS_PREFIX      = "ws:";
 
+    /** Cluster name for the working-set maps — distinct from the event store's. */
+    static final String CLUSTER_NAME   = "stratum-ws";
+
+    /**
+     * Working-set Hazelcast port. Must match the chart's hazelcast-ws
+     * containerPort (operator: stratumWorkingSetPort) and differ from the event
+     * store's 5001 — two clusters in one JVM cannot share a port.
+     */
+    static final int WS_PORT           = 5701;
+
+    /** Cluster-wide registry of working-set maps; deliberately NOT under ws:*. */
+    static final String META_MAP       = "stratum-ws-meta";
+
     private final Stratum.Config cfg;
     private HazelcastInstance hz;
 
-    // Tracks creation time for working-set maps (not stored in Hazelcast).
-    private final ConcurrentHashMap<String, Long> mapMeta = new ConcurrentHashMap<>();
+    /**
+     * map_id -> creation time. CLUSTER-WIDE, not a local ConcurrentHashMap.
+     *
+     * This is the registry every other operation gates on ("unknown map_id"),
+     * so clustering the working-set data alone would have fixed nothing: a
+     * createMap served by stratum-0 would record the id in stratum-0's heap,
+     * and the very next request — the Service picks a pod per connection — would
+     * be answered by stratum-1, which would reject a map whose entries it was
+     * itself holding a share of.
+     *
+     * Named outside the WS_PREFIX namespace on purpose: the ws:* MapConfig sets
+     * maxIdleSeconds, and an idle-evicted registry would delete the record of
+     * maps that still hold data.
+     */
+    private IMap<String, Long> mapMeta;
 
     public WorkingSetStore(Stratum.Config cfg) {
         this.cfg = cfg;
@@ -55,37 +81,83 @@ public class WorkingSetStore {
     // -----------------------------------------------------------------------
 
     public void init() {
-        Config hzCfg = buildHazelcastConfig();
+        Config hzCfg = buildHazelcastConfig(seedMembers());
         hz = Hazelcast.newHazelcastInstance(hzCfg);
+        mapMeta = hz.getMap(META_MAP);
         log.info("WorkingSetStore started: memory_mb={}, map_idle_ttl_seconds={}",
                 cfg.getHazelcastMemoryMb(), cfg.getMapIdleTtlSeconds());
     }
 
-    private Config buildHazelcastConfig() {
-        Config cfg = new Config();
-        cfg.setClusterName("stratum-ws");
-        cfg.setInstanceName("stratum-ws-" + java.util.UUID.randomUUID().toString().substring(0, 8));
+    /**
+     * Peer addresses for the working-set cluster, from STRATUM_WS_SEED_MEMBERS.
+     *
+     * Rendered by the operator from the StatefulSet's stable per-pod DNS, on
+     * WS_PORT — a SEPARATE list from the event store's STRATUM_SEED_MEMBERS,
+     * because the two clusters live on different ports in the same JVM.
+     */
+    static List<String> seedMembers() {
+        String raw = System.getenv("STRATUM_WS_SEED_MEMBERS");
+        if (raw == null || raw.isBlank()) {
+            log.info("STRATUM_WS_SEED_MEMBERS unset — working sets are node-local (single-node/dev)");
+            return List.of();
+        }
+        List<String> members = Arrays.stream(raw.split(","))
+                .map(String::trim).filter(m -> !m.isEmpty()).toList();
+        log.info("working-set cluster seed members: {}", members);
+        return members;
+    }
 
-        // Standalone — no clustering between nodes for working sets.
-        //
-        // NOTE (multi-replica): stratum now runs as a 3-replica StatefulSet whose
-        // event store DOES cluster (see StratumMapConfig). Working sets do not, so
-        // a map created on one pod is invisible from the other two, and the shared
-        // Service round-robins. No caller uses this path yet — the RPCs exist in
-        // agent-sensor.proto and nothing calls them — so nothing is broken today.
-        // Before the first caller ships, this needs either cluster-wide ws maps
-        // (seed members as in StratumMapConfig, on a distinct port) or client
-        // affinity to the pod that owns the map.
+    /**
+     * Builds the working-set Hazelcast config.
+     *
+     * Working sets used to be deliberately standalone — "no clustering between
+     * nodes" — which was fine while stratum ran one replica and wrong the moment
+     * it ran three: a map created on one pod was invisible from the other two,
+     * and the shared Service hands the next request to whichever pod it likes,
+     * so createMap on stratum-0 followed by a read on stratum-1 is a NOT_FOUND
+     * for a map that plainly exists. Nothing had shipped against it yet, which
+     * is the only reason this was not an outage.
+     *
+     * Package-private and taking the seed list as a parameter so the join
+     * configuration can be asserted without standing up a cluster.
+     *
+     * @param seedMembers "host:port" addresses; empty → node-local (dev)
+     */
+    static Config buildHazelcastConfig(List<String> seedMembers, int idleTtlSeconds) {
+        Config cfg = new Config();
+        cfg.setClusterName(CLUSTER_NAME);
+        cfg.setInstanceName(CLUSTER_NAME + "-" + java.util.UUID.randomUUID().toString().substring(0, 8));
+
+        // The port is pinned with auto-increment OFF, exactly as the event store
+        // pins 5001: a seed address only resolves to a member if every member
+        // binds that precise port. It must also differ from the event store's —
+        // two clusters in one JVM cannot share one — and relying on Hazelcast's
+        // auto-increment to separate them is what silently put this instance on
+        // a port no seed list could name.
         NetworkConfig net = cfg.getNetworkConfig();
-        net.getJoin().getMulticastConfig().setEnabled(false);
-        net.getJoin().getTcpIpConfig().setEnabled(false);
+        net.setPort(WS_PORT);
+        net.setPortAutoIncrement(false);
+        if (seedMembers == null || seedMembers.isEmpty()) {
+            net.getJoin().getMulticastConfig().setEnabled(false);
+            net.getJoin().getTcpIpConfig().setEnabled(false);
+        } else {
+            net.getJoin().getMulticastConfig().setEnabled(false);
+            net.getJoin().getTcpIpConfig().setEnabled(true);
+            for (String member : seedMembers) {
+                net.getJoin().getTcpIpConfig().addMember(member);
+            }
+        }
 
         // ws:* — working-set maps: in-memory, idle TTL eviction.
         MapConfig wsCfg = new MapConfig(WS_PREFIX + "*");
-        wsCfg.setMaxIdleSeconds(this.cfg.getMapIdleTtlSeconds());
+        wsCfg.setMaxIdleSeconds(idleTtlSeconds);
         cfg.addMapConfig(wsCfg);
 
         return cfg;
+    }
+
+    private Config buildHazelcastConfig(List<String> seedMembers) {
+        return buildHazelcastConfig(seedMembers, this.cfg.getMapIdleTtlSeconds());
     }
 
     public void shutdown() {
@@ -93,6 +165,33 @@ public class WorkingSetStore {
             log.info("WorkingSetStore shutting down");
             hz.shutdown();
         }
+    }
+
+    /**
+     * Approximate memory a working-set map occupies ACROSS the cluster.
+     *
+     * getLocalMapStats reports only the entries this member owns. That was the
+     * whole map while working sets were node-local; now that they cluster, it is
+     * roughly 1/members of it — and it was being reported alongside imap.size(),
+     * which is cluster-wide. The pair was inconsistent: a caller would read 300
+     * events occupying a third of their actual bytes, and the discrepancy grows
+     * with every member added.
+     *
+     * Scaling this member's owned cost by the cluster-wide entry count keeps the
+     * two halves of that pair talking about the same set of entries. It is an
+     * estimate — Hazelcast exposes owned-entry cost per member only, and summing
+     * it exactly would mean an executor round-trip to every member on what is a
+     * plain reporting path — and it is a good one, because partitions are
+     * balanced and working-set entries are same-shaped serialized AgentEvents.
+     */
+    private static long clusterWideBytes(IMap<String, byte[]> imap) {
+        var stats = imap.getLocalMapStats();
+        long ownedEntries = stats.getOwnedEntryCount();
+        if (ownedEntries <= 0) {
+            return 0;
+        }
+        long bytesPerEntry = stats.getOwnedEntryMemoryCost() / ownedEntries;
+        return bytesPerEntry * imap.size();
     }
 
     // -----------------------------------------------------------------------
@@ -104,16 +203,20 @@ public class WorkingSetStore {
      * Enforces max_maps limit. Errors if the map_id is already in use.
      */
     public void createMap(String mapId) {
-        if (mapMeta.containsKey(mapId)) {
-            throw new IllegalArgumentException("map already exists: " + mapId +
-                    " — delete it first or reuse it by loading additional events");
-        }
         if (mapMeta.size() >= cfg.getMaxMaps()) {
             throw new IllegalStateException(
                     "max_maps limit reached (" + cfg.getMaxMaps() +
                     "); delete idle maps before creating new ones");
         }
-        mapMeta.put(mapId, System.currentTimeMillis());
+        // putIfAbsent, not containsKey-then-put: with several members serving
+        // createMap concurrently, a check followed by a write is two operations
+        // and both callers can pass the check. The limit above stays a soft one
+        // — enforcing it exactly would need a lock across members for a bound
+        // that exists to stop runaway growth, not to be precise at the boundary.
+        if (mapMeta.putIfAbsent(mapId, System.currentTimeMillis()) != null) {
+            throw new IllegalArgumentException("map already exists: " + mapId +
+                    " — delete it first or reuse it by loading additional events");
+        }
         hz.getMap(WS_PREFIX + mapId); // touch to register in Hazelcast
         log.info("created working-set map: {}", mapId);
     }
@@ -136,7 +239,7 @@ public class WorkingSetStore {
         for (Map.Entry<String, Long> e : mapMeta.entrySet()) {
             String mapId = e.getKey();
             IMap<String, byte[]> imap = hz.getMap(WS_PREFIX + mapId);
-            long memBytes = imap.getLocalMapStats().getOwnedEntryMemoryCost();
+            long memBytes = clusterWideBytes(imap);
             result.add(MapEntry.newBuilder()
                     .setMapId(mapId)
                     .setEventCount(imap.size())
@@ -155,7 +258,7 @@ public class WorkingSetStore {
             throw new IllegalArgumentException("unknown map_id: " + mapId);
         }
         IMap<String, byte[]> imap = hz.getMap(WS_PREFIX + mapId);
-        long memBytes = imap.getLocalMapStats().getOwnedEntryMemoryCost();
+        long memBytes = clusterWideBytes(imap);
 
         long minTs = Long.MAX_VALUE;
         long maxTs = Long.MIN_VALUE;
@@ -196,7 +299,7 @@ public class WorkingSetStore {
         }
         IMap<String, byte[]> imap = hz.getMap(WS_PREFIX + mapId);
         long count = imap.size();
-        long mb    = imap.getLocalMapStats().getOwnedEntryMemoryCost() / (1024 * 1024);
+        long mb    = clusterWideBytes(imap) / (1024 * 1024);
         return new long[]{count, mb};
     }
 
@@ -293,6 +396,14 @@ public class WorkingSetStore {
         return total;
     }
 
+    /**
+     * Memory this MEMBER holds for working sets.
+     *
+     * Deliberately local, unlike the reported per-map footprints: it is checked
+     * against hazelcast_memory_mb, a budget for this JVM's heap. Clustering
+     * therefore raises effective capacity to members x budget, which is the
+     * point of adding members.
+     */
     public long hazelcastMemoryUsedBytes() {
         long used = 0;
         for (String mapId : mapMeta.keySet()) {
