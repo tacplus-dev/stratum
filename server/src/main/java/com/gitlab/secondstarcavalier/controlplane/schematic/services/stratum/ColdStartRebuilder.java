@@ -37,29 +37,32 @@ final class ColdStartRebuilder {
     /**
      * Replay the event log only on a COLD BOOT.
      *
-     * A cold boot is: this member is alone in the cluster AND its store is
-     * empty. Anything else means the data is already reachable without a
-     * replay —
+     * A cold boot is: the store is empty CLUSTER-WIDE. The count is taken from
+     * the shared Hazelcast map, so a member that restarts alongside live peers
+     * sees their data and skips — which is the point: in production, where the
+     * service runs several instances, a single restart or failure is the COMMON
+     * case and must not drag the whole event log back through the broker.
      *
-     *   - peers present (clusterSize > 1): a restarting member rejoins and
-     *     Hazelcast rebalances the partitions onto it. In production, where the
-     *     service runs several instances, a single restart or failure is the
-     *     COMMON case and it must not drag the whole event log back through the
-     *     broker.
-     *   - store already populated: there is nothing to converge.
+     * Member count deliberately does NOT gate this. It used to — "alone in the
+     * cluster AND empty" — and that was wrong in the one situation the gate
+     * exists for. When the whole StatefulSet restarts, all three members join
+     * each other before any of them looks at the store, so every one of them
+     * sees clusterSize=3 with an empty map, every one declines to replay, and
+     * the store stays empty forever. Verified live: three pods, all logging
+     * "0 records held, 3 cluster member(s) — skipping", and a permanently empty
+     * event store. The member count answers "am I alone?", which is not the
+     * question; "is the data already here?" is, and the count answers it.
      *
-     * This used to return true unconditionally — "stratum replays from offset 0
-     * on every startup" — and was never called from production code at all, only
-     * from tests that asserted it always replays. So every restart replayed the
-     * entire log: ~35s for 50 records, and linear in log length thereafter. At
-     * production volumes that is a service that takes minutes to become useful
-     * after a routine rolling update, for data its peers were holding the whole
-     * time.
+     * Every member that observes an empty store replays. That is redundant work
+     * on a true cold boot — rare, by design — and it is deliberately preferred
+     * to electing one replayer: the upserts are keyed by event_id and therefore
+     * idempotent, so concurrent replays converge, and no single member's death
+     * mid-replay can leave the store permanently half-filled.
      *
      * Package-private for testing.
      */
-    static boolean shouldReplay(long totalCount, int clusterSize) {
-        return clusterSize <= 1 && totalCount == 0;
+    static boolean shouldReplay(long totalCount) {
+        return totalCount == 0;
     }
 
     /**

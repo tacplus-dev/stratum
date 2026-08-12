@@ -53,12 +53,17 @@ public final class EventStoreGenerator {
         w.println("import com.hazelcast.core.HazelcastInstance;");
         w.println("import com.hazelcast.map.IMap;");
         w.println("import com.hazelcast.query.Predicates;");
+        w.println("import org.slf4j.Logger;");
+        w.println("import org.slf4j.LoggerFactory;");
         w.println();
         w.println("/**");
         w.println(" * Typed per-vservice hot store. One IMap<event_id, EventType> per");
         w.println(" * EventBus topic; generic store/count/retention over all of them.");
         w.println(" */");
         w.println("public final class " + CLASS_NAME + " {");
+        w.println();
+        w.println("    private static final Logger LOG = LoggerFactory.getLogger("
+                + CLASS_NAME + ".class);");
         w.println();
 
         // Fields: one typed IMap per event type.
@@ -77,11 +82,36 @@ public final class EventStoreGenerator {
         w.println();
 
         // store
-        w.println("    /** Stores any subscribed event into its typed map, keyed by event_id. */");
+        w.println("    /**");
+        w.println("     * Stores any subscribed event into its typed map, keyed by event_id.");
+        w.println("     *");
+        w.println("     * Each event is validated with the SAME generated validator the read");
+        w.println("     * path enforces before it is put. Without this the store accepts records");
+        w.println("     * it can never serve: the read side validates every item in a page and");
+        w.println("     * fails the whole response, so ONE malformed event makes every query");
+        w.println("     * return Internal \"field X must be defined\" for as long as it is held.");
+        w.println("     * Observed on stratum: a single AgentEvent with event_type unset, in a");
+        w.println("     * map of 71, took the entire RecordMap query RPC down, and the failure");
+        w.println("     * read as \"the store is empty\".");
+        w.println("     *");
+        w.println("     * A rejected event is dropped and logged, not rethrown: this runs on the");
+        w.println("     * EventBus subscription thread, and throwing would make the subscriber");
+        w.println("     * retry the same poison record forever.");
+        w.println("     *");
+        w.println("     * @return true if the type was recognised — including when the event was");
+        w.println("     *         rejected as invalid. False means no typed store handles it.");
+        w.println("     */");
         w.println("    public boolean store(Message msg) {");
         for (EventTopicDiscovery.TopicEvent e : events) {
             w.println("        if (msg instanceof " + fqn(e) + ") {");
             w.println("            " + fqn(e) + " e = (" + fqn(e) + ") msg;");
+            w.println("            try {");
+            w.println("                " + validator(e) + "(e);");
+            w.println("            } catch (Exception ex) {");
+            w.println("                LOG.warn(\"rejected unstorable " + mapName(e)
+                    + " event_id={}: {}\", e.getEventId(), ex.getMessage());");
+            w.println("                return true;");
+            w.println("            }");
             w.println("            " + field(e) + ".put(e.getEventId(), e);");
             w.println("            return true;");
             w.println("        }");
@@ -133,6 +163,15 @@ public final class EventStoreGenerator {
     /** Field/accessor identifier, e.g. "agentsensorAgentEvent". */
     private static String field(EventTopicDiscovery.TopicEvent e) {
         return e.protoPackage + e.eventType;
+    }
+
+    /**
+     * Generated validator for an event type, e.g.
+     * "…model.types.vservices.agentsensor.Helpers.validateAgentEvent".
+     * Helpers sits beside the outer proto class, in the same types package.
+     */
+    private static String validator(EventTopicDiscovery.TopicEvent e) {
+        return MODEL_TYPES + "." + e.protoPackage + ".Helpers.validate" + e.eventType;
     }
 
     /** Proto java_outer_classname = capitalized package (tacplus convention). */

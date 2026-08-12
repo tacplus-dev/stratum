@@ -2,6 +2,7 @@
 package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
@@ -140,6 +141,33 @@ public class StratumHandler extends StratumVServiceBase {
         };
     }
 
+    /**
+     * Hazelcast seed members for the event store, from STRATUM_SEED_MEMBERS.
+     *
+     * The operator renders one "stratum0-<i>.stratum0:5001" entry per replica
+     * from the StatefulSet's stable per-pod DNS. Peer topology is deployment
+     * shape the operator already knows, wired the same way graphdb gets
+     * GRAPHDB_ZERO_ADDR.
+     *
+     * Empty (a plain local run) falls back to multicast. That is fine on a
+     * laptop and useless in Kubernetes, where it would leave every replica in
+     * its own cluster of one — each seeing an empty store, each concluding it
+     * was a cold boot, and each replaying the entire event log.
+     */
+    private static List<String> seedMembers() {
+        String raw = System.getenv("STRATUM_SEED_MEMBERS");
+        if (raw == null || raw.isBlank()) {
+            log.info("STRATUM_SEED_MEMBERS unset — Hazelcast will use multicast (single-node/dev)");
+            return List.of();
+        }
+        List<String> members = Arrays.stream(raw.split(","))
+                .map(String::trim)
+                .filter(m -> !m.isEmpty())
+                .toList();
+        log.info("Hazelcast seed members: {}", members);
+        return members;
+    }
+
     private void initFromConfig(Stratum.Config cfg) {
         // Nothing to do when the config has not actually changed.
         //
@@ -190,7 +218,7 @@ public class StratumHandler extends StratumVServiceBase {
         eventStore.init(
                 cfg.getRetentionDays(),
                 cfg.getCleanupIntervalSeconds(),
-                List.of()); // seed members: empty = single-node / multicast
+                seedMembers());
 
         store = new WorkingSetStore(cfg);
         store.init();
@@ -205,8 +233,9 @@ public class StratumHandler extends StratumVServiceBase {
         if (coldStartHandled.compareAndSet(false, true)) {
             long held = eventStore.eventCount();
             int members = eventStore.clusterSize();
-            if (ColdStartRebuilder.shouldReplay(held, members)) {
-                log.info("cold boot: alone in the cluster with an empty store — replaying the event log");
+            if (ColdStartRebuilder.shouldReplay(held)) {
+                log.info("cold boot: store is empty cluster-wide ({} member(s)) — replaying the event log",
+                        members);
                 coldStartRebuilder = new ColdStartRebuilder();
                 coldStartRebuilder.startReplay(sm, this);
             } else {

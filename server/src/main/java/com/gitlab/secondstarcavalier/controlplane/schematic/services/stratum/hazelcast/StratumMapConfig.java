@@ -31,6 +31,9 @@ public final class StratumMapConfig {
     // The OBJECT format + agent indexes below are read-path concerns and remain
     // hand-written until the StratumQuery read side is also generated.
     public static final String MAP_NAME     = "agentsensor.AgentEvent";
+
+    /** Must match the chart's HasHazelcast containerPort (kernel's convention). */
+    public static final int HAZELCAST_PORT = 5001;
     public static final String CLUSTER_NAME = "stratum-events";
 
     private StratumMapConfig() {}
@@ -47,7 +50,16 @@ public final class StratumMapConfig {
         cfg.setInstanceName("stratum-events-" + UUID.randomUUID().toString().substring(0, 8));
 
         // Network: TCP/IP join from explicit seed members, or multicast for local dev.
+        //
+        // The port is pinned and auto-increment disabled so a peer's address is
+        // predictable: the operator renders seed addresses as
+        // "stratum0-<i>.stratum0:5001" from the StatefulSet's stable DNS, and
+        // that only resolves to a member if every member binds that exact port.
+        // With Hazelcast's default (5701 + auto-increment) the second instance
+        // in the JVM silently lands on 5702 and nobody can find it.
         NetworkConfig net = cfg.getNetworkConfig();
+        net.setPort(HAZELCAST_PORT);
+        net.setPortAutoIncrement(false);
         if (seedMembers == null || seedMembers.isEmpty()) {
             net.getJoin().getMulticastConfig().setEnabled(true);
             net.getJoin().getTcpIpConfig().setEnabled(false);

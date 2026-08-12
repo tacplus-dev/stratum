@@ -67,6 +67,15 @@ public class WorkingSetStore {
         cfg.setInstanceName("stratum-ws-" + java.util.UUID.randomUUID().toString().substring(0, 8));
 
         // Standalone — no clustering between nodes for working sets.
+        //
+        // NOTE (multi-replica): stratum now runs as a 3-replica StatefulSet whose
+        // event store DOES cluster (see StratumMapConfig). Working sets do not, so
+        // a map created on one pod is invisible from the other two, and the shared
+        // Service round-robins. No caller uses this path yet — the RPCs exist in
+        // agent-sensor.proto and nothing calls them — so nothing is broken today.
+        // Before the first caller ships, this needs either cluster-wide ws maps
+        // (seed members as in StratumMapConfig, on a distinct port) or client
+        // affinity to the pod that owns the map.
         NetworkConfig net = cfg.getNetworkConfig();
         net.getJoin().getMulticastConfig().setEnabled(false);
         net.getJoin().getTcpIpConfig().setEnabled(false);
