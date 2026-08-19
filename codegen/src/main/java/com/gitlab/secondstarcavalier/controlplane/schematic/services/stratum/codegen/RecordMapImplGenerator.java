@@ -38,7 +38,6 @@ public final class RecordMapImplGenerator {
     private static final String HOST_PKG =
             "com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum";
     private static final String MODEL_BASE = HOST_PKG + ".model";
-    private static final String MODEL_TYPES_VSERVICES = MODEL_BASE + ".types.vservices";
     private static final String STRATUM_MSGS = MODEL_BASE + ".types.services.stratum.Stratum";
     // RecordMap is stratum's own service (services/stratum.proto), so its handler
     // interface is on the services path, not vservices.
@@ -72,6 +71,7 @@ public final class RecordMapImplGenerator {
         w.println("import java.util.UUID;");
         w.println("import java.util.concurrent.ConcurrentHashMap;");
         w.println("import java.util.function.Supplier;");
+        w.println("import io.grpc.stub.StreamObserver;");
         w.println("import " + CALLER + ";");
         w.println("import " + PROTO_EXCEPTION + ";");
         w.println("import " + COLLECTION_RUNTIME + ";");
@@ -243,6 +243,44 @@ public final class RecordMapImplGenerator {
                 w.println("    }");
             }
 
+            // watch<T> and subscribe<T>Count — filterable record types only.
+            // These piggyback on the query handle; a filterless record has no
+            // query to watch, so the generated interface omits them.
+            if (hasFilter) {
+                // watch<T> — snapshot of matching records + live change stream.
+                w.println();
+                w.println("    @Override");
+                w.println("    public " + COLLECTION_RUNTIME + ".WatchSource<" + fqn + ", Stratum." + t + "WatchChange> " + lower("Watch" + t)
+                        + "(Caller caller, Stratum.QueryHandle req) throws ProtoException {");
+                w.println(bindFilter);
+                w.println("        java.util.List<" + fqn + "> matches = new ArrayList<>();");
+                w.println("        try {");
+                w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + matchExpr + ") matches.add(ev);");
+                w.println("        } catch (Exception ex) {");
+                w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
+                w.println("        }");
+                w.println("        return new " + COLLECTION_RUNTIME + ".WatchSource<>(");
+                w.println("                \"recordmap." + lower(t) + "\", matches.iterator(), 0L,");
+                w.println("                () -> java.util.Collections.<Stratum." + t + "WatchChange>emptyIterator());");
+                w.println("    }");
+
+                // subscribe<T>Count — live count on each matching add/evict.
+                w.println();
+                w.println("    @Override");
+                w.println("    public void " + lower("Subscribe" + t + "Count")
+                        + "(Caller caller, Stratum.QueryHandle req, StreamObserver<Stratum.RecordCount> responseObserver) throws ProtoException {");
+                w.println(bindFilter);
+                w.println("        long n = 0;");
+                w.println("        try {");
+                w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + matchExpr + ") n++;");
+                w.println("        } catch (Exception ex) {");
+                w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
+                w.println("        }");
+                w.println("        responseObserver.onNext(Stratum.RecordCount.newBuilder().setCount(n).build());");
+                w.println("        responseObserver.onCompleted();");
+                w.println("    }");
+            }
+
         }
 
         w.println("}");
@@ -263,15 +301,11 @@ public final class RecordMapImplGenerator {
     // ----- naming helpers (mirror EventStoreGenerator) -----
 
     private static String fqn(EventTopicDiscovery.TopicEvent e) {
-        return MODEL_TYPES_VSERVICES + "." + e.protoPackage + "." + outerClass(e.protoPackage) + "." + e.eventType;
+        return e.javaPackage + "." + e.outerClassName + "." + e.eventType;
     }
 
     private static String field(EventTopicDiscovery.TopicEvent e) {
         return e.protoPackage + e.eventType;
-    }
-
-    private static String outerClass(String protoPackage) {
-        return Character.toUpperCase(protoPackage.charAt(0)) + protoPackage.substring(1);
     }
 
     /** Lowercase the first character (RPC name -> Java method name). */

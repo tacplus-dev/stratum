@@ -10,6 +10,7 @@ import org.apache.maven.plugins.annotations.Parameter;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -64,9 +65,20 @@ public class StratumCodegenMojo extends AbstractMojo {
             VServiceWiringGenerator.generate(out, services);
             getLog().info("Generated StratumVServiceBase.java");
 
-            List<EventTopicDiscovery.TopicEvent> events =
-                    EventTopicDiscovery.discover(vservicesDir);
-            getLog().info("Discovered " + events.size() + " EventBus topic event type(s):");
+            List<EventTopicDiscovery.TopicEvent> allEvents =
+                    EventTopicDiscovery.discover(protoDir.toPath());
+            // The event store and RecordMap query plane operate on record types
+            // (spec.record, identified by a non-empty recordKey). Plain EventBus
+            // topics (e.g. TaskEvent) are consumed by other subscribers but are not
+            // stored or queryable via stratum.
+            List<EventTopicDiscovery.TopicEvent> events = new ArrayList<>();
+            for (EventTopicDiscovery.TopicEvent ev : allEvents) {
+                if (!ev.recordKey.isEmpty()) {
+                    events.add(ev);
+                }
+            }
+            getLog().info("Discovered " + events.size() + " record type(s) of "
+                    + allEvents.size() + " EventBus topic(s):");
             for (EventTopicDiscovery.TopicEvent ev : events) {
                 getLog().info("  " + ev);
             }
@@ -74,7 +86,7 @@ public class StratumCodegenMojo extends AbstractMojo {
             getLog().info("Generated StratumEventStores.java");
 
             // The record map plane (RecordMap) is backed by the same record types
-            // the hot store holds, so it reuses the topic-event discovery.
+            // the hot store holds, so it reuses the record-type list.
             RecordMapImplGenerator.generate(out, events);
             getLog().info("Generated StratumRecordMaps.java");
 

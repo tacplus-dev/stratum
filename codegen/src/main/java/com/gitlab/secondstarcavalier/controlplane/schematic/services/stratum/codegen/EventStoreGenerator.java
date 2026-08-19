@@ -26,8 +26,6 @@ public final class EventStoreGenerator {
 
     private static final String HOST_PKG =
             "com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum";
-    private static final String MODEL_TYPES =
-            HOST_PKG + ".model.types.vservices";
     private static final String CLASS_NAME = "StratumEventStores";
 
     private EventStoreGenerator() {}
@@ -103,16 +101,17 @@ public final class EventStoreGenerator {
         w.println("     */");
         w.println("    public boolean store(Message msg) {");
         for (EventTopicDiscovery.TopicEvent e : events) {
+            String keyGetter = "get" + pascal(e.recordKey);
             w.println("        if (msg instanceof " + fqn(e) + ") {");
             w.println("            " + fqn(e) + " e = (" + fqn(e) + ") msg;");
             w.println("            try {");
             w.println("                " + validator(e) + "(e);");
             w.println("            } catch (Exception ex) {");
             w.println("                LOG.warn(\"rejected unstorable " + mapName(e)
-                    + " event_id={}: {}\", e.getEventId(), ex.getMessage());");
+                    + " " + e.recordKey + "={}: {}\", e." + keyGetter + "(), ex.getMessage());");
             w.println("                return true;");
             w.println("            }");
-            w.println("            " + field(e) + ".put(e.getEventId(), e);");
+            w.println("            " + field(e) + ".put(e." + keyGetter + "(), e);");
             w.println("            return true;");
             w.println("        }");
         }
@@ -150,9 +149,9 @@ public final class EventStoreGenerator {
 
     // ----- naming helpers -----
 
-    /** Java FQN of the event type, e.g. ...model.types.vservices.agentsensor.Agentsensor.AgentEvent */
+    /** Java FQN of the event type, derived from the proto's java_package + java_outer_classname. */
     private static String fqn(EventTopicDiscovery.TopicEvent e) {
-        return MODEL_TYPES + "." + e.protoPackage + "." + outerClass(e.protoPackage) + "." + e.eventType;
+        return e.javaPackage + "." + e.outerClassName + "." + e.eventType;
     }
 
     /** Hazelcast map name, e.g. "agentsensor.AgentEvent". */
@@ -167,15 +166,22 @@ public final class EventStoreGenerator {
 
     /**
      * Generated validator for an event type, e.g.
-     * "…model.types.vservices.agentsensor.Helpers.validateAgentEvent".
-     * Helpers sits beside the outer proto class, in the same types package.
+     * "…model.types.services.tasks.Helpers.validateTaskActivity".
+     * Helpers sits beside the outer proto class, in the same java_package.
      */
     private static String validator(EventTopicDiscovery.TopicEvent e) {
-        return MODEL_TYPES + "." + e.protoPackage + ".Helpers.validate" + e.eventType;
+        return e.javaPackage + ".Helpers.validate" + e.eventType;
     }
 
-    /** Proto java_outer_classname = capitalized package (tacplus convention). */
-    private static String outerClass(String protoPackage) {
-        return Character.toUpperCase(protoPackage.charAt(0)) + protoPackage.substring(1);
+    /** snake_case proto field -> PascalCase getter stem (event_id -> EventId). */
+    private static String pascal(String snake) {
+        StringBuilder b = new StringBuilder();
+        boolean up = true;
+        for (char c : snake.toCharArray()) {
+            if (c == '_') { up = true; continue; }
+            b.append(up ? Character.toUpperCase(c) : c);
+            up = false;
+        }
+        return b.toString();
     }
 }

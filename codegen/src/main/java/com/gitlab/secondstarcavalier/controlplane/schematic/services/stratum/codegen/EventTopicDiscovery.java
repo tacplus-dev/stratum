@@ -56,14 +56,21 @@ public final class EventTopicDiscovery {
         public final String recordKey;
         /** Queryable fields (spec.query_field) — empty if the record declares none. */
         public final List<QueryField> queryFields;
+        /** Java package from option java_package, e.g. "...model.types.vservices.agentsensor". */
+        public final String javaPackage;
+        /** Java outer class name from option java_outer_classname, e.g. "Agentsensor". */
+        public final String outerClassName;
 
         public TopicEvent(String protoPackage, String eventType, String protoRelPath,
-                          String recordKey, List<QueryField> queryFields) {
+                          String recordKey, List<QueryField> queryFields,
+                          String javaPackage, String outerClassName) {
             this.protoPackage = protoPackage;
             this.eventType = eventType;
             this.protoRelPath = protoRelPath;
             this.recordKey = recordKey;
             this.queryFields = queryFields;
+            this.javaPackage = javaPackage;
+            this.outerClassName = outerClassName;
         }
 
         @Override
@@ -74,6 +81,10 @@ public final class EventTopicDiscovery {
     }
 
     private static final Pattern PACKAGE_DECL = Pattern.compile("^package\\s+(\\S+);");
+    private static final Pattern JAVA_PACKAGE = Pattern.compile(
+            "option\\s+java_package\\s*=\\s*\"([^\"]+)\"");
+    private static final Pattern JAVA_OUTER_CLASSNAME = Pattern.compile(
+            "option\\s+java_outer_classname\\s*=\\s*\"([^\"]+)\"");
     private static final Pattern MESSAGE_START = Pattern.compile("^message\\s+(\\w+)\\s*\\{");
     private static final Pattern EVENTBUS_TAG = Pattern.compile(
             "option\\s*\\(spec\\.service_event\\)\\s*=\\s*\\{[^}]*tag:\\s*\"eventbus\"");
@@ -90,18 +101,18 @@ public final class EventTopicDiscovery {
 
     private EventTopicDiscovery() {}
 
-    /** Scans all .proto files under vservicesDir for EventBus topic event types. */
-    public static List<TopicEvent> discover(Path vservicesDir) throws IOException {
+    /** Scans all .proto files under baseDir for EventBus topic event types. */
+    public static List<TopicEvent> discover(Path baseDir) throws IOException {
         List<TopicEvent> result = new ArrayList<>();
-        if (!Files.isDirectory(vservicesDir)) {
+        if (!Files.isDirectory(baseDir)) {
             return result;
         }
-        try (Stream<Path> files = Files.walk(vservicesDir)) {
+        try (Stream<Path> files = Files.walk(baseDir)) {
             files.filter(p -> p.toString().endsWith(".proto"))
                  .sorted()
                  .forEach(proto -> {
                      try {
-                         scanProto(proto, vservicesDir, result);
+                         scanProto(proto, baseDir, result);
                      } catch (IOException e) {
                          throw new RuntimeException("failed to scan " + proto, e);
                      }
@@ -112,14 +123,24 @@ public final class EventTopicDiscovery {
 
     private static void scanProto(Path proto, Path baseDir, List<TopicEvent> result) throws IOException {
         List<String> lines = Files.readAllLines(proto);
-        String relPath = baseDir.getParent().relativize(proto).toString();
+        String relPath = baseDir.relativize(proto).toString();
 
         String protoPackage = "";
+        String javaPackage = "";
+        String outerClassName = "";
         for (String line : lines) {
-            Matcher m = PACKAGE_DECL.matcher(line.trim());
+            String trimmed = line.trim();
+            Matcher m = PACKAGE_DECL.matcher(trimmed);
             if (m.matches()) {
                 protoPackage = m.group(1);
-                break;
+            }
+            Matcher jp = JAVA_PACKAGE.matcher(trimmed);
+            if (jp.find()) {
+                javaPackage = jp.group(1);
+            }
+            Matcher joc = JAVA_OUTER_CLASSNAME.matcher(trimmed);
+            if (joc.find()) {
+                outerClassName = joc.group(1);
             }
         }
 
@@ -168,7 +189,8 @@ public final class EventTopicDiscovery {
             }
             String eventBody = bodies.getOrDefault(type, "");
             result.add(new TopicEvent(protoPackage, type, relPath,
-                    parseRecordKey(eventBody), parseQueryFields(eventBody)));
+                    parseRecordKey(eventBody), parseQueryFields(eventBody),
+                    javaPackage, outerClassName));
         }
     }
 
