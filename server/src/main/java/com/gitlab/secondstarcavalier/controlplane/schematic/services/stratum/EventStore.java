@@ -53,8 +53,8 @@ public class EventStore {
     private HazelcastInstance hz;
     // Generated, vservice-neutral write path: one typed IMap per EventBus topic.
     private final StratumEventStores stores = new StratumEventStores();
-    // Agent-specific read path (StratumQuery), pending generation: reads the same
-    // Hazelcast map the generated store writes for agentsensor.AgentEvent.
+    // Agent-specific read path: reads the same Hazelcast map the generated
+    // store writes for agentsensor.AgentEvent.
     private IMap<String, AgentEvent> events;
     private int retentionDays;
 

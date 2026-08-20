@@ -29,7 +29,7 @@ public final class StratumMapConfig {
     // (EventStoreGenerator.mapName = "<package>.<EventType>"). This map is shared:
     // the generated store writes it, the (agent-specific, read-path) query reads it.
     // The OBJECT format + agent indexes below are read-path concerns and remain
-    // hand-written until the StratumQuery read side is also generated.
+    // hand-written until the read side is also generated.
     public static final String MAP_NAME     = "agentsensor.AgentEvent";
 
     /** Must match the chart's HasHazelcast containerPort (kernel's convention). */
