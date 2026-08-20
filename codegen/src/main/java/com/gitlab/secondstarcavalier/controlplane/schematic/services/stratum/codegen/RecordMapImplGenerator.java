@@ -223,7 +223,8 @@ public final class RecordMapImplGenerator {
             w.println("        return Stratum.QueryStats.newBuilder().setQueryId(req.getQueryId()).setSize(0).build();");
             w.println("    }");
 
-            // refine<T> — replace the handle's filter (narrow-only by contract).
+            // refine<T> — replace the handle's filter outright. Not narrow-only: the
+            // prior filter is never read, so a caller may widen back to match-all.
             // Filterable record types only.
             if (hasFilter) {
                 w.println();
