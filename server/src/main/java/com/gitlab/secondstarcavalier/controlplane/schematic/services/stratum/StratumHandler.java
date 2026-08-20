@@ -23,16 +23,15 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.sys.x509.X509;
 
 /**
- * StratumHandler wires together EventStore, WorkingSetStore, the generated
- * vservice-neutral RecordMap service, and the StratumQuery vservice (session
- * queries + map-plane RPCs for argus).
+ * StratumHandler wires together EventStore, the generated vservice-neutral
+ * RecordMap service, and the StratumQuery vservice (session queries for argus).
  *
  * Startup sequence:
  *   1. getRecordMapGrpcImpl() — lazily initialises EventStore (hot event
- *      Hazelcast cluster) and WorkingSetStore (working-set Hazelcast cluster)
- *      from config defaults, then returns StratumRecordMaps for registration.
+ *      Hazelcast cluster) from config defaults, then returns
+ *      StratumRecordMaps for registration.
  *   2. provideStratumQueryHandler() — returns StratumQueryImpl backed by
- *      the same EventStore + WorkingSetStore via suppliers.
+ *      the same EventStore via a supplier.
  *   3. handleConfig() — re-applies config when kernel delivers it.
  *   4. onEventStream() begins receiving records from the EventBus, storing
  *      them and pushing live session updates to StratumQueryImpl watchers.
@@ -46,7 +45,6 @@ public class StratumHandler extends StratumVServiceBase {
     private final ServiceManager sm;
     private volatile Stratum.Config config;
     private EventStore      eventStore;
-    private WorkingSetStore store;
     private volatile StratumQueryImpl queryImpl;
     private final AtomicBoolean coldStartHandled = new AtomicBoolean(false);
     private volatile ColdStartRebuilder coldStartRebuilder;
@@ -63,7 +61,7 @@ public class StratumHandler extends StratumVServiceBase {
     @Override
     public com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.RecordMap.RecordMapHandler getRecordMapGrpcImpl() {
         try {
-            if (store == null || eventStore == null) {
+            if (eventStore == null) {
                 initFromConfig(Helpers.configDefaults(Stratum.Config.getDefaultInstance()).build());
             }
         } catch (Exception e) {
@@ -88,15 +86,14 @@ public class StratumHandler extends StratumVServiceBase {
     @Override
     protected StratumQuery.StratumQueryHandler provideStratumQueryHandler() {
         try {
-            if (store == null || eventStore == null) {
+            if (eventStore == null) {
                 initFromConfig(Helpers.configDefaults(Stratum.Config.getDefaultInstance()).build());
             }
         } catch (Exception e) {
             log.error("failed to initialize stratum", e);
             throw new RuntimeException("stratum init failed", e);
         }
-        queryImpl = new StratumQueryImpl(
-                () -> eventStore, () -> store, () -> config);
+        queryImpl = new StratumQueryImpl(() -> eventStore, () -> config);
         return queryImpl;
     }
 
@@ -174,11 +171,11 @@ public class StratumHandler extends StratumVServiceBase {
         // This method is reachable from SIX places: the initial config, the
         // handleConfig hot-reload, handleRecordMapConfig, two lazy-init
         // fallbacks and a request path. Every one of them used to build a new
-        // EventStore and WorkingSetStore, and each of those calls
+        // EventStore, and that calls
         // Hazelcast.newHazelcastInstance -- so a repeated config delivery left
         // the previous members RUNNING. Observed live: "EventStore initialised"
-        // three times in one pod, giving six Hazelcast members
-        // (stratum-events x3, stratum-ws x3) on ports 5701-5706.
+        // three times in one pod, giving three Hazelcast members
+        // (stratum-events x3) on ports 5701-5703.
         //
         // That is not just wasted heap and threads. The orphans JOIN the same
         // cluster -- Hazelcast reported Members{size:3} -- so partitions
@@ -186,7 +183,7 @@ public class StratumHandler extends StratumVServiceBase {
         // eventStore field points only at the newest. Reads and writes can land
         // on different owners, which is exactly the "stored it, cannot read it
         // back" behaviour that took three rounds to chase down.
-        if (this.config != null && this.config.equals(cfg) && eventStore != null && store != null) {
+        if (this.config != null && this.config.equals(cfg) && eventStore != null) {
             log.info("config unchanged — keeping the existing stores");
             return;
         }
@@ -202,12 +199,6 @@ public class StratumHandler extends StratumVServiceBase {
             try { eventStore.shutdown(); } catch (Exception e) { log.warn("EventStore shutdown: {}", e.getMessage()); }
             eventStore = null;
         }
-        if (store != null) {
-            log.info("re-initialising: shutting down the previous WorkingSetStore");
-            try { store.shutdown(); } catch (Exception e) { log.warn("WorkingSetStore shutdown: {}", e.getMessage()); }
-            store = null;
-        }
-
         this.config = cfg;
         log.info("config: hazelcast_memory_mb={}, map_idle_ttl_seconds={}, max_maps={}, " +
                  "retention_days={}, cleanup_interval_seconds={}",
@@ -219,9 +210,6 @@ public class StratumHandler extends StratumVServiceBase {
                 cfg.getRetentionDays(),
                 cfg.getCleanupIntervalSeconds(),
                 seedMembers());
-
-        store = new WorkingSetStore(cfg);
-        store.init();
 
         // Startup replay, but ONLY on a cold boot — see
         // ColdStartRebuilder.shouldReplay. With peers in the cluster a
@@ -281,7 +269,6 @@ public class StratumHandler extends StratumVServiceBase {
         ColdStartRebuilder rebuilder = coldStartRebuilder;
         if (rebuilder != null) rebuilder.shutdown();
         if (eventStore != null) eventStore.shutdown();
-        if (store != null)      store.shutdown();
     }
 
 

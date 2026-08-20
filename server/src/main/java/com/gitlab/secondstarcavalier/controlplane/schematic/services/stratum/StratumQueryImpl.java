@@ -26,8 +26,7 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
 
 /**
  * Real implementation of the StratumQuery vservice handler, backed by
- * the EventStore (hot event store, Hazelcast) for event/session queries
- * and the WorkingSetStore for the map-plane RPCs.
+ * the EventStore (hot event store, Hazelcast) for event/session queries.
  *
  * Session aggregation: folds AgentEvent records grouped by session_id into
  * SessionSummary. Active sessions are those whose last event is within the
@@ -43,22 +42,18 @@ final class StratumQueryImpl implements StratumQuery.StratumQueryHandler {
     private static final Logger log = LoggerFactory.getLogger(StratumQueryImpl.class);
 
     private final Supplier<EventStore> eventStoreSupplier;
-    private final Supplier<WorkingSetStore> storeSupplier;
     private final Supplier<Stratum.Config> configSupplier;
 
     // Live session watchers, registered by subscribeLiveSessions.
     private final CopyOnWriteArrayList<LiveWatcher> liveWatchers = new CopyOnWriteArrayList<>();
 
     StratumQueryImpl(Supplier<EventStore> eventStoreSupplier,
-                     Supplier<WorkingSetStore> storeSupplier,
                      Supplier<Stratum.Config> configSupplier) {
         this.eventStoreSupplier = eventStoreSupplier;
-        this.storeSupplier = storeSupplier;
         this.configSupplier = configSupplier;
     }
 
     private EventStore eventStore() { return eventStoreSupplier.get(); }
-    private WorkingSetStore store() { return storeSupplier.get(); }
 
     private int idleThresholdSeconds() {
         Stratum.Config cfg = configSupplier.get();
@@ -120,201 +115,6 @@ final class StratumQueryImpl implements StratumQuery.StratumQueryHandler {
             } catch (Exception e) {
                 liveWatchers.remove(w);
             }
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Map lifecycle RPCs (delegated to WorkingSetStore)
-    // -----------------------------------------------------------------------
-
-    @Override
-    public Agentsensor.CreateMapResponse createMap(Caller caller, Agentsensor.CreateMapRequest req) throws ProtoException {
-        if (req.getMapId().isEmpty()) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, "map_id is required");
-        }
-        try {
-            store().createMap(req.getMapId());
-            return Agentsensor.CreateMapResponse.getDefaultInstance();
-        } catch (IllegalArgumentException e) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
-        } catch (IllegalStateException e) {
-            throw new ProtoException(ProtoException.RESOURCE_EXHAUSTED, e.getMessage());
-        } catch (Exception e) {
-            throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-        }
-    }
-
-    @Override
-    public Agentsensor.DeleteMapResponse deleteMap(Caller caller, Agentsensor.DeleteMapRequest req) throws ProtoException {
-        if (req.getMapId().isEmpty()) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, "map_id is required");
-        }
-        try {
-            store().deleteMap(req.getMapId());
-            return Agentsensor.DeleteMapResponse.getDefaultInstance();
-        } catch (Exception e) {
-            throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-        }
-    }
-
-    @Override
-    public Agentsensor.ListMapsResponse listMaps(Caller caller, Agentsensor.ListMapsRequest req) throws ProtoException {
-        try {
-            return Agentsensor.ListMapsResponse.newBuilder()
-                    .addAllMaps(store().listMaps()).build();
-        } catch (Exception e) {
-            throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-        }
-    }
-
-    @Override
-    public Agentsensor.GetMapDetailResponse getMapDetail(Caller caller, Agentsensor.GetMapDetailRequest req) throws ProtoException {
-        if (req.getMapId().isEmpty()) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, "map_id is required");
-        }
-        try {
-            return Agentsensor.GetMapDetailResponse.newBuilder()
-                    .setDetail(store().describeMap(req.getMapId())).build();
-        } catch (IllegalArgumentException e) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
-        } catch (Exception e) {
-            throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-        }
-    }
-
-    @Override
-    public Agentsensor.MapSizeResponse getMapSize(Caller caller, Agentsensor.MapSizeRequest req) throws ProtoException {
-        if (req.getMapId().isEmpty()) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, "map_id is required");
-        }
-        try {
-            long[] sz = store().mapSize(req.getMapId());
-            return Agentsensor.MapSizeResponse.newBuilder()
-                    .setEventCount(sz[0]).setSizeMb(sz[1]).build();
-        } catch (IllegalArgumentException e) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
-        } catch (Exception e) {
-            throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Map loading RPCs
-    // -----------------------------------------------------------------------
-
-    @Override
-    public Agentsensor.UpdateMapByIdsResponse updateMapByIds(Caller caller, Agentsensor.UpdateMapByIdsRequest req) throws ProtoException {
-        if (req.getMapId().isEmpty()) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, "map_id is required");
-        }
-        try {
-            long[] added = {0};
-            for (String id : req.getEventIdsList()) {
-                eventStore().getByKey(id).ifPresent(ev -> {
-                    store().putEvent(req.getMapId(), ev);
-                    added[0]++;
-                });
-            }
-            return Agentsensor.UpdateMapByIdsResponse.newBuilder()
-                    .setEventsAdded(added[0]).build();
-        } catch (Exception e) {
-            throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-        }
-    }
-
-    @Override
-    public Agentsensor.UpdateMapBySqlResponse updateMapBySql(Caller caller, Agentsensor.UpdateMapBySqlRequest req) throws ProtoException {
-        if (req.getMapId().isEmpty()) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, "map_id is required");
-        }
-        if (req.getSql().isEmpty()) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, "sql is required");
-        }
-        try {
-            EventStore.SqlPredicates preds = EventStore.SqlParser.parse(req.getSql());
-            List<AgentEvent> events = eventStore().query(preds);
-            for (AgentEvent ev : events) {
-                store().putEvent(req.getMapId(), ev);
-            }
-            log.info("load_by_sql into {}: {} events loaded", req.getMapId(), events.size());
-            return Agentsensor.UpdateMapBySqlResponse.newBuilder()
-                    .setEventsAdded(events.size()).build();
-        } catch (IllegalArgumentException e) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
-        } catch (Exception e) {
-            throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-        }
-    }
-
-    @Override
-    public Agentsensor.UpdateMapByTimedbResponse updateMapByTimedb(Caller caller, Agentsensor.UpdateMapByTimedbRequest req) throws ProtoException {
-        throw new ProtoException(ProtoException.UNIMPLEMENTED, "load_by_timedb not yet implemented");
-    }
-
-    @Override
-    public Agentsensor.UpdateMapByGraphdbResponse updateMapByGraphdb(Caller caller, Agentsensor.UpdateMapByGraphdbRequest req) throws ProtoException {
-        throw new ProtoException(ProtoException.UNIMPLEMENTED, "load_by_graphdb not yet implemented");
-    }
-
-    // -----------------------------------------------------------------------
-    // Map mutation RPCs
-    // -----------------------------------------------------------------------
-
-    @Override
-    public Agentsensor.UpdateMapFilterResponse updateMapFilter(Caller caller, Agentsensor.UpdateMapFilterRequest req) throws ProtoException {
-        if (req.getMapId().isEmpty()) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, "map_id is required");
-        }
-        if (req.getSql().isEmpty()) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, "sql is required");
-        }
-        try {
-            long removed = store().filterMap(req.getMapId(), req.getSql());
-            return Agentsensor.UpdateMapFilterResponse.newBuilder()
-                    .setEventsRemoved(removed).build();
-        } catch (IllegalArgumentException e) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
-        } catch (Exception e) {
-            throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-        }
-    }
-
-    @Override
-    public Agentsensor.MergeResponse merge(Caller caller, Agentsensor.MergeRequest req) throws ProtoException {
-        if (req.getSrcMapId().isEmpty() || req.getDestMapId().isEmpty()) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT,
-                    "src_map_id and dest_map_id are required");
-        }
-        try {
-            long added = store().merge(req.getSrcMapId(), req.getDestMapId());
-            return Agentsensor.MergeResponse.newBuilder()
-                    .setEventsAdded(added).build();
-        } catch (IllegalArgumentException e) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
-        } catch (Exception e) {
-            throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
-        }
-    }
-
-    @Override
-    public Agentsensor.ExecuteMapQueryResponse executeMapQuery(Caller caller, Agentsensor.ExecuteMapQueryRequest req) throws ProtoException {
-        if (req.getMapId().isEmpty()) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, "map_id is required");
-        }
-        if (req.getSql().isEmpty()) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, "sql is required");
-        }
-        try {
-            int limit = req.getLimit() > 0 ? req.getLimit() : 100;
-            Object[] result = store().queryMap(req.getMapId(), req.getSql(), limit);
-            return Agentsensor.ExecuteMapQueryResponse.newBuilder()
-                    .setResultsJson((String) result[1])
-                    .setTotalRows((Long) result[0])
-                    .build();
-        } catch (IllegalArgumentException e) {
-            throw new ProtoException(ProtoException.INVALID_ARGUMENT, e.getMessage());
-        } catch (Exception e) {
-            throw new ProtoException(ProtoException.INTERNAL, e.getMessage());
         }
     }
 

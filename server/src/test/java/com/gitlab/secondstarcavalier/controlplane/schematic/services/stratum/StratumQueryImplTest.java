@@ -17,7 +17,7 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
 
 /**
  * Unit tests for StratumQueryImpl session aggregation fold and keyset paging.
- * These test the pure logic without Hazelcast (no EventStore/WorkingSetStore needed).
+ * These test the pure logic without Hazelcast (no EventStore needed).
  */
 class StratumQueryImplTest {
 
