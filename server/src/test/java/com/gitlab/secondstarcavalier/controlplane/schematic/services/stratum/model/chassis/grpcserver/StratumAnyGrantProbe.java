@@ -10,19 +10,28 @@
 //     com...stratum.model.chassis.grpcserver.StratumAnyGrantProbe
 //
 // It drives the REAL generated Authorizer against the REAL generated Grants
-// catalog for /stratum.RecordMap/OpenTaskActivityQuery, with a paired control
-// (entitled vs unentitled callers) in one run. It lives in the chassis package
-// because Authorizer.SERVICE_NAME and Authorizer.methodGrantToken are
-// package-private.
+// catalog, with a paired control (entitled vs unentitled callers) in one run.
+// It lives in the chassis package because Authorizer.SERVICE_NAME and
+// Authorizer.methodGrantToken are package-private.
 //
-// What it shows today: NO grant string authorizes this RPC. Not the wildcard
-// STRATUM_ANY, and not even the exact token the Authorizer itself computes
-// (STRATUM_RECORD_MAP_OPEN_TASK_ACTIVITY_QUERY) -- because tacplus builds the
-// grant catalog from auth_model=="c2s" RPCs only (registry.go
-// collectEntitlementGrants) while the Authorizer's C2S path enforces grants on
-// EVERY method a user token reaches. stratum is s2s-only, so its whole surface
-// is outside the grant vocabulary and Grants.normalize drops every token as
-// unknown. That is why every principal's stratum token carries grants:[].
+// It covers BOTH halves of the record query plane:
+//
+//   /stratum.RecordQuery/CreateTaskActivityQuery   c2s -- the user-facing half
+//   /stratum.RecordMap/OpenTaskActivityQuery       s2s -- the peer half
+//
+// Before the c2s half existed (tacplus@main, this file's first commit), the
+// only surface was RecordMap and NO grant string authorized it. Not the
+// wildcard STRATUM_ANY, and not even the exact token the Authorizer itself
+// computed -- because tacplus builds the grant catalog from auth_model=="c2s"
+// RPCs only (registry collectEntitlementGrants) while the Authorizer's C2S path
+// enforces grants on EVERY method a user token reaches. stratum was s2s-only,
+// so its whole surface sat outside the grant vocabulary and Grants.normalize
+// dropped every token as unknown.
+//
+// What it shows now: STRATUM_ANY (and the exact c2s token) ALLOW the c2s
+// method, unentitled callers are still DENIED, and the s2s method stays denied
+// to user tokens on every input -- which is the point of keeping the surfaces
+// split rather than making RecordMap itself c2s.
 //
 package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.grpcserver;
 
@@ -45,7 +54,8 @@ import java.util.Map;
  */
 public class StratumAnyGrantProbe {
 
-    private static final String FULL_METHOD = "/stratum.RecordMap/OpenTaskActivityQuery";
+    private static final String C2S_METHOD = "/stratum.RecordQuery/CreateTaskActivityQuery";
+    private static final String S2S_METHOD = "/stratum.RecordMap/OpenTaskActivityQuery";
 
     private static ImmutableKey newTestKey() throws Exception {
         return ImmutableKey.from(KeyHelpers.newEd25519Key());
@@ -78,9 +88,9 @@ public class StratumAnyGrantProbe {
         return "Bearer " + tok.getBase64();
     }
 
-    private static void attempt(Authorizer a, String label, String bearer) {
+    private static void attempt(Authorizer a, String method, String label, String bearer) {
         try {
-            a.authorizeWithToken(bearer, FULL_METHOD, null);
+            a.authorizeWithToken(bearer, method, null);
             System.out.println("ALLOWED  " + label);
         } catch (Exception e) {
             System.out.println("DENIED   " + label + "  ->  " + e.getMessage());
@@ -88,9 +98,12 @@ public class StratumAnyGrantProbe {
     }
 
     public static void main(String[] args) throws Exception {
-        System.out.println("method under test: " + FULL_METHOD);
-        System.out.println("required exact grant (computed by the generated Authorizer): "
-                + Authorizer.methodGrantToken(Authorizer.SERVICE_NAME, FULL_METHOD));
+        System.out.println("c2s method under test: " + C2S_METHOD);
+        System.out.println("  required exact grant (computed by the generated Authorizer): "
+                + Authorizer.methodGrantToken(Authorizer.SERVICE_NAME, C2S_METHOD));
+        System.out.println("s2s control method:    " + S2S_METHOD);
+        System.out.println("  required exact grant: "
+                + Authorizer.methodGrantToken(Authorizer.SERVICE_NAME, S2S_METHOD));
         System.out.println("Grants.lookup(STRATUM_ANY) present: " + Grants.lookup("STRATUM_ANY").isPresent());
         System.out.println("Grants.expand(STRATUM_ANY) = " + Grants.expand("STRATUM_ANY"));
         System.out.println("Grants.normalize([STRATUM_ANY]) = " + Grants.normalize(List.of("STRATUM_ANY")));
@@ -101,16 +114,30 @@ public class StratumAnyGrantProbe {
         ImmutableKey key = newTestKey();
         Map<String, JwkOuterClass.Jwk> keys = Map.of(key.getProto().getId(), jwkForKey(key));
         Authorizer a = new Authorizer(sink -> sink.update(keys));
-        // Same policy the generated RecordMap wrapper registers at startup.
+        // Same policy the generated RecordMap wrapper registers at startup. The
+        // generated RecordQuery wrapper registers none: it is c2s, so the
+        // Authorizer takes the entitlement path.
         a.setMethodAuth("OpenTaskActivityQuery", List.of("argus"));
 
-        attempt(a, "user token, grants=[STRATUM_ANY]  (what OPA mints today)",
+        System.out.println("--- c2s surface (stratum.RecordQuery) ---");
+        attempt(a, C2S_METHOD, "user token, grants=[STRATUM_ANY]  (what OPA mints today)",
                 userToken(key, List.of("STRATUM_ANY")));
-        attempt(a, "user token, grants=[STRATUM_RECORD_MAP_OPEN_TASK_ACTIVITY_QUERY] (exact)",
-                userToken(key, List.of("STRATUM_RECORD_MAP_OPEN_TASK_ACTIVITY_QUERY")));
-        attempt(a, "user token, grants=[TASKS_ANY]  (unentitled control)",
+        attempt(a, C2S_METHOD, "user token, grants=[STRATUM_WRITE_ANY]  (capability wildcard)",
+                userToken(key, List.of("STRATUM_WRITE_ANY")));
+        attempt(a, C2S_METHOD, "user token, grants=[STRATUM_RECORD_QUERY_CREATE_TASK_ACTIVITY_QUERY] (exact)",
+                userToken(key, List.of("STRATUM_RECORD_QUERY_CREATE_TASK_ACTIVITY_QUERY")));
+        attempt(a, C2S_METHOD, "user token, grants=[STRATUM_READ_ANY]  (wrong capability control)",
+                userToken(key, List.of("STRATUM_READ_ANY")));
+        attempt(a, C2S_METHOD, "user token, grants=[TASKS_ANY]  (unentitled control)",
                 userToken(key, List.of("TASKS_ANY")));
-        attempt(a, "user token, grants=[]  (unentitled control)",
+        attempt(a, C2S_METHOD, "user token, grants=[]  (unentitled control)",
+                userToken(key, List.of()));
+
+        System.out.println();
+        System.out.println("--- s2s surface (stratum.RecordMap), unchanged ---");
+        attempt(a, S2S_METHOD, "user token, grants=[STRATUM_ANY]",
+                userToken(key, List.of("STRATUM_ANY")));
+        attempt(a, S2S_METHOD, "user token, grants=[]",
                 userToken(key, List.of()));
     }
 }
