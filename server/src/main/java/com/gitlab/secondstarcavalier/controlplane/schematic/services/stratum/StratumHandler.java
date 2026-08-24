@@ -42,6 +42,7 @@ public class StratumHandler extends StratumVServiceBase {
     private EventStore      eventStore;
     private final AtomicBoolean coldStartHandled = new AtomicBoolean(false);
     private volatile ColdStartRebuilder coldStartRebuilder;
+    private StratumRecordMaps recordMaps;
 
 
     public StratumHandler(ServiceManager sm) {
@@ -54,6 +55,15 @@ public class StratumHandler extends StratumVServiceBase {
 
     @Override
     public com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.RecordMap.RecordMapHandler getRecordMapGrpcImpl() {
+        return recordMaps();
+    }
+
+    /**
+     * The one query-plane implementation, shared by both caller surfaces.
+     * Created once: the handle registry lives in the instance, so returning a
+     * fresh one per surface would give each surface its own set of query ids.
+     */
+    private synchronized StratumRecordMaps recordMaps() {
         try {
             if (eventStore == null) {
                 initFromConfig(Helpers.configDefaults(Stratum.Config.getDefaultInstance()).build());
@@ -62,13 +72,30 @@ public class StratumHandler extends StratumVServiceBase {
             log.error("failed to initialize stratum", e);
             throw new RuntimeException("stratum init failed", e);
         }
-        // Suppliers, not captured references: initFromConfig rebuilds the stores on
-        // config updates, and the generated impl must always see the current ones.
-        return new StratumRecordMaps(() -> eventStore.stores());
+        if (recordMaps == null) {
+            // Suppliers, not captured references: initFromConfig rebuilds the stores on
+            // config updates, and the generated impl must always see the current ones.
+            recordMaps = new StratumRecordMaps(() -> eventStore.stores());
+        }
+        return recordMaps;
     }
 
     @Override
     public void handleRecordMapConfig(Stratum.Config cfg) throws Exception {
+        initFromConfig(cfg);
+    }
+
+    // RecordQuery is the C2S half of the same query plane (tacplus emits the
+    // plane once per caller surface). It delegates to the SAME StratumRecordMaps
+    // instance, so both surfaces share one handle registry — a query opened by a
+    // user through the gateway and one opened by a peer live in the same place.
+    @Override
+    public com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.RecordQuery.RecordQueryHandler getRecordQueryGrpcImpl() {
+        return new StratumRecordQueries(recordMaps());
+    }
+
+    @Override
+    public void handleRecordQueryConfig(Stratum.Config cfg) throws Exception {
         initFromConfig(cfg);
     }
 
