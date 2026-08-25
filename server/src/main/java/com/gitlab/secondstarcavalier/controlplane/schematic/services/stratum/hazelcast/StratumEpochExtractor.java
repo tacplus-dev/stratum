@@ -2,7 +2,7 @@
 package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast;
 
 /**
- * StratumEpochExtractor provides constants for the timestampMs-based
+ * StratumEpochExtractor provides constants for the age-based
  * epoch attribute used in retention cleanup calculations.
  */
 public final class StratumEpochExtractor {

@@ -40,9 +40,13 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.haz
  *   - HASH:    spiffeId, sessionId, agentId, eventTypeValue (StratumEventTypeExtractor)
  *
  * Retention:
- *   Runs on cleanup_interval_seconds. Deletes entries where
- *   timestampMs < (now - retentionDays * 86400000). Runs only on the
- *   oldest cluster member to avoid duplicate work across nodes.
+ *   Runs on cleanup_interval_seconds. Deletes entries older than
+ *   (now - retentionDays * 86400000) from every typed store. Which field
+ *   carries an event's age differs per record type (timestampMs on AgentEvent,
+ *   occurredAtMs on TaskActivity), so the per-type predicate is emitted by the
+ *   generator from each record's declared retention timestamp_field, not named
+ *   here. Runs only on the oldest cluster member to avoid duplicate work
+ *   across nodes.
  *
  * Thread safety: HazelcastInstance is thread-safe. AtomicLong stats are thread-safe.
  */
@@ -177,7 +181,7 @@ public class EventStore {
     private void runRetentionCleanup() {
         long cutoffMs = System.currentTimeMillis()
                 - (long) retentionDays * StratumEpochExtractor.MILLIS_PER_DAY;
-        log.info("retention cleanup: removing events with timestampMs < {} (retention_days={})",
+        log.info("retention cleanup: removing events older than {} (retention_days={})",
                 cutoffMs, retentionDays);
         try {
             long before  = stores.totalCount();

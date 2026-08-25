@@ -56,6 +56,13 @@ public final class EventTopicDiscovery {
         public final String recordKey;
         /** Queryable fields (spec.query_field) — empty if the record declares none. */
         public final List<QueryField> queryFields;
+        /**
+         * The field the record's retention age is measured from, taken from
+         * (spec.timeseries_projection).retention.timestamp_field — e.g.
+         * "timestamp_ms" on AgentEvent, "occurred_at_ms" on TaskActivity.
+         * "" when the record declares no retention policy.
+         */
+        public final String retentionTimestampField;
         /** Java package from option java_package, e.g. "...model.types.vservices.agentsensor". */
         public final String javaPackage;
         /** Java outer class name from option java_outer_classname, e.g. "Agentsensor". */
@@ -63,12 +70,14 @@ public final class EventTopicDiscovery {
 
         public TopicEvent(String protoPackage, String eventType, String protoRelPath,
                           String recordKey, List<QueryField> queryFields,
+                          String retentionTimestampField,
                           String javaPackage, String outerClassName) {
             this.protoPackage = protoPackage;
             this.eventType = eventType;
             this.protoRelPath = protoRelPath;
             this.recordKey = recordKey;
             this.queryFields = queryFields;
+            this.retentionTimestampField = retentionTimestampField;
             this.javaPackage = javaPackage;
             this.outerClassName = outerClassName;
         }
@@ -94,6 +103,10 @@ public final class EventTopicDiscovery {
     // spec.record key, e.g.  option (spec.record) = { key: "event_id" ... }
     private static final Pattern RECORD_KEY = Pattern.compile(
             "\\(spec\\.record\\)\\s*=\\s*\\{.*?key:\\s*\"(\\w+)\"", Pattern.DOTALL);
+    // The retention clause of a (spec.timeseries_projection), e.g.
+    //   retention: {timestamp_field: "occurred_at_ms" duration_seconds: 7776000}
+    private static final Pattern RETENTION_TIMESTAMP_FIELD = Pattern.compile(
+            "retention:\\s*\\{[^}]*timestamp_field:\\s*\"(\\w+)\"");
     // A field carrying (spec.query_field), e.g.
     //   string spiffe_id = 4 [(spec.query_field) = {op: QUERY_OP_EQ}];
     private static final Pattern QUERY_FIELD = Pattern.compile(
@@ -190,6 +203,7 @@ public final class EventTopicDiscovery {
             String eventBody = bodies.getOrDefault(type, "");
             result.add(new TopicEvent(protoPackage, type, relPath,
                     parseRecordKey(eventBody), parseQueryFields(eventBody),
+                    parseRetentionTimestampField(type, eventBody),
                     javaPackage, outerClassName));
         }
     }
@@ -197,6 +211,29 @@ public final class EventTopicDiscovery {
     private static String parseRecordKey(String eventBody) {
         Matcher m = RECORD_KEY.matcher(eventBody);
         return m.find() ? m.group(1) : "";
+    }
+
+    /**
+     * The single field this record's retention age is measured from.
+     *
+     * A record may declare several timeseries projections (AgentEvent declares
+     * five); they describe the same rows, so their retention clauses must name
+     * the same timestamp field. Two different names would leave no single answer
+     * to "how old is this event", so that is rejected here rather than resolved
+     * arbitrarily.
+     */
+    private static String parseRetentionTimestampField(String eventType, String eventBody) {
+        java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+        Matcher m = RETENTION_TIMESTAMP_FIELD.matcher(eventBody);
+        while (m.find()) {
+            names.add(m.group(1));
+        }
+        if (names.size() > 1) {
+            throw new IllegalStateException(eventType + " declares conflicting retention"
+                    + " timestamp_field values " + names + " across its timeseries"
+                    + " projections; they must all name the same field.");
+        }
+        return names.isEmpty() ? "" : names.iterator().next();
     }
 
     private static List<QueryField> parseQueryFields(String eventBody) {

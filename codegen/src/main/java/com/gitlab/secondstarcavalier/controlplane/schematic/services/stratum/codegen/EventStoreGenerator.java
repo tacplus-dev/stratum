@@ -134,7 +134,8 @@ public final class EventStoreGenerator {
         w.println("    /** Removes events older than cutoffMs from every typed store. */");
         w.println("    public void runRetention(long cutoffMs) {");
         for (EventTopicDiscovery.TopicEvent e : events) {
-            w.println("        " + field(e) + ".removeAll(Predicates.lessThan(\"timestampMs\", cutoffMs));");
+            w.println("        " + field(e) + ".removeAll(Predicates.lessThan(\""
+                    + retentionAttribute(e) + "\", cutoffMs));");
         }
         w.println("    }");
         w.println();
@@ -171,6 +172,41 @@ public final class EventStoreGenerator {
      */
     private static String validator(EventTopicDiscovery.TopicEvent e) {
         return e.javaPackage + ".Helpers.validate" + e.eventType;
+    }
+
+    /**
+     * The Hazelcast attribute the retention sweep filters on, for one event type.
+     *
+     * Hazelcast resolves a predicate attribute by reflecting for a JavaBean
+     * getter, so the name must be the camelCase property (occurredAtMs ->
+     * getOccurredAtMs()), not the proto field name. Which field carries the
+     * event's age is declared per record by
+     * (spec.timeseries_projection).retention.timestamp_field — it is
+     * "timestamp_ms" on AgentEvent but "occurred_at_ms" on TaskActivity, so a
+     * single hard-coded name is wrong for some record type by construction.
+     * Emitting the wrong one is silent at build time and fails only at run time,
+     * inside the scheduled sweep, where a QueryException aborts the whole
+     * retention pass — including the maps whose name WAS right — and the store
+     * grows without bound.
+     *
+     * A stored record with no retention policy has no field to measure age from
+     * and could never be swept, so it is rejected here rather than generated
+     * into a sweep that cannot work.
+     */
+    private static String retentionAttribute(EventTopicDiscovery.TopicEvent e) {
+        if (e.retentionTimestampField.isEmpty()) {
+            throw new IllegalStateException(mapName(e) + " is stored by stratum but declares no"
+                    + " (spec.timeseries_projection).retention.timestamp_field, so the retention"
+                    + " sweep has no field to measure event age from. Declare a retention policy"
+                    + " on the record in " + e.protoRelPath + ".");
+        }
+        return camel(e.retentionTimestampField);
+    }
+
+    /** snake_case proto field -> lowerCamelCase property (occurred_at_ms -> occurredAtMs). */
+    private static String camel(String snake) {
+        String p = pascal(snake);
+        return Character.toLowerCase(p.charAt(0)) + p.substring(1);
     }
 
     /** snake_case proto field -> PascalCase getter stem (event_id -> EventId). */
