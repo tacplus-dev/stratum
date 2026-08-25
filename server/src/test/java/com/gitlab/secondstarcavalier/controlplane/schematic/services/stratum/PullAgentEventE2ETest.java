@@ -21,6 +21,7 @@ import io.grpc.Server;
 import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.token.TokenWrapper;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.RecordMap;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.services.stratum.RecordMapGrpc;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.services.stratum.Stratum;
@@ -118,8 +119,12 @@ class PullAgentEventE2ETest {
         var authorizer = new com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum
                 .model.chassis.grpcserver.Authorizer(sink -> { }) {
             @Override
-            public void authorize(String fullMethod, Object request) throws ProtoException {
-                // allow everything
+            public TokenWrapper authorize(String fullMethod, Object request) throws ProtoException {
+                // Allow everything. Returning null is the documented "nothing
+                // verified an identity on this call" case: the wrapper feeds
+                // this to Authorizer.identityClaims, which maps null to an
+                // empty claim set rather than dereferencing it.
+                return null;
             }
         };
 
