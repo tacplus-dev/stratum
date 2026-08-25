@@ -101,24 +101,24 @@ public final class RecordQueryImplGenerator {
 
             method(w, "Stratum.QueryHandle", "create" + t + "Query",
                     "Caller caller, Stratum.Open" + t + "QueryRequest request",
-                    "delegate." + lower("Open" + t + "Query") + "(caller, request)");
+                    "delegate." + lower("Create" + t + "Query") + "(caller, request)");
             method(w, "Stratum.RecordCount", "get" + t + "Count",
                     "Caller caller, Stratum.QueryHandle request",
-                    "delegate." + lower("Count" + t) + "(caller, request)");
+                    "delegate." + lower("Get" + t + "Count") + "(caller, request)");
             method(w, "Stratum.Sample" + t + "Response", "get" + t + "Sample",
                     "Caller caller, Stratum.Sample" + t + "Request request",
-                    "delegate." + lower("Sample" + t) + "(caller, request)");
+                    "delegate." + lower("Get" + t + "Sample") + "(caller, request)");
             method(w, "CollectionRuntime.Page<" + fqn + ">", "list" + t,
                     "Caller caller, Stratum.Pull" + t + "Request request, CollectionRuntime.PageParams page",
-                    "delegate." + lower("Pull" + t) + "(caller, request, page)");
+                    "delegate." + lower("List" + t) + "(caller, request, page)");
             method(w, "Stratum.QueryStats", "delete" + t + "Query",
                     "Caller caller, Stratum.QueryHandle request",
-                    "delegate." + lower("Close" + t) + "(caller, request)");
+                    "delegate." + lower("Delete" + t + "Query") + "(caller, request)");
 
             if (hasFilter) {
                 method(w, "Stratum.QueryStats", "update" + t + "Query",
                         "Caller caller, Stratum.Refine" + t + "Request request",
-                        "delegate." + lower("Refine" + t) + "(caller, request)");
+                        "delegate." + lower("Update" + t + "Query") + "(caller, request)");
                 method(w, "CollectionRuntime.WatchSource<" + fqn + ", Stratum." + t + "WatchChange>",
                         "watch" + t,
                         "Caller caller, Stratum.QueryHandle request",

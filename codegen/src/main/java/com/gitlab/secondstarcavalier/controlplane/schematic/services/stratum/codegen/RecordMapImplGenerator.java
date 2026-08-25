@@ -13,14 +13,14 @@ import java.util.List;
  * EventBus topic event the record store holds) it emits the query-handle RPC
  * handlers the generated RecordMap.RecordMapHandler declares:
  *
- *   open<T>Query    → register the caller's filter under a fresh query_id (handle)
- *   refine<T>       → replace the handle's filter (narrow); filterable types only
- *   count<T>        → count records matching the handle's filter
- *   sample<T>       → seeded random sample of matching records
- *   pull<T>         → typed PAGE of matching records
+ *   create<T>Query  → register the caller's filter under a fresh query_id (handle)
+ *   update<T>Query  → replace the handle's filter (narrow); filterable types only
+ *   get<T>Count     → count records matching the handle's filter
+ *   get<T>Sample    → seeded random sample of matching records
+ *   list<T>         → typed PAGE of matching records
  *   watch<T>        → snapshot of matches + a live stream of matching records
  *   subscribe<T>Count → live count on each matching add/evict
- *   close<T>        → drop the handle
+ *   delete<T>Query  → drop the handle
  *
  * The handle→filter registry lives in this instance (queries). All per-type
  * knowledge is generated here; StratumHandler only returns an instance via
@@ -29,8 +29,8 @@ import java.util.List;
  * changes). Records return SOURCE RECORDS directly (the store holds them); a
  * federation caller may instead read keys and hydrate — both use the same filter.
  *
- * match<T>/pull<T>/watch<T> are getter-based over the typed store (no Hazelcast
- * attribute-name coupling); pull<T> pages via StratumHandler.pageSorted keyed by
+ * match<T>/list<T>/watch<T> are getter-based over the typed store (no Hazelcast
+ * attribute-name coupling); list<T> pages via StratumHandler.pageSorted keyed by
  * the record key.
  */
 public final class RecordMapImplGenerator {
@@ -80,7 +80,7 @@ public final class RecordMapImplGenerator {
         w.println();
         w.println("/**");
         w.println(" * Record-store query-plane implementation (RecordMap). One RPC family per");
-        w.println(" * record type; open<T>Query registers the caller's filter under a query_id");
+        w.println(" * record type; create<T>Query registers the caller's filter under a query_id");
         w.println(" * (handle) and every other op operates on that handle. Backed by the typed");
         w.println(" * StratumEventStores + RecordWatchHub.");
         w.println(" *");
@@ -152,20 +152,20 @@ public final class RecordMapImplGenerator {
                     ? ("        " + filterTy + " f = " + lower(t) + "Filter(req.getQueryId());")
                     : "        requireQuery(req.getQueryId());";
 
-            // open<T>Query — register the filter under a fresh handle.
+            // create<T>Query — register the filter under a fresh handle.
             w.println();
             w.println("    @Override");
-            w.println("    public Stratum.QueryHandle " + lower("Open" + t + "Query")
+            w.println("    public Stratum.QueryHandle " + lower("Create" + t + "Query")
                     + "(Caller caller, Stratum.Open" + t + "QueryRequest req) throws ProtoException {");
             w.println("        String qid = UUID.randomUUID().toString();");
             w.println("        queries.put(qid, " + (hasFilter ? "req.getFilter()" : "Boolean.TRUE") + ");");
             w.println("        return Stratum.QueryHandle.newBuilder().setQueryId(qid).build();");
             w.println("    }");
 
-            // count<T>
+            // get<T>Count
             w.println();
             w.println("    @Override");
-            w.println("    public Stratum.RecordCount " + lower("Count" + t)
+            w.println("    public Stratum.RecordCount " + lower("Get" + t + "Count")
                     + "(Caller caller, Stratum.QueryHandle req) throws ProtoException {");
             w.println(bindFilter);
             w.println("        long n = 0;");
@@ -177,10 +177,10 @@ public final class RecordMapImplGenerator {
             w.println("        return Stratum.RecordCount.newBuilder().setCount(n).build();");
             w.println("    }");
 
-            // sample<T> — seeded random sample of matching records.
+            // get<T>Sample — seeded random sample of matching records.
             w.println();
             w.println("    @Override");
-            w.println("    public Stratum.Sample" + t + "Response " + lower("Sample" + t)
+            w.println("    public Stratum.Sample" + t + "Response " + lower("Get" + t + "Sample")
                     + "(Caller caller, Stratum.Sample" + t + "Request req) throws ProtoException {");
             w.println(hasFilter
                     ? ("        " + filterTy + " f = " + lower(t) + "Filter(req.getQueryId());")
@@ -197,10 +197,10 @@ public final class RecordMapImplGenerator {
             w.println("                .addAllItems(matches.subList(0, lim)).build();");
             w.println("    }");
 
-            // pull<T> — typed PAGE of matching records, sorted by record key.
+            // list<T> — typed PAGE of matching records, sorted by record key.
             w.println();
             w.println("    @Override");
-            w.println("    public CollectionRuntime.Page<" + fqn + "> " + lower("Pull" + t)
+            w.println("    public CollectionRuntime.Page<" + fqn + "> " + lower("List" + t)
                     + "(Caller caller, Stratum.Pull" + t + "Request req, CollectionRuntime.PageParams page) throws ProtoException {");
             w.println(hasFilter
                     ? ("        " + filterTy + " f = " + lower(t) + "Filter(req.getQueryId());")
@@ -214,22 +214,22 @@ public final class RecordMapImplGenerator {
             w.println("        return StratumHandler.pageSorted(matches, page, ev -> java.util.List.of(ev." + keyGetter + "()));");
             w.println("    }");
 
-            // close<T> — drop the handle.
+            // delete<T>Query — drop the handle.
             w.println();
             w.println("    @Override");
-            w.println("    public Stratum.QueryStats " + lower("Close" + t)
+            w.println("    public Stratum.QueryStats " + lower("Delete" + t + "Query")
                     + "(Caller caller, Stratum.QueryHandle req) throws ProtoException {");
             w.println("        queries.remove(req.getQueryId());");
             w.println("        return Stratum.QueryStats.newBuilder().setQueryId(req.getQueryId()).setSize(0).build();");
             w.println("    }");
 
-            // refine<T> — replace the handle's filter outright. Not narrow-only: the
+            // update<T>Query — replace the handle's filter outright. Not narrow-only: the
             // prior filter is never read, so a caller may widen back to match-all.
             // Filterable record types only.
             if (hasFilter) {
                 w.println();
                 w.println("    @Override");
-                w.println("    public Stratum.QueryStats " + lower("Refine" + t)
+                w.println("    public Stratum.QueryStats " + lower("Update" + t + "Query")
                         + "(Caller caller, Stratum.Refine" + t + "Request req) throws ProtoException {");
                 w.println("        requireQuery(req.getQueryId());");
                 w.println("        " + filterTy + " f = req.getFilter();");

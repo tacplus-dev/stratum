@@ -17,7 +17,7 @@
 // It covers BOTH halves of the record query plane:
 //
 //   /stratum.RecordQuery/CreateTaskActivityQuery   c2s -- the user-facing half
-//   /stratum.RecordMap/OpenTaskActivityQuery       s2s -- the peer half
+//   /stratum.RecordMap/CreateTaskActivityQuery       s2s -- the peer half
 //
 // Before the c2s half existed (tacplus@main, this file's first commit), the
 // only surface was RecordMap and NO grant string authorized it. Not the
@@ -55,7 +55,7 @@ import java.util.Map;
 public class StratumAnyGrantProbe {
 
     private static final String C2S_METHOD = "/stratum.RecordQuery/CreateTaskActivityQuery";
-    private static final String S2S_METHOD = "/stratum.RecordMap/OpenTaskActivityQuery";
+    private static final String S2S_METHOD = "/stratum.RecordMap/CreateTaskActivityQuery";
 
     private static ImmutableKey newTestKey() throws Exception {
         return ImmutableKey.from(KeyHelpers.newEd25519Key());
@@ -117,7 +117,7 @@ public class StratumAnyGrantProbe {
         // Same policy the generated RecordMap wrapper registers at startup. The
         // generated RecordQuery wrapper registers none: it is c2s, so the
         // Authorizer takes the entitlement path.
-        a.setMethodAuth("OpenTaskActivityQuery", List.of("argus"));
+        a.setMethodAuth("CreateTaskActivityQuery", List.of("argus"));
 
         System.out.println("--- c2s surface (stratum.RecordQuery) ---");
         attempt(a, C2S_METHOD, "user token, grants=[STRATUM_ANY]  (what OPA mints today)",

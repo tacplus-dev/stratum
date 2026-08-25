@@ -39,7 +39,7 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
  * The lifecycle the generated plane imposes, in order:
  *
  * <pre>
- *   OpenAgentEventQuery(filter) -&gt; QueryHandle   filter applied at open, pins a query
+ *   CreateAgentEventQuery(filter) -&gt; QueryHandle filter applied at create, pins a query
  *   RefineAgentEvent(handle, f) -&gt; QueryStats    replaces the predicate, returns new size
  *   CountAgentEvent(handle)     -&gt; RecordCount   server-side size
  *   PullAgentEvent(handle,page) -&gt; items + next_page_token
@@ -199,7 +199,7 @@ public final class PullAgentEvent {
 
         // standing:false — a one-shot snapshot query. A standing query keeps its
         // working set live for WatchAgentEvent, which this binary does not use.
-        Stratum.QueryHandle handle = stub.openAgentEventQuery(
+        Stratum.QueryHandle handle = stub.createAgentEventQuery(
                 Stratum.OpenAgentEventQueryRequest.newBuilder()
                         .setFilter(filter)
                         .setStanding(false)
@@ -208,18 +208,18 @@ public final class PullAgentEvent {
 
         try {
             if (refine != null) {
-                r.refinedSize = stub.refineAgentEvent(
+                r.refinedSize = stub.updateAgentEventQuery(
                         Stratum.RefineAgentEventRequest.newBuilder()
                                 .setQueryId(handle.getQueryId())
                                 .setFilter(refine)
                                 .build()).getSize();
             }
 
-            r.count = stub.countAgentEvent(handle).getCount();
+            r.count = stub.getAgentEventCount(handle).getCount();
 
             String pageToken = "";
             while (true) {
-                Stratum.PullAgentEventResponse resp = stub.pullAgentEvent(
+                Stratum.PullAgentEventResponse resp = stub.listAgentEvent(
                         Stratum.PullAgentEventRequest.newBuilder()
                                 .setQueryId(handle.getQueryId())
                                 .setPageSize(pageSize)
@@ -240,7 +240,7 @@ public final class PullAgentEvent {
         } finally {
             // Close on the way out whatever happened above: a failed pull still
             // left a working set open in stratum.
-            r.closedSize = stub.closeAgentEvent(handle).getSize();
+            r.closedSize = stub.deleteAgentEventQuery(handle).getSize();
         }
         return r;
     }

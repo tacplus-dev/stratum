@@ -264,12 +264,12 @@ class PullAgentEventE2ETest {
     /** The handle is released: operating on a closed query is NOT_FOUND, not a silent match-all. */
     @Test
     void closeReleasesTheHandle() {
-        Stratum.QueryHandle h = stub.openAgentEventQuery(
+        Stratum.QueryHandle h = stub.createAgentEventQuery(
                 Stratum.OpenAgentEventQueryRequest.newBuilder().setFilter(filter().build()).build());
-        assertEquals(6, stub.countAgentEvent(h).getCount());
-        stub.closeAgentEvent(h);
+        assertEquals(6, stub.getAgentEventCount(h).getCount());
+        stub.deleteAgentEventQuery(h);
         StatusRuntimeException e =
-                assertThrows(StatusRuntimeException.class, () -> stub.countAgentEvent(h));
+                assertThrows(StatusRuntimeException.class, () -> stub.getAgentEventCount(h));
         assertTrue(e.getMessage().contains("unknown query_id"), e.getMessage());
     }
 

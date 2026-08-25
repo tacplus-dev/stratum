@@ -25,9 +25,9 @@ retiring that Hazelcast working-set cluster in a later cleanup.
 
 3. **RecordMapImplGenerator rewritten** to the query-handle API. It now emits a
    `StratumRecordMaps` that keeps a `query_id → filter` registry (instance field)
-   and, per record type T: `open<T>Query` (register filter → handle), `count<T>`,
-   `sample<T>` (seeded), `pull<T>` (paged via `pageSorted`), `close<T>`,
-   `refine<T>` (replace filter; filterable types only), `watch<T>` (snapshot +
+   and, per record type T: `create<T>Query` (register filter → handle), `get<T>Count`,
+   `get<T>Sample` (seeded), `list<T>` (paged via `pageSorted`), `delete<T>Query`,
+   `update<T>Query` (replace filter; filterable types only), `watch<T>` (snapshot +
    live via `RecordWatchHub`), `subscribe<T>Count` (via `RecordCountStream`) — all
    over the typed `StratumEventStores` using the getter-based `match<T>` predicate.
    The old ephemeral-map path (create/update-by-query/list/delete + WorkingSetStore)
