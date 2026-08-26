@@ -181,7 +181,7 @@ public final class EventStoreGenerator {
      * getter, so the name must be the camelCase property (occurredAtMs ->
      * getOccurredAtMs()), not the proto field name. Which field carries the
      * event's age is declared per record by
-     * (spec.timeseries_projection).retention.timestamp_field — it is
+     * (spec.record).retention.timestamp_field — it is
      * "timestamp_ms" on AgentEvent but "occurred_at_ms" on TaskActivity, so a
      * single hard-coded name is wrong for some record type by construction.
      * Emitting the wrong one is silent at build time and fails only at run time,
@@ -196,9 +196,9 @@ public final class EventStoreGenerator {
     private static String retentionAttribute(EventTopicDiscovery.TopicEvent e) {
         if (e.retentionTimestampField.isEmpty()) {
             throw new IllegalStateException(mapName(e) + " is stored by stratum but declares no"
-                    + " (spec.timeseries_projection).retention.timestamp_field, so the retention"
-                    + " sweep has no field to measure event age from. Declare a retention policy"
-                    + " on the record in " + e.protoRelPath + ".");
+                    + " (spec.record).retention.timestamp_field, so the retention sweep has no"
+                    + " field to measure event age from. Declare a retention policy on the"
+                    + " record's (spec.record) annotation in " + e.protoRelPath + ".");
         }
         return camel(e.retentionTimestampField);
     }

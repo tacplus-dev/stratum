@@ -58,9 +58,14 @@ public final class EventTopicDiscovery {
         public final List<QueryField> queryFields;
         /**
          * The field the record's retention age is measured from, taken from
-         * (spec.timeseries_projection).retention.timestamp_field — e.g.
-         * "timestamp_ms" on AgentEvent, "occurred_at_ms" on TaskActivity.
-         * "" when the record declares no retention policy.
+         * (spec.record).retention.timestamp_field — e.g. "timestamp_ms" on
+         * AgentEvent, "occurred_at_ms" on TaskActivity. "" when the record
+         * declares no retention policy.
+         *
+         * Retention is DELIVERY-side state. It used to ride on the record's
+         * timeseries projection annotation; BIG GOAL 3 acceptance item 3 split
+         * transformation from delivery and moved it onto (spec.record), which is
+         * the declaration that actually says this message is stored and delivered.
          */
         public final String retentionTimestampField;
         /** Java package from option java_package, e.g. "...model.types.vservices.agentsensor". */
@@ -103,10 +108,18 @@ public final class EventTopicDiscovery {
     // spec.record key, e.g.  option (spec.record) = { key: "event_id" ... }
     private static final Pattern RECORD_KEY = Pattern.compile(
             "\\(spec\\.record\\)\\s*=\\s*\\{.*?key:\\s*\"(\\w+)\"", Pattern.DOTALL);
-    // The retention clause of a (spec.timeseries_projection), e.g.
-    //   retention: {timestamp_field: "occurred_at_ms" duration_seconds: 7776000}
-    private static final Pattern RETENTION_TIMESTAMP_FIELD = Pattern.compile(
-            "retention:\\s*\\{[^}]*timestamp_field:\\s*\"(\\w+)\"");
+    // The retention clause INSIDE the (spec.record) annotation, e.g.
+    //   option (spec.record) = {
+    //     key: "event_id" owner: "spiffe_id" s2s: {auth_services: ["*"]}
+    //     retention: {timestamp_field: "occurred_at_ms" duration_seconds: 7776000}
+    //   };
+    // Deliberately anchored on (spec.record): retention is delivery-side state and
+    // only counts when declared there. An unanchored "retention:" match would also
+    // accept it on a (spec.transformation), which is exactly the coupling item 3
+    // removed — and would silently keep working while reading the wrong thing.
+    private static final Pattern RECORD_RETENTION_TIMESTAMP_FIELD = Pattern.compile(
+            "\\(spec\\.record\\)\\s*=\\s*\\{.*?retention:\\s*\\{[^}]*timestamp_field:\\s*\"(\\w+)\"",
+            Pattern.DOTALL);
     // A field carrying (spec.query_field), e.g.
     //   string spiffe_id = 4 [(spec.query_field) = {op: QUERY_OP_EQ}];
     private static final Pattern QUERY_FIELD = Pattern.compile(
@@ -214,26 +227,18 @@ public final class EventTopicDiscovery {
     }
 
     /**
-     * The single field this record's retention age is measured from.
+     * The single field this record's retention age is measured from, read from the
+     * record's own (spec.record).retention clause.
      *
-     * A record may declare several timeseries projections (AgentEvent declares
-     * five); they describe the same rows, so their retention clauses must name
-     * the same timestamp field. Two different names would leave no single answer
-     * to "how old is this event", so that is rejected here rather than resolved
-     * arbitrarily.
+     * There is exactly one (spec.record) per message, so there is exactly one
+     * answer to "how old is this event" — no reconciliation across several
+     * declarations is needed or possible. That is the point of putting retention
+     * on the delivery declaration: a record may declare any number of
+     * transformations, and none of them can disagree about its lifetime.
      */
     private static String parseRetentionTimestampField(String eventType, String eventBody) {
-        java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
-        Matcher m = RETENTION_TIMESTAMP_FIELD.matcher(eventBody);
-        while (m.find()) {
-            names.add(m.group(1));
-        }
-        if (names.size() > 1) {
-            throw new IllegalStateException(eventType + " declares conflicting retention"
-                    + " timestamp_field values " + names + " across its timeseries"
-                    + " projections; they must all name the same field.");
-        }
-        return names.isEmpty() ? "" : names.iterator().next();
+        Matcher m = RECORD_RETENTION_TIMESTAMP_FIELD.matcher(eventBody);
+        return m.find() ? m.group(1) : "";
     }
 
     private static List<QueryField> parseQueryFields(String eventBody) {
