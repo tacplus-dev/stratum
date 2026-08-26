@@ -7,6 +7,12 @@ every per-record-type surface is generated from the tacplus contract.
 
 > Authoritative annotation contract: `schematic/tacplus/docs/RECORD_EVENT_MODEL.md`.
 
+> **2026-08-25 — timedb and graphdb are in the boneyard** (BIG GOAL 3, first move
+> #1): out of the fleet build, protos deleted, no images published. Every mention
+> of them below describes the world before that. Stratum is now the only store on
+> the bus. `timeseries_projection` survives as a record's **retention** declaration;
+> `graph_projection` and the two `*_store` annotations have no host at all.
+
 ## Role
 
 ```
