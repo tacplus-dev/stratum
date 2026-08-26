@@ -16,8 +16,8 @@
 //
 // It covers BOTH halves of the record query plane:
 //
-//   /taskquery.RecordQuery/CreateTaskActivityQuery   c2s -- the user-facing half
-//   /taskquery.RecordMap/CreateTaskActivityQuery     s2s -- the peer half
+//   /query.RecordQuery/CreateTaskActivityQuery   c2s -- the user-facing half
+//   /query.RecordMap/CreateTaskActivityQuery     s2s -- the peer half
 //
 // Before the c2s half existed (tacplus@main, this file's first commit), the
 // only surface was RecordMap and NO grant string authorized it. Not the
@@ -28,16 +28,16 @@
 // so its whole surface sat outside the grant vocabulary and Grants.normalize
 // dropped every token as unknown.
 //
-// What it shows now: TASKQUERY_ANY (and the exact c2s token) ALLOW the c2s
+// What it shows now: QUERY_ANY (and the exact c2s token) ALLOW the c2s
 // method, unentitled callers are still DENIED, and the s2s method stays denied
 // to user tokens on every input -- which is the point of keeping the surfaces
 // split rather than making RecordMap itself c2s.
 //
 // The plane moved off stratum's own proto and onto the `query` trait
-// (testapp/proto/vservices/query.proto, package taskquery), so the method
+// (testapp/proto/vservices/query.proto, package query), so the method
 // paths and the grant vocabulary are keyed on the CONTRACT, not on the host:
 // STRATUM_ANY no longer expands to any of these RPCs, and the wildcard that
-// does is TASKQUERY_ANY. That is the shape the trait exists to produce --
+// does is QUERY_ANY. That is the shape the trait exists to produce --
 // blast radius belongs to the contract, not to whoever implements it today.
 //
 package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.grpcserver;
@@ -61,8 +61,8 @@ import java.util.Map;
  */
 public class StratumAnyGrantProbe {
 
-    private static final String C2S_METHOD = "/taskquery.RecordQuery/CreateTaskActivityQuery";
-    private static final String S2S_METHOD = "/taskquery.RecordMap/CreateTaskActivityQuery";
+    private static final String C2S_METHOD = "/query.RecordQuery/CreateTaskActivityQuery";
+    private static final String S2S_METHOD = "/query.RecordMap/CreateTaskActivityQuery";
 
     private static ImmutableKey newTestKey() throws Exception {
         return ImmutableKey.from(KeyHelpers.newEd25519Key());
@@ -111,10 +111,10 @@ public class StratumAnyGrantProbe {
         System.out.println("s2s control method:    " + S2S_METHOD);
         System.out.println("  required exact grant: "
                 + Authorizer.methodGrantToken(Authorizer.SERVICE_NAME, S2S_METHOD));
-        System.out.println("Grants.lookup(TASKQUERY_ANY) present: " + Grants.lookup("TASKQUERY_ANY").isPresent());
-        System.out.println("Grants.expand(TASKQUERY_ANY) = " + Grants.expand("TASKQUERY_ANY"));
-        System.out.println("Grants.normalize([TASKQUERY_ANY]) = " + Grants.normalize(List.of("TASKQUERY_ANY")));
-        System.out.println("Grants.unknownTokens([TASKQUERY_ANY]) = " + Grants.unknownTokens(List.of("TASKQUERY_ANY")));
+        System.out.println("Grants.lookup(QUERY_ANY) present: " + Grants.lookup("QUERY_ANY").isPresent());
+        System.out.println("Grants.expand(QUERY_ANY) = " + Grants.expand("QUERY_ANY"));
+        System.out.println("Grants.normalize([QUERY_ANY]) = " + Grants.normalize(List.of("QUERY_ANY")));
+        System.out.println("Grants.unknownTokens([QUERY_ANY]) = " + Grants.unknownTokens(List.of("QUERY_ANY")));
         System.out.println("catalog size = " + Grants.tokens().size());
         System.out.println();
 
@@ -126,15 +126,15 @@ public class StratumAnyGrantProbe {
         // Authorizer takes the entitlement path.
         a.setMethodAuth("CreateTaskActivityQuery", List.of("argus"));
 
-        System.out.println("--- c2s surface (taskquery.RecordQuery) ---");
-        attempt(a, C2S_METHOD, "user token, grants=[TASKQUERY_ANY]  (the trait wildcard)",
-                userToken(key, List.of("TASKQUERY_ANY")));
-        attempt(a, C2S_METHOD, "user token, grants=[TASKQUERY_WRITE_ANY]  (capability wildcard)",
-                userToken(key, List.of("TASKQUERY_WRITE_ANY")));
-        attempt(a, C2S_METHOD, "user token, grants=[TASKQUERY_RECORD_QUERY_CREATE_TASK_ACTIVITY_QUERY] (exact)",
-                userToken(key, List.of("TASKQUERY_RECORD_QUERY_CREATE_TASK_ACTIVITY_QUERY")));
-        attempt(a, C2S_METHOD, "user token, grants=[TASKQUERY_READ_ANY]  (wrong capability control)",
-                userToken(key, List.of("TASKQUERY_READ_ANY")));
+        System.out.println("--- c2s surface (query.RecordQuery) ---");
+        attempt(a, C2S_METHOD, "user token, grants=[QUERY_ANY]  (the trait wildcard)",
+                userToken(key, List.of("QUERY_ANY")));
+        attempt(a, C2S_METHOD, "user token, grants=[QUERY_WRITE_ANY]  (capability wildcard)",
+                userToken(key, List.of("QUERY_WRITE_ANY")));
+        attempt(a, C2S_METHOD, "user token, grants=[QUERY_RECORD_QUERY_CREATE_TASK_ACTIVITY_QUERY] (exact)",
+                userToken(key, List.of("QUERY_RECORD_QUERY_CREATE_TASK_ACTIVITY_QUERY")));
+        attempt(a, C2S_METHOD, "user token, grants=[QUERY_READ_ANY]  (wrong capability control)",
+                userToken(key, List.of("QUERY_READ_ANY")));
         attempt(a, C2S_METHOD, "user token, grants=[STRATUM_ANY]  (host wildcard — no longer reaches the trait)",
                 userToken(key, List.of("STRATUM_ANY")));
         attempt(a, C2S_METHOD, "user token, grants=[TASKS_ANY]  (unentitled control)",
@@ -143,9 +143,9 @@ public class StratumAnyGrantProbe {
                 userToken(key, List.of()));
 
         System.out.println();
-        System.out.println("--- s2s surface (taskquery.RecordMap), unchanged ---");
-        attempt(a, S2S_METHOD, "user token, grants=[TASKQUERY_ANY]",
-                userToken(key, List.of("TASKQUERY_ANY")));
+        System.out.println("--- s2s surface (query.RecordMap), unchanged ---");
+        attempt(a, S2S_METHOD, "user token, grants=[QUERY_ANY]",
+                userToken(key, List.of("QUERY_ANY")));
         attempt(a, S2S_METHOD, "user token, grants=[]",
                 userToken(key, List.of()));
     }
