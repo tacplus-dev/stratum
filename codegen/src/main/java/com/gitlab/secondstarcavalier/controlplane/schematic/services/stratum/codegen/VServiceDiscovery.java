@@ -77,7 +77,7 @@ public class VServiceDiscovery {
         /**
          * FQN of the generated server wrapper class whose nested
          * {@code <Name>Handler} interface the implementation implements, e.g.
-         * {@code ...model.s2sm.internal.grpc.servers.vservices.taskquery.RecordMap}.
+         * {@code ...model.s2sm.internal.grpc.servers.vservices.query.RecordMap}.
          */
         public String wrapperFqn(String modelBase, String smPrefix) {
             return modelBase + "." + smPrefix + ".internal.grpc.servers."
