@@ -46,34 +46,50 @@ public class StratumCodegenMojo extends AbstractMojo {
     public void execute() throws MojoExecutionException {
         getLog().info("Stratum codegen: scanning for hosted vservices in " + protoDir);
 
-        Path vservicesDir = protoDir.toPath().resolve("vservices");
-        if (!vservicesDir.toFile().exists()) {
-            getLog().warn("vservices directory not found: " + vservicesDir + " — skipping codegen");
+        Path protoRoot = protoDir.toPath();
+        if (!protoRoot.toFile().isDirectory()) {
+            getLog().warn("proto directory not found: " + protoRoot + " — skipping codegen");
             return;
         }
 
         try {
             List<VServiceDiscovery.HostedVService> services =
-                    VServiceDiscovery.discover(vservicesDir, "stratum");
+                    VServiceDiscovery.discover(protoRoot, "stratum");
 
             getLog().info("Discovered " + services.size() + " hosted vservice(s):");
             for (VServiceDiscovery.HostedVService svc : services) {
                 getLog().info("  " + svc);
             }
 
+            // The record query plane's two sibling services. Their names, proto
+            // package and message outer class all come off the declaration that
+            // produced them, so moving the plane from the record store's own proto
+            // onto a (spec.trait) needs no edit here.
+            VServiceDiscovery.RecordPlane plane =
+                    VServiceDiscovery.discoverRecordPlane(protoRoot, "stratum");
+            getLog().info(plane == null
+                    ? "No record query plane declared"
+                    : "Discovered record query plane: " + plane);
+
             Path out = outputDir.toPath();
-            VServiceWiringGenerator.generate(out, services);
+            VServiceWiringGenerator.generate(out, services, plane);
             getLog().info("Generated StratumVServiceBase.java");
 
             List<EventTopicDiscovery.TopicEvent> allEvents =
-                    EventTopicDiscovery.discover(protoDir.toPath());
-            // The event store and RecordMap query plane operate on record types
-            // (spec.record, identified by a non-empty recordKey). Plain EventBus
-            // topics (e.g. TaskEvent) are consumed by other subscribers but are not
-            // stored or queryable via stratum.
+                    EventTopicDiscovery.discover(protoRoot);
+            // The event store and the query plane operate on record types —
+            // messages declaring (spec.record). Plain EventBus topics (e.g.
+            // TaskEvent) are consumed by other subscribers but are not stored or
+            // queryable via stratum.
+            //
+            // The test is the annotation's PRESENCE, matching tacplus: it emits the
+            // plane's RPC family for every (spec.record) message and defaults a
+            // missing key: to event_id. Requiring a declared key here dropped such a
+            // record from the impl while its RPCs stayed in the generated interface,
+            // which is an abstract-method gap javac rejects.
             List<EventTopicDiscovery.TopicEvent> events = new ArrayList<>();
             for (EventTopicDiscovery.TopicEvent ev : allEvents) {
-                if (!ev.recordKey.isEmpty()) {
+                if (ev.isRecord) {
                     events.add(ev);
                 }
             }
@@ -85,15 +101,17 @@ public class StratumCodegenMojo extends AbstractMojo {
             EventStoreGenerator.generate(out, events);
             getLog().info("Generated StratumEventStores.java");
 
-            // The record map plane (RecordMap) is backed by the same record types
-            // the hot store holds, so it reuses the record-type list.
-            RecordMapImplGenerator.generate(out, events);
-            getLog().info("Generated StratumRecordMaps.java");
+            if (plane != null) {
+                // The s2s half is backed by the same record types the hot store
+                // holds, so it reuses the record-type list.
+                RecordMapImplGenerator.generate(out, plane.s2s, events);
+                getLog().info("Generated StratumRecordMaps.java");
 
-            // The c2s half (RecordQuery) is the same lifecycle under governed
-            // verbs, so its impl is a delegation shim onto the s2s one.
-            RecordQueryImplGenerator.generate(out, events);
-            getLog().info("Generated StratumRecordQueries.java");
+                // The c2s half is the same lifecycle under governed verbs, so its
+                // impl is a delegation shim onto the s2s one.
+                RecordQueryImplGenerator.generate(out, plane.c2s, events);
+                getLog().info("Generated StratumRecordQueries.java");
+            }
 
         } catch (IOException e) {
             throw new MojoExecutionException("Stratum codegen failed", e);

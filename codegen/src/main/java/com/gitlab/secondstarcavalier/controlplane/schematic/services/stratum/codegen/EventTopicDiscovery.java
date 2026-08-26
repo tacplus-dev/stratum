@@ -52,7 +52,24 @@ public final class EventTopicDiscovery {
         public final String eventType;
         /** Relative proto path, e.g. "vservices/agent-sensor.proto". */
         public final String protoRelPath;
-        /** Record key field (spec.record key), e.g. "event_id" — "" if unknown. */
+        /**
+         * Whether the event message declares {@code option (spec.record)} — i.e.
+         * whether tacplus emits the query plane's RPC family for it.
+         *
+         * This, not a non-empty {@link #recordKey}, is what "is a record" means.
+         * tacplus keys the whole plane off the annotation's presence and defaults
+         * a missing {@code key:} to {@value EventTopicDiscovery#DEFAULT_RECORD_KEY}; a record that
+         * omits {@code key:} therefore gets RPCs in the generated interface, and
+         * dropping it here would leave StratumRecordMaps with an abstract-method
+         * gap that fails javac.
+         */
+        public final boolean isRecord;
+        /**
+         * Record key field from {@code (spec.record).key}, defaulted to
+         * {@value EventTopicDiscovery#DEFAULT_RECORD_KEY} when the record declares none — the same
+         * default tacplus applies (model.DefaultRecordKeyField). "" only when the
+         * message is not a record at all.
+         */
         public final String recordKey;
         /** Queryable fields (spec.query_field) — empty if the record declares none. */
         public final List<QueryField> queryFields;
@@ -74,12 +91,13 @@ public final class EventTopicDiscovery {
         public final String outerClassName;
 
         public TopicEvent(String protoPackage, String eventType, String protoRelPath,
-                          String recordKey, List<QueryField> queryFields,
+                          boolean isRecord, String recordKey, List<QueryField> queryFields,
                           String retentionTimestampField,
                           String javaPackage, String outerClassName) {
             this.protoPackage = protoPackage;
             this.eventType = eventType;
             this.protoRelPath = protoRelPath;
+            this.isRecord = isRecord;
             this.recordKey = recordKey;
             this.queryFields = queryFields;
             this.retentionTimestampField = retentionTimestampField;
@@ -94,6 +112,14 @@ public final class EventTopicDiscovery {
         }
     }
 
+    /**
+     * The record key tacplus assumes when a record declares no {@code key:}
+     * (its model.DefaultRecordKeyField). Both sides must agree: tacplus emits
+     * the RPC family with this as the Pull/Watch order_by, so stratum has to
+     * implement it under the same name.
+     */
+    public static final String DEFAULT_RECORD_KEY = "event_id";
+
     private static final Pattern PACKAGE_DECL = Pattern.compile("^package\\s+(\\S+);");
     private static final Pattern JAVA_PACKAGE = Pattern.compile(
             "option\\s+java_package\\s*=\\s*\"([^\"]+)\"");
@@ -105,9 +131,13 @@ public final class EventTopicDiscovery {
     // Field carrying the topic, e.g.  AgentEvent event_stream = 1 [(spec.topic) = true];
     private static final Pattern TOPIC_FIELD = Pattern.compile(
             "([\\w.]+)\\s+\\w+\\s*=\\s*\\d+\\s*\\[[^\\]]*\\(spec\\.topic\\)\\s*=\\s*true");
-    // spec.record key, e.g.  option (spec.record) = { key: "event_id" ... }
+    // The record key inside the (spec.record) literal, e.g. { key: "event_id" ... }.
+    // Matched only against recordOptionBlock's brace-balanced text, and only on a
+    // bare "key:" — "\\(spec\\.record\\)...key:" with DOTALL would run past the
+    // literal's closing brace to find any key: later in the file, and a bare
+    // "key:" also matches the tail of sort_key:/partition_key:/store_key:.
     private static final Pattern RECORD_KEY = Pattern.compile(
-            "\\(spec\\.record\\)\\s*=\\s*\\{.*?key:\\s*\"(\\w+)\"", Pattern.DOTALL);
+            "(?<!\\w)key:\\s*\"(\\w+)\"");
     // Start of the (spec.record) annotation literal. The retention clause is read
     // only from INSIDE that literal's balanced braces (see recordOptionBlock):
     // retention is delivery-side state and only counts where delivery is declared.
@@ -150,7 +180,12 @@ public final class EventTopicDiscovery {
     }
 
     private static void scanProto(Path proto, Path baseDir, List<TopicEvent> result) throws IOException {
-        List<String> lines = Files.readAllLines(proto);
+        // Every parse below runs over comment-free text. A commented-out
+        // annotation is not a declaration: left in, a commented (spec.query_field)
+        // produced a phantom filter field stratum implemented and tacplus's
+        // descriptor-based side never emitted, and a "{" or "}" in prose threw off
+        // the brace-balanced message scan.
+        List<String> lines = stripLineComments(Files.readAllLines(proto));
         String relPath = baseDir.relativize(proto).toString();
 
         String protoPackage = "";
@@ -216,16 +251,27 @@ public final class EventTopicDiscovery {
                 continue; // same-package events only (skip e.g. trace.TraceEvent)
             }
             String eventBody = bodies.getOrDefault(type, "");
+            String recordOption = recordOptionBlock(eventBody);
+            boolean isRecord = !recordOption.isEmpty();
             result.add(new TopicEvent(protoPackage, type, relPath,
-                    parseRecordKey(eventBody), parseQueryFields(eventBody),
-                    parseRetentionTimestampField(type, eventBody),
+                    isRecord, parseRecordKey(recordOption), parseQueryFields(eventBody),
+                    parseRetentionTimestampField(recordOption),
                     javaPackage, outerClassName));
         }
     }
 
-    private static String parseRecordKey(String eventBody) {
-        Matcher m = RECORD_KEY.matcher(eventBody);
-        return m.find() ? m.group(1) : "";
+    /**
+     * The record's key field, read only from inside its own (spec.record)
+     * literal and defaulted the way tacplus defaults it. "" when the message
+     * declares no (spec.record) — the one case where there is no key because
+     * there is no record.
+     */
+    private static String parseRecordKey(String recordOption) {
+        if (recordOption.isEmpty()) {
+            return "";
+        }
+        Matcher m = RECORD_KEY.matcher(recordOption);
+        return m.find() ? m.group(1) : DEFAULT_RECORD_KEY;
     }
 
     /**
@@ -238,12 +284,11 @@ public final class EventTopicDiscovery {
      * on the delivery declaration: a record may declare any number of
      * transformations, and none of them can disagree about its lifetime.
      */
-    private static String parseRetentionTimestampField(String eventType, String eventBody) {
-        String recordOption = recordOptionBlock(eventBody);
+    private static String parseRetentionTimestampField(String recordOption) {
         if (recordOption.isEmpty()) {
             return "";
         }
-        Matcher m = RETENTION_TIMESTAMP_FIELD.matcher(stripLineComments(recordOption));
+        Matcher m = RETENTION_TIMESTAMP_FIELD.matcher(recordOption);
         return m.find() ? m.group(1) : "";
     }
 
@@ -274,14 +319,14 @@ public final class EventTopicDiscovery {
         return ""; // unbalanced: protoc will complain about it first
     }
 
-    /** Drops // line comments so a retention clause quoted in prose cannot match. */
-    private static String stripLineComments(String block) {
-        StringBuilder b = new StringBuilder();
-        for (String line : block.split("\n", -1)) {
+    /** Drops // line comments so commented-out proto cannot be parsed as declared. */
+    static List<String> stripLineComments(List<String> lines) {
+        List<String> out = new ArrayList<>(lines.size());
+        for (String line : lines) {
             int idx = line.indexOf("//");
-            b.append(idx >= 0 ? line.substring(0, idx) : line).append('\n');
+            out.add(idx >= 0 ? line.substring(0, idx) : line);
         }
-        return b.toString();
+        return out;
     }
 
     private static List<QueryField> parseQueryFields(String eventBody) {

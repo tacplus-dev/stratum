@@ -21,13 +21,12 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.sys.x509.X509;
 
 /**
- * StratumHandler wires together EventStore and the generated vservice-neutral
- * RecordMap service.
+ * StratumHandler wires together EventStore and the generated record query plane.
  *
  * Startup sequence:
- *   1. getRecordMapGrpcImpl() — lazily initialises EventStore (hot event
+ *   1. provideRecordPlane() — lazily initialises EventStore (hot event
  *      Hazelcast cluster) from config defaults, then returns
- *      StratumRecordMaps for registration.
+ *      StratumRecordMaps for registration on both caller surfaces.
  *   2. handleConfig() — re-applies config when kernel delivers it.
  *   3. onEventStream() begins receiving records from the EventBus, storing them.
  *
@@ -53,17 +52,17 @@ public class StratumHandler extends StratumVServiceBase {
     // StratumVServiceBase — vservice wiring
     // -----------------------------------------------------------------------
 
-    @Override
-    public com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.RecordMap.RecordMapHandler getRecordMapGrpcImpl() {
-        return recordMaps();
-    }
-
     /**
      * The one query-plane implementation, shared by both caller surfaces.
      * Created once: the handle registry lives in the instance, so returning a
      * fresh one per surface would give each surface its own set of query ids.
+     *
+     * StratumVServiceBase binds this to the plane's two generated services. The
+     * plane's service names come off the (spec.trait) declaration that produced
+     * it, so nothing here may name them.
      */
-    private synchronized StratumRecordMaps recordMaps() {
+    @Override
+    protected synchronized StratumRecordMaps provideRecordPlane() {
         try {
             if (eventStore == null) {
                 initFromConfig(Helpers.configDefaults(Stratum.Config.getDefaultInstance()).build());
@@ -78,25 +77,6 @@ public class StratumHandler extends StratumVServiceBase {
             recordMaps = new StratumRecordMaps(() -> eventStore.stores());
         }
         return recordMaps;
-    }
-
-    @Override
-    public void handleRecordMapConfig(Stratum.Config cfg) throws Exception {
-        initFromConfig(cfg);
-    }
-
-    // RecordQuery is the C2S half of the same query plane (tacplus emits the
-    // plane once per caller surface). It delegates to the SAME StratumRecordMaps
-    // instance, so both surfaces share one handle registry — a query opened by a
-    // user through the gateway and one opened by a peer live in the same place.
-    @Override
-    public com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.RecordQuery.RecordQueryHandler getRecordQueryGrpcImpl() {
-        return new StratumRecordQueries(recordMaps());
-    }
-
-    @Override
-    public void handleRecordQueryConfig(Stratum.Config cfg) throws Exception {
-        initFromConfig(cfg);
     }
 
     @Override
@@ -176,7 +156,7 @@ public class StratumHandler extends StratumVServiceBase {
         // Nothing to do when the config has not actually changed.
         //
         // This method is reachable from SIX places: the initial config, the
-        // handleConfig hot-reload, handleRecordMapConfig, two lazy-init
+        // handleConfig hot-reload, the plane's config handlers, two lazy-init
         // fallbacks and a request path. Every one of them used to build a new
         // EventStore, and that calls
         // Hazelcast.newHazelcastInstance -- so a repeated config delivery left
