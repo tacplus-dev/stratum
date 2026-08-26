@@ -16,8 +16,8 @@ import io.grpc.netty.shaded.io.grpc.netty.NegotiationType;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.netty.shaded.io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 
-import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.services.stratum.RecordMapGrpc;
-import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.services.stratum.Stratum;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.vservices.taskquery.RecordMapGrpc;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.vservices.taskquery.Taskquery;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor;
 
 /**
@@ -82,12 +82,12 @@ public final class PullAgentEvent {
         boolean plaintext;
         boolean printFilterFields;
         int pageSize = DEFAULT_PAGE_SIZE;
-        final Stratum.AgentEventFilter.Builder filter = Stratum.AgentEventFilter.newBuilder();
-        Stratum.AgentEventFilter.Builder refine;
+        final Taskquery.AgentEventFilter.Builder filter = Taskquery.AgentEventFilter.newBuilder();
+        Taskquery.AgentEventFilter.Builder refine;
 
-        Stratum.AgentEventFilter.Builder refine() {
+        Taskquery.AgentEventFilter.Builder refine() {
             if (refine == null) {
-                refine = Stratum.AgentEventFilter.newBuilder();
+                refine = Taskquery.AgentEventFilter.newBuilder();
             }
             return refine;
         }
@@ -161,7 +161,7 @@ public final class PullAgentEvent {
      */
     static List<String> filterFieldNames() {
         List<String> names = new ArrayList<>();
-        for (Descriptors.FieldDescriptor f : Stratum.AgentEventFilter.getDescriptor().getFields()) {
+        for (Descriptors.FieldDescriptor f : Taskquery.AgentEventFilter.getDescriptor().getFields()) {
             if (f.getNumber() >= 200) {
                 continue;
             }
@@ -192,15 +192,15 @@ public final class PullAgentEvent {
      * channel — the assertions must exercise the shipped path, not a copy of it.
      */
     static Result run(RecordMapGrpc.RecordMapBlockingStub stub,
-                      Stratum.AgentEventFilter filter,
-                      Stratum.AgentEventFilter refine,
+                      Taskquery.AgentEventFilter filter,
+                      Taskquery.AgentEventFilter refine,
                       int pageSize) {
         Result r = new Result();
 
         // standing:false — a one-shot snapshot query. A standing query keeps its
         // working set live for WatchAgentEvent, which this binary does not use.
-        Stratum.QueryHandle handle = stub.createAgentEventQuery(
-                Stratum.OpenAgentEventQueryRequest.newBuilder()
+        Taskquery.QueryHandle handle = stub.createAgentEventQuery(
+                Taskquery.OpenAgentEventQueryRequest.newBuilder()
                         .setFilter(filter)
                         .setStanding(false)
                         .build());
@@ -209,7 +209,7 @@ public final class PullAgentEvent {
         try {
             if (refine != null) {
                 r.refinedSize = stub.updateAgentEventQuery(
-                        Stratum.RefineAgentEventRequest.newBuilder()
+                        Taskquery.RefineAgentEventRequest.newBuilder()
                                 .setQueryId(handle.getQueryId())
                                 .setFilter(refine)
                                 .build()).getSize();
@@ -219,8 +219,8 @@ public final class PullAgentEvent {
 
             String pageToken = "";
             while (true) {
-                Stratum.PullAgentEventResponse resp = stub.listAgentEvent(
-                        Stratum.PullAgentEventRequest.newBuilder()
+                Taskquery.PullAgentEventResponse resp = stub.listAgentEvent(
+                        Taskquery.PullAgentEventRequest.newBuilder()
                                 .setQueryId(handle.getQueryId())
                                 .setPageSize(pageSize)
                                 .setPageToken(pageToken)

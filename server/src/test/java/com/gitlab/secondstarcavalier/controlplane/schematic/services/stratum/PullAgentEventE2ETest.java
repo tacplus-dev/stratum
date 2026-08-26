@@ -22,9 +22,9 @@ import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.token.TokenWrapper;
-import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.services.stratum.RecordMap;
-import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.services.stratum.RecordMapGrpc;
-import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.services.stratum.Stratum;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.vservices.taskquery.RecordMap;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.vservices.taskquery.RecordMapGrpc;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.vservices.taskquery.Taskquery;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.sys.errors.ProtoException;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor.AgentEvent;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor.HookPhase;
@@ -149,12 +149,12 @@ class PullAgentEventE2ETest {
         }
     }
 
-    private static Stratum.AgentEventFilter.Builder filter() {
-        return Stratum.AgentEventFilter.newBuilder();
+    private static Taskquery.AgentEventFilter.Builder filter() {
+        return Taskquery.AgentEventFilter.newBuilder();
     }
 
     /** Runs the shipped lifecycle with a page size of 2, so paging is walked, not skipped. */
-    private static PullAgentEvent.Result pull(Stratum.AgentEventFilter f) {
+    private static PullAgentEvent.Result pull(Taskquery.AgentEventFilter f) {
         return PullAgentEvent.run(stub, f, null, 2);
     }
 
@@ -222,7 +222,7 @@ class PullAgentEventE2ETest {
     /** Count is the server's own size, so it has to agree with what paging returns. */
     @Test
     void countAgreesWithPagedResultCount() {
-        for (Stratum.AgentEventFilter f : List.of(
+        for (Taskquery.AgentEventFilter f : List.of(
                 filter().build(),
                 filter().setSessionId("s1").build(),
                 filter().setAgentId("ag2").build(),
@@ -269,8 +269,8 @@ class PullAgentEventE2ETest {
     /** The handle is released: operating on a closed query is NOT_FOUND, not a silent match-all. */
     @Test
     void closeReleasesTheHandle() {
-        Stratum.QueryHandle h = stub.createAgentEventQuery(
-                Stratum.OpenAgentEventQueryRequest.newBuilder().setFilter(filter().build()).build());
+        Taskquery.QueryHandle h = stub.createAgentEventQuery(
+                Taskquery.OpenAgentEventQueryRequest.newBuilder().setFilter(filter().build()).build());
         assertEquals(6, stub.getAgentEventCount(h).getCount());
         stub.deleteAgentEventQuery(h);
         StatusRuntimeException e =
@@ -294,7 +294,7 @@ class PullAgentEventE2ETest {
         assertTrue(a.plaintext);
         assertEquals(7, a.pageSize);
 
-        Stratum.AgentEventFilter f = a.filter.build();
+        Taskquery.AgentEventFilter f = a.filter.build();
         assertEquals("s2", f.getSessionId());
         assertEquals(SPIFFE_A, f.getSpiffeId());
         assertEquals("ag3", f.getAgentId());
@@ -304,7 +304,7 @@ class PullAgentEventE2ETest {
 
         // An unmentioned criterion must be ABSENT, not zero: the generated filter
         // fields are optional, and a present-but-default value is a predicate.
-        Stratum.AgentEventFilter empty =
+        Taskquery.AgentEventFilter empty =
                 PullAgentEvent.parseArgs(new String[] {"--target", "h:1"}).filter.build();
         assertFalse(empty.hasSessionId());
         assertFalse(empty.hasTimestampMsFrom());
