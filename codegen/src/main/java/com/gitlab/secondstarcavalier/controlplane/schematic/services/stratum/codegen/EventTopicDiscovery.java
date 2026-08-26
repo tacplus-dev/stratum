@@ -108,18 +108,20 @@ public final class EventTopicDiscovery {
     // spec.record key, e.g.  option (spec.record) = { key: "event_id" ... }
     private static final Pattern RECORD_KEY = Pattern.compile(
             "\\(spec\\.record\\)\\s*=\\s*\\{.*?key:\\s*\"(\\w+)\"", Pattern.DOTALL);
-    // The retention clause INSIDE the (spec.record) annotation, e.g.
-    //   option (spec.record) = {
-    //     key: "event_id" owner: "spiffe_id" s2s: {auth_services: ["*"]}
-    //     retention: {timestamp_field: "occurred_at_ms" duration_seconds: 7776000}
-    //   };
-    // Deliberately anchored on (spec.record): retention is delivery-side state and
-    // only counts when declared there. An unanchored "retention:" match would also
-    // accept it on a (spec.transformation), which is exactly the coupling item 3
-    // removed — and would silently keep working while reading the wrong thing.
-    private static final Pattern RECORD_RETENTION_TIMESTAMP_FIELD = Pattern.compile(
-            "\\(spec\\.record\\)\\s*=\\s*\\{.*?retention:\\s*\\{[^}]*timestamp_field:\\s*\"(\\w+)\"",
-            Pattern.DOTALL);
+    // Start of the (spec.record) annotation literal. The retention clause is read
+    // only from INSIDE that literal's balanced braces (see recordOptionBlock):
+    // retention is delivery-side state and only counts where delivery is declared.
+    // A regex alone cannot do this — ".*?" between "(spec.record) = {" and
+    // "retention:" runs straight past the literal's closing brace and would happily
+    // pick up a retention clause on a (spec.transformation) further down the
+    // message, which is exactly the coupling BIG GOAL 3 item 3 removed.
+    private static final Pattern RECORD_OPTION_START = Pattern.compile(
+            "\\(spec\\.record\\)\\s*=\\s*\\{");
+    // The retention clause, matched only within the record option literal, e.g.
+    //   retention: {timestamp_field: "occurred_at_ms" duration_seconds: 7776000}
+    private static final Pattern RETENTION_TIMESTAMP_FIELD = Pattern.compile(
+            "retention:\\s*\\{[^}]*timestamp_field:\\s*\"(\\w+)\"");
+
     // A field carrying (spec.query_field), e.g.
     //   string spiffe_id = 4 [(spec.query_field) = {op: QUERY_OP_EQ}];
     private static final Pattern QUERY_FIELD = Pattern.compile(
@@ -237,8 +239,49 @@ public final class EventTopicDiscovery {
      * transformations, and none of them can disagree about its lifetime.
      */
     private static String parseRetentionTimestampField(String eventType, String eventBody) {
-        Matcher m = RECORD_RETENTION_TIMESTAMP_FIELD.matcher(eventBody);
+        String recordOption = recordOptionBlock(eventBody);
+        if (recordOption.isEmpty()) {
+            return "";
+        }
+        Matcher m = RETENTION_TIMESTAMP_FIELD.matcher(stripLineComments(recordOption));
         return m.find() ? m.group(1) : "";
+    }
+
+    /**
+     * The text of the message's (spec.record) option literal, brace-balanced, or ""
+     * when the message declares none. Bounding the scan to this literal is what
+     * makes "retention lives on the delivery declaration" enforceable rather than
+     * merely documented.
+     */
+    private static String recordOptionBlock(String eventBody) {
+        Matcher start = RECORD_OPTION_START.matcher(eventBody);
+        if (!start.find()) {
+            return "";
+        }
+        int open = start.end() - 1; // index of the literal's opening brace
+        int depth = 0;
+        for (int i = open; i < eventBody.length(); i++) {
+            char c = eventBody.charAt(i);
+            if (c == '{') {
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0) {
+                    return eventBody.substring(open, i + 1);
+                }
+            }
+        }
+        return ""; // unbalanced: protoc will complain about it first
+    }
+
+    /** Drops // line comments so a retention clause quoted in prose cannot match. */
+    private static String stripLineComments(String block) {
+        StringBuilder b = new StringBuilder();
+        for (String line : block.split("\n", -1)) {
+            int idx = line.indexOf("//");
+            b.append(idx >= 0 ? line.substring(0, idx) : line).append('\n');
+        }
+        return b.toString();
     }
 
     private static List<QueryField> parseQueryFields(String eventBody) {
