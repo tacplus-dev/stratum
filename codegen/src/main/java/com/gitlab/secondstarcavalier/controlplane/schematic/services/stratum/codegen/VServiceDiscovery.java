@@ -14,9 +14,9 @@ import java.util.stream.Stream;
  * Discovers virtual services hosted by stratum.
  *
  * Scans proto-annotated/vservices/ for proto files that contain a service with
- * option (spec.service_s2s) = {tag: "<targetTag>"}.
+ * option (spec.service_s2s) = {label: "<targetTag>"}.
  *
- * When a new vservice is added with {tag: "stratum"}, this discovery
+ * When a new vservice is added with {label: "stratum"}, this discovery
  * automatically picks it up on the next build.
  */
 public class VServiceDiscovery {
@@ -42,11 +42,11 @@ public class VServiceDiscovery {
         }
     }
 
-    // Matches: service <Name> { ... option (spec.service_s2s) = {tag: "<tag>"}; ... }
+    // Matches: service <Name> { ... option (spec.service_s2s) = {label: "<tag>"}; ... }
     // We do a simplified two-pass: first find service blocks, then check for the tag.
     private static final Pattern SERVICE_START = Pattern.compile("^service\\s+(\\w+)\\s*\\{");
     private static final Pattern SERVICE_S2S_TAG = Pattern.compile(
-            "option\\s*\\(spec\\.service_s2s\\)\\s*=\\s*\\{[^}]*tag:\\s*\"([^\"]+)\"");
+            "option\\s*\\(spec\\.service_s2s\\)\\s*=\\s*\\{[^}]*label:\\s*\"([^\"]+)\"");
     private static final Pattern PACKAGE_DECL = Pattern.compile("^package\\s+(\\S+);");
 
     /**

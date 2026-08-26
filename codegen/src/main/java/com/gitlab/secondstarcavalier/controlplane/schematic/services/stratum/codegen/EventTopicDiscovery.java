@@ -16,7 +16,7 @@ import java.util.stream.Stream;
  * An event type is a message whose vservice declares an EventBus topic for it:
  *
  *   message AgentEventBus {
- *     option (spec.service_event) = {tag: "eventbus", ...};
+ *     option (spec.service_event) = {label: "eventbus", ...};
  *     AgentEvent event_stream = 1 [(spec.topic) = true];   // <- AgentEvent is the topic type
  *   }
  *
@@ -96,7 +96,7 @@ public final class EventTopicDiscovery {
             "option\\s+java_outer_classname\\s*=\\s*\"([^\"]+)\"");
     private static final Pattern MESSAGE_START = Pattern.compile("^message\\s+(\\w+)\\s*\\{");
     private static final Pattern EVENTBUS_TAG = Pattern.compile(
-            "option\\s*\\(spec\\.service_event\\)\\s*=\\s*\\{[^}]*tag:\\s*\"eventbus\"");
+            "option\\s*\\(spec\\.service_event\\)\\s*=\\s*\\{[^}]*label:\\s*\"eventbus\"");
     // Field carrying the topic, e.g.  AgentEvent event_stream = 1 [(spec.topic) = true];
     private static final Pattern TOPIC_FIELD = Pattern.compile(
             "([\\w.]+)\\s+\\w+\\s*=\\s*\\d+\\s*\\[[^\\]]*\\(spec\\.topic\\)\\s*=\\s*true");

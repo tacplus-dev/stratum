@@ -17,11 +17,11 @@ import java.util.List;
  * Maven mojo that generates vservice wiring for stratum.
  *
  * Reads proto-annotated vservices/ to discover virtual services with
- * option (spec.service_s2s) = {tag: "stratum"}, then generates
+ * option (spec.service_s2s) = {label: "stratum"}, then generates
  * StratumVServiceBase.java — an abstract bridge class that stratum's
  * StratumHandler extends.
  *
- * When a new vservice is declared with {tag: "stratum"}, rebuilding
+ * When a new vservice is declared with {label: "stratum"}, rebuilding
  * stratum automatically adds the new abstract method to StratumVServiceBase.
  */
 @Mojo(name = "generate-vservice-wiring", defaultPhase = LifecyclePhase.GENERATE_SOURCES)
