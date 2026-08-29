@@ -4,11 +4,13 @@ package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.ho
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 
 import com.google.protobuf.Message;
 import com.hazelcast.config.Config;
@@ -120,11 +122,97 @@ class HotRedoRestoreTest {
         Agentsensor.AgentEvent e = event("evt-1", 1000L, "s1");
         hot.write(map, MAP, "evt-1", e, 1, () -> Helpers.agentEventToJson(e), 1000L);
 
+        // The append is queued, not written, by the time the write returns — see
+        // theAckDoesNotWaitOnTheDiskAppend for that being the point rather than a
+        // concession. This asserts WHAT is appended, so it waits for the writer.
+        logs.awaitAppends(5_000);
+
         String log = Files.readString(logs.log(MAP).activePath());
         assertTrue(log.contains("\"key\":\"evt-1\""), log);
         assertTrue(log.contains("evt-1"), log);
         assertTrue(log.contains("1000"), "the store epoch must ride the record as metadata:\n" + log);
         assertEquals(e, map.get("evt-1"));
+    }
+
+    /**
+     * Acceptance item 5, second half: THE ACK DOES NOT WAIT ON DISK.
+     *
+     * <p>The node's append thread is occupied before the write, so a synchronous
+     * append could not complete. The write still returns and the value is
+     * readable from memory, and the log is still empty at that moment — which is
+     * the falsification: put {@code log.append} back on the entry-processor body
+     * and the record is on disk here, so the emptiness assertion goes red.
+     *
+     * <p>The elapsed bound is deliberately loose. It is not the claim — the claim
+     * is that the write completed at all while the only thread that can touch the
+     * file was parked — it only catches a write that limped through some other
+     * wait.
+     */
+    @Test
+    void theAckDoesNotWaitOnTheDiskAppend(@TempDir Path dir) throws Exception {
+        hz = member("stratum-redo-ack-latency-test");
+        HotDataset d = dataset(1);
+        logs = new HotRedoLogs(dir, List.of(d), 3, Codec.NONE);
+        HotWrites hot = new HotWrites(hz, 0, 0);
+        IMap<String, Message> map = hz.getMap(MAP);
+
+        CountDownLatch release = new CountDownLatch(1);
+        logs.blockWriter(release);
+
+        Agentsensor.AgentEvent e = event("evt-1", 1000L, "s1");
+        long startedNs = System.nanoTime();
+        hot.write(map, MAP, "evt-1", e, 1, () -> Helpers.agentEventToJson(e), 1000L);
+        long elapsedMs = (System.nanoTime() - startedNs) / 1_000_000L;
+
+        assertEquals(e, map.get("evt-1"), "the write must have acked from memory with the writer parked");
+        assertFalse(logContents(logs).contains("evt-1"),
+                "the redo append ran on the ack path: the record reached disk while the only"
+                        + " append thread was blocked, which it can only do from inside the write");
+        assertTrue(elapsedMs < 5_000,
+                "the write took " + elapsedMs + "ms with a parked writer; it is waiting on something");
+
+        release.countDown();
+        logs.awaitAppends(5_000);
+        assertTrue(logContents(logs).contains("evt-1"),
+                "the queued append must still land once the writer is released");
+        assertEquals(1, logs.appendedCount());
+        assertEquals(0, logs.appendFailureCount());
+    }
+
+    /**
+     * The restore-time gap the asynchrony opens, and what closes it: a replica
+     * killed between the ack and its queued append has a log MISSING a row it
+     * acked. The row is recovered from the peer that did land its append, because
+     * restore is the union of the reachable nodes' logs — and
+     * {@link HotRestore#awaitClusterReplay} is what makes that union complete
+     * before a hot read is served. Without the barrier this node would answer from
+     * its own partial log and report the row absent.
+     *
+     * <p>What is NOT closed, and cannot be by any barrier: every replica losing
+     * the same queued append. That is the named cost of acking on in-memory
+     * replication.
+     */
+    @Test
+    void aQueuedAppendLostOnOneReplicaIsRecoveredFromTheOther(@TempDir Path dir) throws Exception {
+        HotDataset d = dataset(1);
+        Path crashed = dir.resolve("crashed");
+        Path survivor = dir.resolve("survivor");
+        // The crashed node's log exists and is empty: it acked the write in memory
+        // and died before the writer thread got to it.
+        writeLog(crashed, d, event("evt-other", 500L, "unrelated"));
+        writeLog(survivor, d, event("evt-1", 1000L, "acked"));
+
+        hz = member("stratum-lost-append-test");
+        IMap<String, Message> map = hz.getMap(MAP);
+        HotRestore.Result fromCrashed = replayFrom(crashed, d, map);
+        assertNull(map.get("evt-1"), "the crashed node's own log cannot produce the row it lost");
+        HotRestore.Result fromSurvivor = replayFrom(survivor, d, map);
+
+        assertEquals(1, fromCrashed.applied);
+        assertEquals(1, fromSurvivor.applied);
+        assertTrue(fromSurvivor.diverged.isEmpty());
+        assertEquals("acked", ((Agentsensor.AgentEvent) map.get("evt-1")).getSessionId(),
+                "the union across reachable logs must recover a row whose append the other node lost");
     }
 
     // ------------------------------------------------------- restart recovery
@@ -255,6 +343,12 @@ class HotRedoRestoreTest {
     }
 
     // ------------------------------------------------------------------ helpers
+
+    /** The active log's bytes, or "" before the first append has created it. */
+    private static String logContents(HotRedoLogs logs) throws Exception {
+        Path active = logs.log(MAP).activePath();
+        return Files.exists(active) ? Files.readString(active) : "";
+    }
 
     /** Writes one record straight into a node's log, without a cluster. */
     private static void writeLog(Path nodeDir, HotDataset d, Agentsensor.AgentEvent e) {

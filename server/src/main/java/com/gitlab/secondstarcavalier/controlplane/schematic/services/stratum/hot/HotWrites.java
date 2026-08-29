@@ -14,6 +14,14 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
  * The generated {@code StratumEventStores} calls this instead of
  * {@code imap.put(...)}, so the durability discipline is stated once here rather
  * than emitted per record type.
+ *
+ * <h2>What the ack waits on</h2>
+ * In-memory replication across {@code min_durable_copies} instances, and nothing
+ * else. The gate refuses the write below that floor, and the put itself does not
+ * return until the synchronous backup has run. The redo append rides the same
+ * entry processor onto both of those instances but is QUEUED there, not written,
+ * so disk is not the blocker — see {@link RedoAppendProcessor} and
+ * {@link HotRedoLogs}.
  */
 public final class HotWrites {
 
@@ -71,7 +79,7 @@ public final class HotWrites {
 
     /**
      * Writes one record: refuse below the declared floor, otherwise put through
-     * the redo-appending entry processor.
+     * the redo-queueing entry processor.
      *
      * <p>The refusal comes FIRST and throws, so a below-quorum write has no local
      * effect at all. That is the whole point of the floor: a cluster that has lost

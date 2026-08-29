@@ -9,7 +9,7 @@ import com.hazelcast.map.EntryProcessor;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.diskstore.RedoLog;
 
 /**
- * The hot write: set the value AND append it to the receiving node's own redo
+ * The hot write: set the value AND queue it for the receiving node's own redo
  * log, on the partition owner and on its synchronous backup alike.
  *
  * <h2>Why an entry processor and not a put</h2>
@@ -21,17 +21,22 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
  * construction.
  *
  * <p>{@link #getBackupProcessor()} returns {@code this}: the backup body is the
- * same body. It resolves {@link HotRedoLogs#logFor} on the member it is running
- * on, so "append to this node's log" means the owner's log on the owner and the
- * backup's log on the backup, from one class.
+ * same body. It resolves {@link HotRedoLogs#appendAsync} on the member it is
+ * running on, so "queue for this node's log" means the owner's log on the owner
+ * and the backup's log on the backup, from one class.
  *
  * <h2>What is and is not on the ack path</h2>
  * The value's second in-memory copy IS: {@code backupCount=1, asyncBackupCount=0}
- * means the put does not complete until the backup operation has run. Whether the
- * backup body's {@code append} is part of that synchronous operation is a
- * Hazelcast behaviour, not a property this class can assert — see
- * {@code HotRedoBackupTimingTest}, which runs it against a real two-member
- * cluster rather than trusting the documentation.
+ * means the put does not complete until the backup operation has run, and the
+ * backup body runs inside that operation — see {@code HotRedoBackupTimingTest},
+ * which proves it against a real two-member cluster rather than trusting the
+ * documentation. That in-memory replication is the entire ack condition.
+ *
+ * <p>The disk append is NOT on it. Both bodies hand the record to the node's
+ * single append thread and return; neither waits for the file write. See
+ * {@link HotRedoLogs} for the ordering that buys and the window it opens, and
+ * {@code HotRedoAckLatencyTest} for the assertion that a stalled writer does not
+ * stall the write.
  */
 public final class RedoAppendProcessor<V> implements EntryProcessor<String, V, Boolean>, Serializable {
 
@@ -49,22 +54,21 @@ public final class RedoAppendProcessor<V> implements EntryProcessor<String, V, B
         this.epoch = epoch;
     }
 
+    /** @return true when this node queued a redo append for the write. */
     @Override
     public Boolean process(Map.Entry<String, V> entry) {
         entry.setValue(value);
-        RedoLog log = HotRedoLogs.logFor(mapName);
-        if (log == null) {
-            // No redo log configured on this node for this type. The in-memory
-            // copy still lands; the durability leg simply does not exist here,
-            // which is the state of a node with no disk_persistence configured.
-            return Boolean.FALSE;
-        }
         // The epoch travels as the record's metadata, which is exactly what
         // RedoLog.Record.metadata is for ("optional, caller-set"). It is the same
         // number on both nodes because it was stamped once, by the ingesting node,
         // before this processor was serialized.
-        log.append(new RedoLog.Record(entry.getKey(), false, Long.toString(epoch), payload));
-        return Boolean.TRUE;
+        //
+        // Queued, not written: appendAsync returns before the record reaches disk,
+        // so the in-memory mutation above is all the write waits on. A node with no
+        // log for this type queues nothing and says so — the in-memory copy still
+        // lands, the durability leg simply does not exist there.
+        return HotRedoLogs.appendAsync(mapName,
+                new RedoLog.Record(entry.getKey(), false, Long.toString(epoch), payload));
     }
 
     @Override

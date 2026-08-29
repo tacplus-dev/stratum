@@ -33,6 +33,22 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
  * until every reachable instance has reported its replay done. What that costs is
  * named: cold-start latency becomes a function of the slowest volume.
  *
+ * <h2>The barrier is also what covers the async append window</h2>
+ * The redo append is queued after the in-memory ack, not written before it
+ * ({@link HotRedoLogs}), so an instance killed inside that window comes back with
+ * a log missing rows it had acked. Nothing extra is needed for that: those rows
+ * were acked on {@code min_durable_copies} instances, every one of which queued
+ * the same append, so a peer's log still holds them and the union puts them back.
+ * What makes that a guarantee rather than a race is precisely the wait below —
+ * a node serving reads off its own replayed log alone would report exactly the
+ * rows it lost as absent.
+ *
+ * <p>The residual, named rather than papered over: if EVERY replica of a row
+ * loses the same queued append, the row is not in any log and no barrier can
+ * recover it. That is the accepted consequence of acking on in-memory
+ * replication instead of on the disk write; the record is still on the event log,
+ * which a cold rebuild replays.
+ *
  * <h2>Why equal-epoch divergence stops the service (Q3)</h2>
  * See {@link EpochMergeProcessor}. A key reported DIVERGED is proof the atomic
  * write path was violated; this refuses to start and names the key rather than
