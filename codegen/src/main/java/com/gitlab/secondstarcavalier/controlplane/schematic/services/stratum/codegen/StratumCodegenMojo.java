@@ -101,6 +101,13 @@ public class StratumCodegenMojo extends AbstractMojo {
             EventStoreGenerator.generate(out, events);
             getLog().info("Generated StratumEventStores.java");
 
+            // The warm disk tier's dataset descriptors. Only record types declaring
+            // (spec.record).residency = {window: RESIDENCY_WARM} get one; with none
+            // declared the list is empty and the tier holds nothing, but the wiring
+            // around it is still generated and compiled.
+            WarmStoreGenerator.generate(out, events);
+            getLog().info("Generated StratumWarmStores.java");
+
             if (plane != null) {
                 // The s2s half is backed by the same record types the hot store
                 // holds, so it reuses the record-type list.

@@ -28,6 +28,7 @@
 		<exec-plugin.version>3.5.0</exec-plugin.version>
 		<hazelcast.version>5.5.0</hazelcast.version>
 		<calcite.version>1.37.0</calcite.version>
+		<lucene.version>10.2.1</lucene.version>
 	</properties>
 	<repositories>
 		<repository>
@@ -144,6 +145,17 @@
 				<groupId>org.apache.calcite</groupId>
 				<artifactId>calcite-core</artifactId>
 				<version>${calcite.version}</version>
+			</dependency>
+			<!--
+			  The warm disk tier. lucene-core ALONE is the whole dependency: every
+			  (spec.query_field) criterion is an exact match or a numeric range, so
+			  nothing is analysed and lucene-analysis-common is not needed. Lucene 10
+			  requires Java 21, which maven.compiler.release already sets.
+			-->
+			<dependency>
+				<groupId>org.apache.lucene</groupId>
+				<artifactId>lucene-core</artifactId>
+				<version>${lucene.version}</version>
 			</dependency>
 			<dependency>
 				<groupId>org.apache.tomcat</groupId>

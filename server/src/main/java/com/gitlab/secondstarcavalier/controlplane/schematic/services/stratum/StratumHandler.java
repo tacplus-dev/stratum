@@ -74,7 +74,7 @@ public class StratumHandler extends StratumVServiceBase {
         if (recordMaps == null) {
             // Suppliers, not captured references: initFromConfig rebuilds the stores on
             // config updates, and the generated impl must always see the current ones.
-            recordMaps = new StratumRecordMaps(() -> eventStore.stores());
+            recordMaps = new StratumRecordMaps(() -> eventStore.stores(), () -> eventStore.warm());
         }
         return recordMaps;
     }

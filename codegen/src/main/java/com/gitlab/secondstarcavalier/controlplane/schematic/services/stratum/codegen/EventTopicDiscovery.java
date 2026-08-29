@@ -85,6 +85,42 @@ public final class EventTopicDiscovery {
          * the declaration that actually says this message is stored and delivered.
          */
         public final String retentionTimestampField;
+        /**
+         * (spec.record).residency.window — "RESIDENCY_WARM" when the record type
+         * declares the warm window, "" otherwise.
+         *
+         * Absence is HOT, which is what every record does today, so an empty string
+         * here and RESIDENCY_HOT are the same statement. The disk tier is generated
+         * only for the warm ones, which is why this is a string and not a boolean:
+         * RESIDENCY_COLD is a declared-but-refused value in tacplus, and swallowing
+         * it into "not warm" would silently accept a declaration tacplus rejects.
+         */
+        public final String residency;
+        /**
+         * (spec.record).residency.window_seconds — the memory-residency window
+         * override, or 0 for "use the configured default".
+         */
+        public final long residencyWindowSeconds;
+        /**
+         * (spec.record).mutability — "MUTABILITY_APPEND_ONLY" when the record type
+         * is written once, "" otherwise (i.e. CRUD, today's behaviour).
+         *
+         * On the warm tier this is not decoration: an append-only dataset's slices
+         * are pure appends, so its sealed segments are byte-stable and it needs no
+         * cross-slice reconciliation, because it never deletes.
+         */
+        public final String mutability;
+        /**
+         * The record field carrying (spec.store_epoch) — Unix millis of the row's
+         * last write, stamped by the generated wrapper. "" when the record declares
+         * none.
+         *
+         * This is the field the two legs partition on: memory serves
+         * epoch >= now - window, disk serves epoch < now - window. A warm record
+         * without one cannot be tiered at all, which is why WarmStoreGenerator
+         * refuses it rather than picking a substitute clock.
+         */
+        public final String storeEpochField;
         /** Java package from option java_package, e.g. "...model.types.vservices.agentsensor". */
         public final String javaPackage;
         /** Java outer class name from option java_outer_classname, e.g. "Agentsensor". */
@@ -93,6 +129,8 @@ public final class EventTopicDiscovery {
         public TopicEvent(String protoPackage, String eventType, String protoRelPath,
                           boolean isRecord, String recordKey, List<QueryField> queryFields,
                           String retentionTimestampField,
+                          String residency, long residencyWindowSeconds, String mutability,
+                          String storeEpochField,
                           String javaPackage, String outerClassName) {
             this.protoPackage = protoPackage;
             this.eventType = eventType;
@@ -101,14 +139,30 @@ public final class EventTopicDiscovery {
             this.recordKey = recordKey;
             this.queryFields = queryFields;
             this.retentionTimestampField = retentionTimestampField;
+            this.residency = residency;
+            this.residencyWindowSeconds = residencyWindowSeconds;
+            this.mutability = mutability;
+            this.storeEpochField = storeEpochField;
             this.javaPackage = javaPackage;
             this.outerClassName = outerClassName;
+        }
+
+        /** True when the record type declares the warm memory-residency window. */
+        public boolean isWarm() {
+            return RESIDENCY_WARM.equals(residency);
+        }
+
+        /** True when the record type is written once and never updated or deleted. */
+        public boolean isAppendOnly() {
+            return MUTABILITY_APPEND_ONLY.equals(mutability);
         }
 
         @Override
         public String toString() {
             return protoPackage + "." + eventType + " (" + protoRelPath + ")"
-                    + (queryFields.isEmpty() ? "" : " query=" + queryFields.size());
+                    + (queryFields.isEmpty() ? "" : " query=" + queryFields.size())
+                    + (residency.isEmpty() ? "" : " " + residency)
+                    + (mutability.isEmpty() ? "" : " " + mutability);
         }
     }
 
@@ -119,6 +173,11 @@ public final class EventTopicDiscovery {
      * implement it under the same name.
      */
     public static final String DEFAULT_RECORD_KEY = "event_id";
+
+    /** The residency preset that puts a record type on the warm disk tier. */
+    public static final String RESIDENCY_WARM = "RESIDENCY_WARM";
+    /** The mutability preset that makes a record type write-once. */
+    public static final String MUTABILITY_APPEND_ONLY = "MUTABILITY_APPEND_ONLY";
 
     private static final Pattern PACKAGE_DECL = Pattern.compile("^package\\s+(\\S+);");
     private static final Pattern JAVA_PACKAGE = Pattern.compile(
@@ -151,6 +210,21 @@ public final class EventTopicDiscovery {
     //   retention: {timestamp_field: "occurred_at_ms" duration_seconds: 7776000}
     private static final Pattern RETENTION_TIMESTAMP_FIELD = Pattern.compile(
             "retention:\\s*\\{[^}]*timestamp_field:\\s*\"(\\w+)\"");
+
+    // The residency clause, matched only within the record option literal, e.g.
+    //   residency: {window: RESIDENCY_WARM window_seconds: 31536000}
+    private static final Pattern RESIDENCY_WINDOW = Pattern.compile(
+            "residency:\\s*\\{[^}]*window:\\s*(RESIDENCY_\\w+)");
+    private static final Pattern RESIDENCY_WINDOW_SECONDS = Pattern.compile(
+            "residency:\\s*\\{[^}]*window_seconds:\\s*(\\d+)");
+    // The mutability clause, e.g.  mutability: MUTABILITY_APPEND_ONLY
+    // It is a bare enum value on the record option, not a nested literal.
+    private static final Pattern MUTABILITY = Pattern.compile(
+            "(?<!\\w)mutability:\\s*(MUTABILITY_\\w+)");
+    // The field carrying (spec.store_epoch), e.g.
+    //   int64 store_epoch_ms = 9 [(spec.store_epoch) = true, (spec.query_field) = {op: QUERY_OP_RANGE}];
+    private static final Pattern STORE_EPOCH_FIELD = Pattern.compile(
+            "\\w[\\w.]*\\s+(\\w+)\\s*=\\s*\\d+\\s*\\[[^\\]]*\\(spec\\.store_epoch\\)\\s*=\\s*true");
 
     // A field carrying (spec.query_field), e.g.
     //   string spiffe_id = 4 [(spec.query_field) = {op: QUERY_OP_EQ}];
@@ -256,6 +330,8 @@ public final class EventTopicDiscovery {
             result.add(new TopicEvent(protoPackage, type, relPath,
                     isRecord, parseRecordKey(recordOption), parseQueryFields(eventBody),
                     parseRetentionTimestampField(recordOption),
+                    parseResidency(recordOption), parseResidencyWindowSeconds(recordOption),
+                    parseMutability(recordOption), parseStoreEpochField(eventBody),
                     javaPackage, outerClassName));
         }
     }
@@ -289,6 +365,49 @@ public final class EventTopicDiscovery {
             return "";
         }
         Matcher m = RETENTION_TIMESTAMP_FIELD.matcher(recordOption);
+        return m.find() ? m.group(1) : "";
+    }
+
+    /**
+     * The record's declared residency preset, read only from inside its own
+     * (spec.record) literal — the same bounding {@link #recordOptionBlock} gives
+     * retention, and for the same reason: residency is a property of the DELIVERY
+     * declaration, and an unbounded scan would happily pick up a clause belonging
+     * to some other annotation further down the message.
+     */
+    private static String parseResidency(String recordOption) {
+        if (recordOption.isEmpty()) {
+            return "";
+        }
+        Matcher m = RESIDENCY_WINDOW.matcher(recordOption);
+        return m.find() ? m.group(1) : "";
+    }
+
+    /** The record's window_seconds override, or 0 for "use the configured default". */
+    private static long parseResidencyWindowSeconds(String recordOption) {
+        if (recordOption.isEmpty()) {
+            return 0;
+        }
+        Matcher m = RESIDENCY_WINDOW_SECONDS.matcher(recordOption);
+        return m.find() ? Long.parseLong(m.group(1)) : 0;
+    }
+
+    /** The record's declared mutability, "" when it declares none (i.e. CRUD). */
+    private static String parseMutability(String recordOption) {
+        if (recordOption.isEmpty()) {
+            return "";
+        }
+        Matcher m = MUTABILITY.matcher(recordOption);
+        return m.find() ? m.group(1) : "";
+    }
+
+    /**
+     * The field carrying (spec.store_epoch). Unlike residency and mutability this
+     * is a FIELD annotation, not a clause on the record option, so it is read from
+     * the message body — the same place (spec.query_field) is read from.
+     */
+    private static String parseStoreEpochField(String eventBody) {
+        Matcher m = STORE_EPOCH_FIELD.matcher(eventBody);
         return m.find() ? m.group(1) : "";
     }
 

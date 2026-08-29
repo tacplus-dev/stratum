@@ -82,6 +82,8 @@ public final class RecordMapImplGenerator {
         w.println("import " + CALLER + ";");
         w.println("import " + PROTO_EXCEPTION + ";");
         w.println("import " + COLLECTION_RUNTIME + ";");
+        w.println("import " + HOST_PKG + ".warm.WarmFilter;");
+        w.println("import " + HOST_PKG + ".warm.WarmStore;");
         w.println("import " + plane.messagesFqn() + ";");
         w.println("import " + plane.wrapperFqn(MODEL_BASE, SM_PREFIX) + ";");
         w.println();
@@ -99,15 +101,22 @@ public final class RecordMapImplGenerator {
         w.println("public final class " + CLASS_NAME + " implements " + iface + "." + iface + "Handler {");
         w.println();
         w.println("    private final Supplier<StratumEventStores> storesSupplier;");
+        w.println("    // The warm disk tier. Supplied, not captured, for the same reason the hot");
+        w.println("    // stores are: StratumHandler rebuilds both on every config update.");
+        w.println("    private final Supplier<WarmStore> warmSupplier;");
         w.println("    // query_id -> the caller's typed filter (" + msgs + ".<T>Filter), or Boolean.TRUE");
         w.println("    // for filterless record types (match-all).");
         w.println("    private final ConcurrentHashMap<String, Object> queries = new ConcurrentHashMap<>();");
         w.println();
-        w.println("    public " + CLASS_NAME + "(Supplier<StratumEventStores> storesSupplier) {");
+        w.println("    public " + CLASS_NAME + "(Supplier<StratumEventStores> storesSupplier,");
+        w.println("            Supplier<WarmStore> warmSupplier) {");
         w.println("        this.storesSupplier = storesSupplier;");
+        w.println("        this.warmSupplier = warmSupplier;");
         w.println("    }");
         w.println();
         w.println("    private StratumEventStores stores() { return storesSupplier.get(); }");
+        w.println();
+        w.println("    private WarmStore warm() { return warmSupplier.get(); }");
         w.println();
         w.println("    private Object requireQuery(String queryId) throws ProtoException {");
         w.println("        Object q = queries.get(queryId);");
@@ -126,6 +135,22 @@ public final class RecordMapImplGenerator {
             // Java expressions for "does record ev match the handle's predicate".
             String matchExpr = hasFilter ? (matchFn + "(f, ev)") : "true";
             String matchCast = hasFilter ? (matchFn + "(f, (" + fqn + ") m)") : "true";
+
+            // Warm record types are served by TWO legs. The memory leg is the hot
+            // store, scanned exactly as before; the disk leg is the node-local Lucene
+            // index. They are partitioned on the store epoch — memory holds
+            // epoch >= boundary, disk holds epoch < boundary — so the union needs no
+            // deduplication and the count is a clean sum. For a hot record type
+            // (which is every record type until one declares otherwise) these emit
+            // nothing at all and the bodies are byte-identical to before.
+            boolean warm = e.isWarm();
+            String warmArg = hasFilter ? "f" : "";
+            String memoryCountLeg =
+                    "            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + matchExpr + ") n++;"
+                    + (warm ? "\n            n += " + lower("WarmCount" + t) + "(" + warmArg + ");" : "");
+            String memoryMatchLeg =
+                    "            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + matchExpr + ") matches.add(ev);"
+                    + (warm ? "\n            matches.addAll(" + lower("Warm" + t) + "(" + warmArg + "));" : "");
 
             // match<T>: true when a record satisfies the typed filter. Getter-based,
             // no Hazelcast attribute coupling. Only for filterable record types.
@@ -153,6 +178,10 @@ public final class RecordMapImplGenerator {
                 w.println("    }");
             }
 
+            if (warm) {
+                emitWarmLeg(w, e, fqn, msgs, hasFilter);
+            }
+
             // Emitted at the top of every store-scanning body: bind `f` to the
             // handle's filter (or validate existence for filterless types).
             String bindFilter = hasFilter
@@ -177,7 +206,7 @@ public final class RecordMapImplGenerator {
             w.println(bindFilter);
             w.println("        long n = 0;");
             w.println("        try {");
-            w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + matchExpr + ") n++;");
+            w.println(memoryCountLeg);
             w.println("        } catch (Exception ex) {");
             w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
             w.println("        }");
@@ -194,7 +223,7 @@ public final class RecordMapImplGenerator {
                     : "        requireQuery(req.getQueryId());");
             w.println("        java.util.List<" + fqn + "> matches = new ArrayList<>();");
             w.println("        try {");
-            w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + matchExpr + ") matches.add(ev);");
+            w.println(memoryMatchLeg);
             w.println("        } catch (Exception ex) {");
             w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
             w.println("        }");
@@ -214,7 +243,7 @@ public final class RecordMapImplGenerator {
                     : "        requireQuery(req.getQueryId());");
             w.println("        java.util.List<" + fqn + "> matches = new ArrayList<>();");
             w.println("        try {");
-            w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + matchExpr + ") matches.add(ev);");
+            w.println(memoryMatchLeg);
             w.println("        } catch (Exception ex) {");
             w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
             w.println("        }");
@@ -243,7 +272,7 @@ public final class RecordMapImplGenerator {
                 w.println("        queries.put(req.getQueryId(), f);");
                 w.println("        long n = 0;");
                 w.println("        try {");
-                w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + matchExpr + ") n++;");
+                w.println(memoryCountLeg);
                 w.println("        } catch (Exception ex) {");
                 w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
                 w.println("        }");
@@ -263,7 +292,7 @@ public final class RecordMapImplGenerator {
                 w.println(bindFilter);
                 w.println("        java.util.List<" + fqn + "> matches = new ArrayList<>();");
                 w.println("        try {");
-                w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + matchExpr + ") matches.add(ev);");
+                w.println(memoryMatchLeg);
                 w.println("        } catch (Exception ex) {");
                 w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
                 w.println("        }");
@@ -280,7 +309,7 @@ public final class RecordMapImplGenerator {
                 w.println(bindFilter);
                 w.println("        long n = 0;");
                 w.println("        try {");
-                w.println("            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + matchExpr + ") n++;");
+                w.println(memoryCountLeg);
                 w.println("        } catch (Exception ex) {");
                 w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
                 w.println("        }");
@@ -292,6 +321,69 @@ public final class RecordMapImplGenerator {
         }
 
         w.println("}");
+    }
+
+    /**
+     * The disk leg for one warm record type: the caller's typed filter translated
+     * into the tier's criteria, then the hits and the count.
+     *
+     * The translation is deliberately the SAME field list and the SAME
+     * set/unset test the in-memory match uses — {@code has<Field>()} decides
+     * whether a criterion narrows anything, on both legs. A criterion applied to
+     * only one of them would make the two legs disagree, which is the one failure
+     * a two-leg query cannot absorb.
+     *
+     * Where the leg boundary is, whether the leg can be skipped outright, and which
+     * slices are opened are all decided inside WarmStore from the dataset's own
+     * residency window. None of it is generated, because none of it is per-type.
+     */
+    private static void emitWarmLeg(PrintWriter w, EventTopicDiscovery.TopicEvent e,
+                                    String fqn, String msgs, boolean hasFilter) {
+        String t = e.eventType;
+        String dataset = e.protoPackage + "." + t;
+        String filterTy = msgs + "." + t + "Filter";
+        String params = hasFilter ? (filterTy + " f") : "";
+        String args = hasFilter ? "f" : "";
+
+        w.println();
+        w.println("    /** The caller's filter, as the warm tier's criteria. */");
+        w.println("    private static WarmFilter " + lower("WarmFilter" + t) + "(" + params + ") {");
+        w.println("        WarmFilter wf = new WarmFilter();");
+        for (EventTopicDiscovery.QueryField qf : e.queryFields) {
+            String P = pascal(qf.name);
+            if (qf.range) {
+                w.println("        if (f.has" + P + "From() || f.has" + P + "To()) wf.range(\"" + qf.name + "\",");
+                w.println("                f.has" + P + "From() ? f.get" + P + "From() : null,");
+                w.println("                f.has" + P + "To() ? f.get" + P + "To() : null);");
+            } else if ("string".equals(qf.protoType)) {
+                w.println("        if (f.has" + P + "()) wf.eq(\"" + qf.name + "\", f.get" + P + "());");
+            } else if (WarmStoreGenerator.isEnum(qf.protoType)) {
+                w.println("        if (f.has" + P + "()) wf.eq(\"" + qf.name + "\", (long) f.get" + P + "Value());");
+            } else if ("bool".equals(qf.protoType)) {
+                w.println("        if (f.has" + P + "()) wf.eq(\"" + qf.name + "\", f.get" + P + "() ? 1L : 0L);");
+            } else {
+                w.println("        if (f.has" + P + "()) wf.eq(\"" + qf.name + "\", (long) f.get" + P + "());");
+            }
+        }
+        w.println("        return wf;");
+        w.println("    }");
+
+        w.println();
+        w.println("    /** The disk leg's matching rows. Empty when the leg is provably outside the query. */");
+        w.println("    private java.util.List<" + fqn + "> " + lower("Warm" + t) + "(" + params + ") throws Exception {");
+        w.println("        java.util.List<" + fqn + "> out = new ArrayList<>();");
+        w.println("        for (byte[] bytes : warm().query(\"" + dataset + "\", "
+                + lower("WarmFilter" + t) + "(" + args + "))) {");
+        w.println("            out.add(" + fqn + ".parseFrom(bytes));");
+        w.println("        }");
+        w.println("        return out;");
+        w.println("    }");
+
+        w.println();
+        w.println("    /** The disk leg's match count, summed per slice without materialising hits. */");
+        w.println("    private long " + lower("WarmCount" + t) + "(" + params + ") throws Exception {");
+        w.println("        return warm().count(\"" + dataset + "\", " + lower("WarmFilter" + t) + "(" + args + "));");
+        w.println("    }");
     }
 
     /** snake_case proto field -> PascalCase getter stem (spiffe_id -> SpiffeId). */

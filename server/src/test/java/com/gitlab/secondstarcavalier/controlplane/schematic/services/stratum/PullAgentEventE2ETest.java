@@ -21,6 +21,7 @@ import io.grpc.Server;
 import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.warm.WarmStore;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.token.TokenWrapper;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.vservices.query.RecordMap;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.vservices.query.RecordMapGrpc;
@@ -105,6 +106,11 @@ class PullAgentEventE2ETest {
 
         StratumEventStores stores = new StratumEventStores();
         stores.init(hz);
+        // The plane's second leg. AgentEvent is RESIDENCY_HOT (as every record type
+        // is until one declares otherwise), so this store holds no dataset, opens no
+        // directory and answers no disk leg — but the plane still takes it, which is
+        // what keeps the wiring compiled rather than hypothetical.
+        WarmStore warm = new WarmStore(java.nio.file.Path.of("target", "warm-e2e-unused"), List.of());
         for (AgentEvent e : FIXTURES) {
             stores.store(e);
         }
@@ -129,7 +135,7 @@ class PullAgentEventE2ETest {
         };
 
         server = NettyServerBuilder.forPort(0)
-                .addService(new RecordMap(new StratumRecordMaps(() -> stores), authorizer))
+                .addService(new RecordMap(new StratumRecordMaps(() -> stores, () -> warm), authorizer))
                 .build()
                 .start();
         channel = PullAgentEvent.channel("localhost:" + server.getPort(), true);

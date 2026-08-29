@@ -1,6 +1,9 @@
 // Copyright (c) 2024 Second Star Cavalier, LLC.
 package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum;
 
+import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collection;
@@ -29,6 +32,7 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumMapConfig;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumEpochExtractor;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumEventTypeExtractor;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.warm.WarmStore;
 
 /**
  * EventStore manages the Hazelcast IMap that backs stratum's hot event store.
@@ -38,6 +42,15 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.haz
  * Indexes (via ValueExtractor or Hazelcast native attribute reflection):
  *   - SORTED:  epoch (StratumEpochExtractor), timestampMs
  *   - HASH:    spiffeId, sessionId, agentId, eventTypeValue (StratumEventTypeExtractor)
+ *
+ * Retention:
+ * Warm tier:
+ *   Record types declaring (spec.record).residency = {window: RESIDENCY_WARM}
+ *   are ALSO written to a node-local Lucene index under the pod's volume, so a
+ *   row evicted from the memory window is still complete and queryable. The disk
+ *   write is off the ack path — see WarmStore — so ingest latency is unchanged.
+ *   With no warm-typed record declared the tier holds nothing and touches no
+ *   file, which is stratum's state today.
  *
  * Retention:
  *   Runs on cleanup_interval_seconds. Deletes entries older than
@@ -60,6 +73,7 @@ public class EventStore {
     // Agent-specific read path: reads the same Hazelcast map the generated
     // store writes for agentsensor.AgentEvent.
     private IMap<String, AgentEvent> events;
+    private WarmStore warm;
     private int retentionDays;
 
     private final ScheduledExecutorService cleaner = Executors.newSingleThreadScheduledExecutor(
@@ -87,6 +101,16 @@ public class EventStore {
         stores.init(hz);
         events = hz.getMap(StratumMapConfig.MAP_NAME);
 
+        try {
+            warm = new WarmStore(dataRoot(), StratumWarmStores.datasets(WarmStore.DEFAULT_WINDOW_SECONDS));
+        } catch (IOException e) {
+            throw new IllegalStateException("warm tier could not open its directory under " + dataRoot(), e);
+        }
+        // Unconditional, before the first write: a cross-slice update interrupted
+        // between its two commits leaves a stale copy nothing else would notice.
+        // Same posture as ColdStartRebuilder — repair rather than trust.
+        warm.reconcile();
+
         cleaner.scheduleWithFixedDelay(
                 this::runRetentionCleanupIfLeader,
                 cleanupIntervalSecs, cleanupIntervalSecs, TimeUnit.SECONDS);
@@ -105,7 +129,21 @@ public class EventStore {
      * StratumEventStores, so this code names no vservice.
      */
     public boolean store(Message event) {
-        return stores.store(event);
+        boolean handled = stores.store(event);
+        // AFTER the memory put, and without waiting for it: the ack is the
+        // in-memory replication, the disk commit follows asynchronously.
+        warm.enqueue(event);
+        return handled;
+    }
+
+    /**
+     * Where the warm tier lives. The operator mounts the pod's per-replica volume
+     * at /app/data; STRATUM_DATA_DIR overrides it for a local run, which is the
+     * only case where /app/data does not exist.
+     */
+    private static Path dataRoot() {
+        String dir = System.getenv("STRATUM_DATA_DIR");
+        return Paths.get(dir == null || dir.isBlank() ? "/app/data" : dir);
     }
 
     // -----------------------------------------------------------------------
@@ -167,6 +205,9 @@ public class EventStore {
     /** The generated typed per-record hot stores — used by the RecordMap plane. */
     public StratumEventStores stores() { return stores; }
 
+    /** The warm disk tier — the RecordMap plane's second leg for warm-typed records. */
+    public WarmStore warm() { return warm; }
+
     // -----------------------------------------------------------------------
     // Retention cleanup
     // -----------------------------------------------------------------------
@@ -186,6 +227,11 @@ public class EventStore {
         try {
             long before  = stores.totalCount();
             stores.runRetention(cutoffMs);
+            // The disk tier retires whole slices rather than rows, and it measures
+            // from the STORE EPOCH the slice is named for, not from each record's
+            // business timestamp. Same cutoff, different clock — stated because the
+            // two sweeps look interchangeable and are not.
+            warm.runRetention(cutoffMs);
             long removed = before - stores.totalCount();
             lastCleanupMs.set(System.currentTimeMillis());
             lastCleanupRemoved.set(removed);
@@ -201,6 +247,7 @@ public class EventStore {
 
     public void shutdown() {
         cleaner.shutdownNow();
+        if (warm != null) warm.close();
         if (hz != null) hz.shutdown();
     }
 
