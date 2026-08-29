@@ -121,6 +121,17 @@ public final class EventTopicDiscovery {
          * refuses it rather than picking a substitute clock.
          */
         public final String storeEpochField;
+        /**
+         * The strictest (spec.min_durable_copies) declared on any field of the
+         * record, or {@value EventTopicDiscovery#DEFAULT_MIN_DURABLE_COPIES} when
+         * the record declares none — spec.proto's documented default.
+         *
+         * This is the IN-MEMORY replica count a hot write must reach before it is
+         * acked, not a redo-log commit count: the disk leg follows the ack. Below
+         * it the write is refused rather than acked locally, so a cluster that has
+         * lost members cannot pass for a single-node development tree.
+         */
+        public final int minDurableCopies;
         /** Java package from option java_package, e.g. "...model.types.vservices.agentsensor". */
         public final String javaPackage;
         /** Java outer class name from option java_outer_classname, e.g. "Agentsensor". */
@@ -130,7 +141,7 @@ public final class EventTopicDiscovery {
                           boolean isRecord, String recordKey, List<QueryField> queryFields,
                           String retentionTimestampField,
                           String residency, long residencyWindowSeconds, String mutability,
-                          String storeEpochField,
+                          String storeEpochField, int minDurableCopies,
                           String javaPackage, String outerClassName) {
             this.protoPackage = protoPackage;
             this.eventType = eventType;
@@ -143,6 +154,7 @@ public final class EventTopicDiscovery {
             this.residencyWindowSeconds = residencyWindowSeconds;
             this.mutability = mutability;
             this.storeEpochField = storeEpochField;
+            this.minDurableCopies = minDurableCopies;
             this.javaPackage = javaPackage;
             this.outerClassName = outerClassName;
         }
@@ -173,6 +185,12 @@ public final class EventTopicDiscovery {
      * implement it under the same name.
      */
     public static final String DEFAULT_RECORD_KEY = "event_id";
+
+    /**
+     * The in-memory replica count a hot write must reach when the record declares
+     * no (spec.min_durable_copies) of its own — spec.proto's documented default.
+     */
+    public static final int DEFAULT_MIN_DURABLE_COPIES = 2;
 
     /** The residency preset that puts a record type on the warm disk tier. */
     public static final String RESIDENCY_WARM = "RESIDENCY_WARM";
@@ -225,6 +243,11 @@ public final class EventTopicDiscovery {
     //   int64 store_epoch_ms = 9 [(spec.store_epoch) = true, (spec.query_field) = {op: QUERY_OP_RANGE}];
     private static final Pattern STORE_EPOCH_FIELD = Pattern.compile(
             "\\w[\\w.]*\\s+(\\w+)\\s*=\\s*\\d+\\s*\\[[^\\]]*\\(spec\\.store_epoch\\)\\s*=\\s*true");
+
+    // A field carrying (spec.min_durable_copies), e.g.
+    //   string payload = 3 [(spec.quorum_write) = true, (spec.min_durable_copies) = 3];
+    private static final Pattern MIN_DURABLE_COPIES = Pattern.compile(
+            "\\(spec\\.min_durable_copies\\)\\s*=\\s*(\\d+)");
 
     // A field carrying (spec.query_field), e.g.
     //   string spiffe_id = 4 [(spec.query_field) = {op: QUERY_OP_EQ}];
@@ -332,6 +355,7 @@ public final class EventTopicDiscovery {
                     parseRetentionTimestampField(recordOption),
                     parseResidency(recordOption), parseResidencyWindowSeconds(recordOption),
                     parseMutability(recordOption), parseStoreEpochField(eventBody),
+                    parseMinDurableCopies(eventBody),
                     javaPackage, outerClassName));
         }
     }
@@ -390,6 +414,23 @@ public final class EventTopicDiscovery {
         }
         Matcher m = RESIDENCY_WINDOW_SECONDS.matcher(recordOption);
         return m.find() ? Long.parseLong(m.group(1)) : 0;
+    }
+
+    /**
+     * The strictest (spec.min_durable_copies) on the record's fields, defaulted to
+     * {@link #DEFAULT_MIN_DURABLE_COPIES}.
+     *
+     * A record is written whole, so when several fields declare a floor the
+     * strictest one governs — a per-field floor would need a per-field write, and
+     * the hot store writes rows.
+     */
+    private static int parseMinDurableCopies(String eventBody) {
+        int min = DEFAULT_MIN_DURABLE_COPIES;
+        Matcher m = MIN_DURABLE_COPIES.matcher(eventBody);
+        while (m.find()) {
+            min = Math.max(min, Integer.parseInt(m.group(1)));
+        }
+        return min;
     }
 
     /** The record's declared mutability, "" when it declares none (i.e. CRUD). */

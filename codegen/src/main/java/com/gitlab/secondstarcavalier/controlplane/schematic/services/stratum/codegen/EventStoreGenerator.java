@@ -51,6 +51,7 @@ public final class EventStoreGenerator {
         w.println("import com.hazelcast.core.HazelcastInstance;");
         w.println("import com.hazelcast.map.IMap;");
         w.println("import com.hazelcast.query.Predicates;");
+        w.println("import " + HOST_PKG + ".hot.HotWrites;");
         w.println("import org.slf4j.Logger;");
         w.println("import org.slf4j.LoggerFactory;");
         w.println();
@@ -68,11 +69,29 @@ public final class EventStoreGenerator {
         for (EventTopicDiscovery.TopicEvent e : events) {
             w.println("    private IMap<String, " + fqn(e) + "> " + field(e) + ";");
         }
+        w.println("    private HotWrites hot;");
+        w.println();
+
+        // Per-record durability floor: the strictest (spec.min_durable_copies) the
+        // record declares, defaulted to 2. Emitted as a constant so the map's
+        // backupCount and the write gate read ONE number, not two that can drift.
+        for (EventTopicDiscovery.TopicEvent e : events) {
+            w.println("    /** Distinct nodes a " + mapName(e)
+                    + " write must reach before it is acked. */");
+            w.println("    public static final int " + floorConst(e) + " = " + e.minDurableCopies + ";");
+        }
         w.println();
 
         // init
-        w.println("    /** Binds each typed map on the shared Hazelcast instance. */");
-        w.println("    public void init(HazelcastInstance hz) {");
+        w.println("    /**");
+        w.println("     * Binds each typed map on the shared Hazelcast instance.");
+        w.println("     *");
+        w.println("     * @param hot the hot write path — the quorum gate plus the backup-aware");
+        w.println("     *            redo append. Every write goes through it; a bare put would");
+        w.println("     *            give the second in-memory copy and no durability leg at all.");
+        w.println("     */");
+        w.println("    public void init(HazelcastInstance hz, HotWrites hot) {");
+        w.println("        this.hot = hot;");
         for (EventTopicDiscovery.TopicEvent e : events) {
             w.println("        " + field(e) + " = hz.getMap(\"" + mapName(e) + "\");");
         }
@@ -96,6 +115,11 @@ public final class EventStoreGenerator {
         w.println("     * EventBus subscription thread, and throwing would make the subscriber");
         w.println("     * retry the same poison record forever.");
         w.println("     *");
+        w.println("     * The write goes through HotWrites: the durability floor is checked");
+        w.println("     * BEFORE any local effect, and the value and its redo append ride the same");
+        w.println("     * replication, so the two logs that recorded it are the two instances that");
+        w.println("     * hold it. A below-quorum write throws rather than storing locally.");
+        w.println("     *");
         w.println("     * @return true if the type was recognised — including when the event was");
         w.println("     *         rejected as invalid. False means no typed store handles it.");
         w.println("     */");
@@ -111,7 +135,10 @@ public final class EventStoreGenerator {
                     + " " + e.recordKey + "={}: {}\", e." + keyGetter + "(), ex.getMessage());");
             w.println("                return true;");
             w.println("            }");
-            w.println("            " + field(e) + ".put(e." + keyGetter + "(), e);");
+            w.println("            hot.write(" + field(e) + ", \"" + mapName(e) + "\", e."
+                    + keyGetter + "(), e, " + floorConst(e) + ",");
+            w.println("                    () -> " + helpers(e) + "." + lowerType(e) + "ToJson(e), "
+                    + epochExpr(e) + ");");
             w.println("            return true;");
             w.println("        }");
         }
@@ -149,6 +176,38 @@ public final class EventStoreGenerator {
     }
 
     // ----- naming helpers -----
+
+    /** The emitted per-record durability-floor constant, e.g. MIN_DURABLE_COPIES_AGENTSENSOR_AGENT_EVENT. */
+    private static String floorConst(EventTopicDiscovery.TopicEvent e) {
+        return "MIN_DURABLE_COPIES_" + mapName(e).replace('.', '_')
+                .replaceAll("([a-z0-9])([A-Z])", "$1_$2").toUpperCase(java.util.Locale.ROOT);
+    }
+
+    /** The generated Helpers class beside the outer proto class. */
+    private static String helpers(EventTopicDiscovery.TopicEvent e) {
+        return e.javaPackage + ".Helpers";
+    }
+
+    /** lowerCamel type name, the stem of the generated ToJson/FromJson helpers. */
+    private static String lowerType(EventTopicDiscovery.TopicEvent e) {
+        return Character.toLowerCase(e.eventType.charAt(0)) + e.eventType.substring(1);
+    }
+
+    /**
+     * The store epoch stamped into the redo record.
+     *
+     * The record's own (spec.store_epoch) field when it declares one — the write
+     * time the row's two legs already partition on. A record that declares none is
+     * not replayable at all (see HotStoreGenerator), so it has no epoch to read and
+     * its redo append never happens; 0 is emitted to keep the call shape uniform
+     * rather than to stand in for a clock.
+     */
+    private static String epochExpr(EventTopicDiscovery.TopicEvent e) {
+        if (e.storeEpochField.isEmpty()) {
+            return "0L";
+        }
+        return "e.get" + pascal(e.storeEpochField) + "()";
+    }
 
     /** Java FQN of the event type, derived from the proto's java_package + java_outer_classname. */
     private static String fqn(EventTopicDiscovery.TopicEvent e) {

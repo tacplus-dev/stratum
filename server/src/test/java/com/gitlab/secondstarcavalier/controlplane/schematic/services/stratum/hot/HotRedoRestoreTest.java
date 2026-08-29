@@ -1,0 +1,284 @@
+// Copyright (c) 2024 Second Star Cavalier, LLC.
+package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+import com.google.protobuf.Message;
+import com.hazelcast.config.Config;
+import com.hazelcast.core.Hazelcast;
+import com.hazelcast.core.HazelcastInstance;
+import com.hazelcast.map.IMap;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.diskstore.Codec;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.diskstore.RedoLog;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Helpers;
+
+/**
+ * The hot tier's durability path, end to end: the write appends, and a restart
+ * gets every pre-restart record back — BIG GOAL 4 acceptance item 4, and the
+ * first time {@code service_store}'s redo log has actually run in stratum.
+ *
+ * <p>The dataset here is hand-built rather than taken from the generated
+ * {@code StratumHotStores}, because no record in the proto tree carries
+ * {@code (spec.store_epoch)} yet, so the generated list is empty. The runtime
+ * under test is entirely generic — it reads the descriptor, not the type — so a
+ * descriptor over a real record type exercises the same code the generated one
+ * will. What is NOT covered by this is the generator's own output, which
+ * {@code HotStoreGeneratorTest} pins separately.
+ */
+class HotRedoRestoreTest {
+
+    private static final String MAP = "agentsensor.AgentEvent";
+
+    private HazelcastInstance hz;
+    private HotRedoLogs logs;
+
+    @AfterEach
+    void tearDown() {
+        if (logs != null) {
+            logs.close();
+            logs = null;
+        }
+        if (hz != null) {
+            hz.shutdown();
+            hz = null;
+        }
+    }
+
+    // ------------------------------------------------------------------ fixtures
+
+    /**
+     * The store epoch is {@code timestamp_ms} here. On a record declaring
+     * {@code (spec.store_epoch)} the generator names that field instead; nothing
+     * in the mechanism depends on which field it is, only that there IS one.
+     */
+    private static HotDataset dataset(int minDurableCopies) {
+        return new HotDataset(MAP, minDurableCopies,
+                m -> ((Agentsensor.AgentEvent) m).getEventId(),
+                m -> ((Agentsensor.AgentEvent) m).getTimestampMs(),
+                "timestamp_ms",
+                m -> {
+                    try {
+                        return Helpers.agentEventToJson((Agentsensor.AgentEvent) m);
+                    } catch (Exception e) {
+                        throw new IllegalArgumentException(e);
+                    }
+                },
+                json -> {
+                    try {
+                        return Helpers.agentEventFromJson(json);
+                    } catch (Exception e) {
+                        throw new IllegalStateException(e);
+                    }
+                });
+    }
+
+    private static Agentsensor.AgentEvent event(String id, long epochMs, String session) {
+        return Agentsensor.AgentEvent.newBuilder()
+                .setEventId(id)
+                .setTimestampMs(epochMs)
+                .setEventType(Agentsensor.SensorEventType.SENSOR_EVENT_TYPE_SESSION_START)
+                .setSessionId(session)
+                .setAgentId("agent-1")
+                .setSensorType(Agentsensor.SensorType.SENSOR_TYPE_CLAUDE_CODE)
+                .setHookPhase(Agentsensor.HookPhase.HOOK_PHASE_PRE)
+                .setSpiffeId("spiffe://example/tenants/t/users/u")
+                .build();
+    }
+
+    private HazelcastInstance member(String cluster) {
+        Config cfg = new Config();
+        cfg.setClusterName(cluster);
+        cfg.setProperty("hazelcast.phone.home.enabled", "false");
+        cfg.getNetworkConfig().getJoin().getMulticastConfig().setEnabled(false);
+        cfg.getNetworkConfig().getJoin().getTcpIpConfig().setEnabled(false);
+        return Hazelcast.newHazelcastInstance(cfg);
+    }
+
+    // ------------------------------------------------------------------ append
+
+    @Test
+    void aHotWriteAppendsToThisNodesRedoLog(@TempDir Path dir) throws Exception {
+        hz = member("stratum-redo-append-test");
+        HotDataset d = dataset(1);
+        logs = new HotRedoLogs(dir, List.of(d), 3, Codec.NONE);
+        HotWrites hot = new HotWrites(hz, 0, 0);
+        IMap<String, Message> map = hz.getMap(MAP);
+
+        Agentsensor.AgentEvent e = event("evt-1", 1000L, "s1");
+        hot.write(map, MAP, "evt-1", e, 1, () -> Helpers.agentEventToJson(e), 1000L);
+
+        String log = Files.readString(logs.log(MAP).activePath());
+        assertTrue(log.contains("\"key\":\"evt-1\""), log);
+        assertTrue(log.contains("evt-1"), log);
+        assertTrue(log.contains("1000"), "the store epoch must ride the record as metadata:\n" + log);
+        assertEquals(e, map.get("evt-1"));
+    }
+
+    // ------------------------------------------------------- restart recovery
+
+    /**
+     * Acceptance item 4: every record written before the restart is back after it.
+     *
+     * <p>The map is deliberately destroyed with the member — a restart that kept
+     * its memory would pass without the log having done anything.
+     */
+    @Test
+    void everyRecordWrittenBeforeARestartIsBackAfterIt(@TempDir Path dir) throws Exception {
+        HotDataset d = dataset(1);
+
+        hz = member("stratum-redo-restart-test-a");
+        logs = new HotRedoLogs(dir, List.of(d), 3, Codec.NONE);
+        HotWrites hot = new HotWrites(hz, 0, 0);
+        IMap<String, Message> map = hz.getMap(MAP);
+        for (int i = 0; i < 25; i++) {
+            Agentsensor.AgentEvent e = event("evt-" + i, 1000L + i, "s" + i);
+            hot.write(map, MAP, e.getEventId(), e, 1, () -> Helpers.agentEventToJson(e), e.getTimestampMs());
+        }
+        assertEquals(25, map.size());
+
+        // Full stop: the member and its memory are gone, and so is the registry.
+        logs.close();
+        hz.shutdown();
+
+        hz = member("stratum-redo-restart-test-b");
+        logs = new HotRedoLogs(dir, List.of(d), 3, Codec.NONE);
+        IMap<String, Message> recovered = hz.getMap(MAP);
+        assertEquals(0, recovered.size(), "the restarted member must start empty");
+
+        HotRestore.Result result = HotRestore.replay(logs.log(MAP), d, recovered);
+
+        assertEquals(0, result.diverged.size(), "clean logs must not report divergence");
+        assertEquals(25, result.applied);
+        assertEquals(25, recovered.size());
+        for (int i = 0; i < 25; i++) {
+            Agentsensor.AgentEvent back = (Agentsensor.AgentEvent) recovered.get("evt-" + i);
+            assertNotNull(back, "evt-" + i + " did not survive the restart");
+            assertEquals("s" + i, back.getSessionId());
+            assertEquals(1000L + i, back.getTimestampMs());
+        }
+    }
+
+    // ---------------------------------------------------------- the union rule
+
+    /**
+     * Two nodes' logs, one key: the higher epoch wins regardless of which log is
+     * replayed first. Replay ORDER deciding the winner would be
+     * last-writer-wins by file position — the convergent behaviour that must not
+     * reach stratum's store.
+     */
+    @Test
+    void theHigherEpochWinsWhicheverLogReplaysFirst(@TempDir Path dir) throws Exception {
+        HotDataset d = dataset(1);
+        Path nodeA = dir.resolve("a");
+        Path nodeB = dir.resolve("b");
+        writeLog(nodeA, d, event("evt-1", 1000L, "old"));
+        writeLog(nodeB, d, event("evt-1", 2000L, "new"));
+
+        assertEquals("new", replayBoth(d, nodeA, nodeB, "stratum-union-ab").getSessionId());
+        assertEquals("new", replayBoth(d, nodeB, nodeA, "stratum-union-ba").getSessionId());
+    }
+
+    /**
+     * Q3: same key, same epoch, different bytes. The atomic write path makes this
+     * impossible, so its appearance is proof the path was violated — it fails
+     * closed and names the key rather than picking a winner.
+     */
+    @Test
+    void equalEpochDivergenceFailsClosed(@TempDir Path dir) throws Exception {
+        HotDataset d = dataset(1);
+        Path nodeA = dir.resolve("a");
+        Path nodeB = dir.resolve("b");
+        writeLog(nodeA, d, event("evt-1", 1000L, "one"));
+        writeLog(nodeB, d, event("evt-1", 1000L, "other"));
+
+        hz = member("stratum-diverge-test");
+        IMap<String, Message> map = hz.getMap(MAP);
+        HotRestore.Result first = replayFrom(nodeA, d, map);
+        HotRestore.Result second = replayFrom(nodeB, d, map);
+
+        assertTrue(first.diverged.isEmpty(), "the first log has nothing to disagree with");
+        assertEquals(List.of("evt-1"), second.diverged,
+                "an equal-epoch, different-bytes key must be reported, not resolved");
+        assertEquals("one", ((Agentsensor.AgentEvent) map.get("evt-1")).getSessionId(),
+                "a diverged key must be left exactly as it was, not overwritten");
+    }
+
+    /** The same write replayed from the owner's log and the backup's is idempotent. */
+    @Test
+    void theSameWriteFromTwoLogsIsNotDivergence(@TempDir Path dir) throws Exception {
+        HotDataset d = dataset(1);
+        Path nodeA = dir.resolve("a");
+        Path nodeB = dir.resolve("b");
+        writeLog(nodeA, d, event("evt-1", 1000L, "same"));
+        writeLog(nodeB, d, event("evt-1", 1000L, "same"));
+
+        hz = member("stratum-idempotent-test");
+        IMap<String, Message> map = hz.getMap(MAP);
+        replayFrom(nodeA, d, map);
+        HotRestore.Result second = replayFrom(nodeB, d, map);
+
+        assertTrue(second.diverged.isEmpty(), "identical bytes at one epoch are one write, replayed twice");
+        assertEquals(1, map.size());
+    }
+
+    // ------------------------------------------------------------- Q2 barrier
+
+    @Test
+    void hotReadsWaitForEveryReachableInstance(@TempDir Path dir) throws Exception {
+        hz = member("stratum-barrier-test");
+        int contributors = HotRestore.awaitClusterReplay(hz, 7, 1, java.time.Duration.ofSeconds(5));
+        assertEquals(1, contributors);
+    }
+
+    /**
+     * A node that replayed nothing is not a contributor. Below the floor that is
+     * LOGGED loudly rather than treated as a normal start — the recovered store is
+     * then thinner than the durability its writes were acked under.
+     */
+    @Test
+    void anEmptyReplayIsNotCountedAsAContribution(@TempDir Path dir) throws Exception {
+        hz = member("stratum-barrier-empty-test");
+        assertEquals(0, HotRestore.awaitClusterReplay(hz, 0, 2, java.time.Duration.ofSeconds(5)));
+    }
+
+    // ------------------------------------------------------------------ helpers
+
+    /** Writes one record straight into a node's log, without a cluster. */
+    private static void writeLog(Path nodeDir, HotDataset d, Agentsensor.AgentEvent e) {
+        try (RedoLog log = RedoLog.open(nodeDir.resolve(HotRedoLogs.HOT_SUBDIR), "/", d.mapName, 3, Codec.NONE)) {
+            log.append(new RedoLog.Record(e.getEventId(), false,
+                    Long.toString(e.getTimestampMs()), d.toJson.apply(e)));
+        }
+    }
+
+    private static HotRestore.Result replayFrom(Path nodeDir, HotDataset d, IMap<String, Message> map) {
+        try (RedoLog log = RedoLog.open(nodeDir.resolve(HotRedoLogs.HOT_SUBDIR), "/", d.mapName, 3, Codec.NONE)) {
+            return HotRestore.replay(log, d, map);
+        }
+    }
+
+    private Agentsensor.AgentEvent replayBoth(HotDataset d, Path first, Path second, String cluster) {
+        HazelcastInstance member = member(cluster);
+        try {
+            IMap<String, Message> map = member.getMap(MAP);
+            assertFalse(replayFrom(first, d, map).diverged.size() > 0);
+            assertFalse(replayFrom(second, d, map).diverged.size() > 0);
+            return (Agentsensor.AgentEvent) map.get("evt-1");
+        } finally {
+            member.shutdown();
+        }
+    }
+}

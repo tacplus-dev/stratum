@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.services.tasks.TasksOuterClass;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotWrites;
 
 /**
  * The retention sweep must name each record type's OWN age field.
@@ -53,7 +54,11 @@ class StratumEventStoresRetentionTest {
         cfg.getNetworkConfig().getJoin().getTcpIpConfig().setEnabled(false);
         hz = Hazelcast.newHazelcastInstance(cfg);
         stores = new StratumEventStores();
-        stores.init(hz);
+        // Single-member test cluster, so the durability floor is declared as 1
+        // rather than degraded to 1 — the same explicit statement a developer
+        // laptop makes. Without it every write here would be refused, which is
+        // exactly what the gate is for.
+        stores.init(hz, new HotWrites(hz, 0, 1));
     }
 
     @AfterEach

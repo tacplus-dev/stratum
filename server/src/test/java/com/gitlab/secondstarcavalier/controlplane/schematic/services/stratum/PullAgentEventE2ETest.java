@@ -22,6 +22,7 @@ import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.warm.WarmStore;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotWrites;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.token.TokenWrapper;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.vservices.query.RecordMap;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.vservices.query.RecordMapGrpc;
@@ -105,7 +106,11 @@ class PullAgentEventE2ETest {
         hz = Hazelcast.newHazelcastInstance(cfg);
 
         StratumEventStores stores = new StratumEventStores();
-        stores.init(hz);
+        // Single-member test cluster, so the durability floor is declared as 1
+        // rather than degraded to 1 — the same explicit statement a developer
+        // laptop makes. Without it every write here would be refused, which is
+        // exactly what the gate is for.
+        stores.init(hz, new HotWrites(hz, 0, 1));
         // The plane's second leg. AgentEvent is RESIDENCY_HOT (as every record type
         // is until one declares otherwise), so this store holds no dataset, opens no
         // directory and answers no disk leg — but the plane still takes it, which is

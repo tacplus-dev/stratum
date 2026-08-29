@@ -108,6 +108,14 @@ public class StratumCodegenMojo extends AbstractMojo {
             WarmStoreGenerator.generate(out, events);
             getLog().info("Generated StratumWarmStores.java");
 
+            // The hot tier's redo-log descriptors. Only record types carrying
+            // (spec.store_epoch) get one — a per-node log with no epoch cannot be
+            // unioned back across nodes at restore — and with none declared the
+            // list is empty and the hot tier writes no log, keeping its in-memory
+            // replication and its quorum gate.
+            HotStoreGenerator.generate(out, events);
+            getLog().info("Generated StratumHotStores.java");
+
             if (plane != null) {
                 // The s2s half is backed by the same record types the hot store
                 // holds, so it reuses the record-type list.

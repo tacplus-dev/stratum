@@ -1,0 +1,105 @@
+// Copyright (c) 2024 Second Star Cavalier, LLC.
+package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.hazelcast.config.Config;
+import com.hazelcast.core.Hazelcast;
+import com.hazelcast.core.HazelcastInstance;
+import com.hazelcast.map.IMap;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.diskstore.DiskStoreException;
+
+/**
+ * A hot write below its declared durability floor must be REFUSED, with no local
+ * effect — BIG GOAL 4 acceptance item 5.
+ *
+ * The failure this guards is the auto-degrade: "one node, so one copy will do".
+ * A production cluster that has lost two members looks exactly like this
+ * single-member test, so a degrade keyed on cluster size turns the guarantee off
+ * precisely when it was the thing protecting the data. The floor is therefore a
+ * DECLARED number, and a one-node deployment says 1 out loud.
+ */
+class HotQuorumGateTest {
+
+    private HazelcastInstance hz;
+
+    @BeforeEach
+    void setUp() {
+        Config cfg = new Config();
+        cfg.setClusterName("stratum-quorum-gate-test");
+        cfg.setProperty("hazelcast.phone.home.enabled", "false");
+        cfg.getNetworkConfig().getJoin().getMulticastConfig().setEnabled(false);
+        cfg.getNetworkConfig().getJoin().getTcpIpConfig().setEnabled(false);
+        hz = Hazelcast.newHazelcastInstance(cfg);
+    }
+
+    @AfterEach
+    void tearDown() {
+        if (hz != null) hz.shutdown();
+    }
+
+    /**
+     * One member, floor of two: refused, and the map is untouched. Asserting the
+     * throw alone would pass for a gate that threw AFTER writing locally, which is
+     * the "ack-then-hope" shape the refusal exists to prevent.
+     */
+    @Test
+    void aWriteBelowTheFloorIsRefusedAndHasNoLocalEffect() {
+        HotWrites hot = new HotWrites(hz, 1, 0);
+        IMap<String, String> map = hz.getMap("gate");
+
+        DiskStoreException e = assertThrows(DiskStoreException.class,
+                () -> hot.write(map, "demo.Event", "k1", "v1", 2, () -> "{}", 1L));
+
+        assertEquals(DiskStoreException.FAILED_PRECONDITION, e.getCode(),
+                "a below-quorum write must be FAILED_PRECONDITION, not an internal error");
+        assertTrue(e.getMessage().contains("2"), e.getMessage());
+        assertNull(map.get("k1"), "the refused write must leave nothing behind");
+        assertEquals(0, map.size());
+    }
+
+    /** The paired positive: at the declared floor the same write goes through. */
+    @Test
+    void aWriteAtTheFloorIsAcked() {
+        HotWrites hot = new HotWrites(hz, 0, 0);
+        IMap<String, String> map = hz.getMap("gate");
+
+        hot.write(map, "demo.Event", "k1", "v1", 1, () -> "{}", 1L);
+
+        assertEquals("v1", map.get("k1"));
+    }
+
+    /**
+     * The override is the deliberate single-node setting, not a degrade: it takes
+     * a record declaring 2 down to 1 only because the deployment SAID 1.
+     */
+    @Test
+    void theDeploymentOverrideReplacesTheDeclaredFloor() {
+        HotWrites hot = new HotWrites(hz, 0, 1);
+        IMap<String, String> map = hz.getMap("gate");
+
+        assertEquals(1, hot.effectiveFloor(2));
+        hot.write(map, "demo.Event", "k1", "v1", 2, () -> "{}", 1L);
+
+        assertEquals("v1", map.get("k1"));
+    }
+
+    /**
+     * Durable copies are counted from what the cluster can actually supply, not
+     * from what the map was configured to want. A one-member cluster with
+     * backupCount=2 has one copy, not three.
+     */
+    @Test
+    void durableCopiesAreCappedByTheVisibleCluster() {
+        assertEquals(1, new HotWrites(hz, 2, 0).durableCopies());
+        assertEquals(1, new HotWrites(hz, 0, 0).durableCopies());
+    }
+}

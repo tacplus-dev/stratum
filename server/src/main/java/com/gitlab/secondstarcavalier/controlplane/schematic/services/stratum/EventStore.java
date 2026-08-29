@@ -33,6 +33,11 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.haz
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumEpochExtractor;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumEventTypeExtractor;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.warm.WarmStore;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotDataset;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotRedoLogs;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotRestore;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotWrites;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.diskstore.Codec;
 
 /**
  * EventStore manages the Hazelcast IMap that backs stratum's hot event store.
@@ -74,7 +79,22 @@ public class EventStore {
     // store writes for agentsensor.AgentEvent.
     private IMap<String, AgentEvent> events;
     private WarmStore warm;
+    private HotRedoLogs hotLogs;
+    private HotWrites hotWrites;
+    /**
+     * False until every reachable instance has replayed its redo log. Hot reads
+     * refuse until then: a node holding only its OWN partial log looks answerable
+     * and is missing every row the other nodes owned, and serving that silently is
+     * worse than a slow start.
+     */
+    private volatile boolean hotReadable;
     private int retentionDays;
+
+    /** How long a cold start waits for its peers' redo replay before giving up. */
+    static final java.time.Duration RESTORE_TIMEOUT = java.time.Duration.ofMinutes(5);
+
+    /** Archives retained per hot redo log, matching the diskstore proto default. */
+    private static final int HOT_ARCHIVE_COUNT = 3;
 
     private final ScheduledExecutorService cleaner = Executors.newSingleThreadScheduledExecutor(
             r -> { Thread t = new Thread(r, "stratum-event-cleaner"); t.setDaemon(true); return t; });
@@ -97,9 +117,22 @@ public class EventStore {
     public void init(int retentionDays, long cleanupIntervalSecs, List<String> seedMembers) {
         this.retentionDays = retentionDays;
 
-        hz = Hazelcast.newHazelcastInstance(StratumMapConfig.build(seedMembers));
-        stores.init(hz);
+        int floorOverride = StratumMapConfig.configuredMinDurableCopies();
+        int minDurableCopies = floorOverride > 0
+                ? floorOverride
+                : StratumMapConfig.DEFAULT_MIN_DURABLE_COPIES;
+        hz = Hazelcast.newHazelcastInstance(StratumMapConfig.build(seedMembers, minDurableCopies));
+        hotWrites = new HotWrites(hz, minDurableCopies - 1, floorOverride);
+        stores.init(hz, hotWrites);
         events = hz.getMap(StratumMapConfig.MAP_NAME);
+
+        // The hot tier's redo logs, on THIS pod's volume. One per replayable record
+        // type; with no record carrying (spec.store_epoch) the list is empty, the
+        // node opens no log, and the tier is exactly what it is today plus the
+        // quorum gate.
+        List<HotDataset> hotDatasets = StratumHotStores.datasets();
+        hotLogs = new HotRedoLogs(dataRoot(), hotDatasets, HOT_ARCHIVE_COUNT, Codec.NONE);
+        restoreHotTier(hotDatasets, minDurableCopies);
 
         try {
             warm = new WarmStore(dataRoot(), StratumWarmStores.datasets(WarmStore.DEFAULT_WINDOW_SECONDS));
@@ -137,6 +170,47 @@ public class EventStore {
     }
 
     /**
+     * Replays this node's redo logs and waits for its peers to do the same before
+     * hot reads open.
+     *
+     * <p>An equal-epoch divergence aborts the start rather than picking a winner:
+     * two logs holding one key at one epoch with different bytes is proof the
+     * atomic write path was violated, and choosing between them would convert
+     * stratum's atomic store into a convergent one silently. See
+     * {@code EpochMergeProcessor}.
+     */
+    private void restoreHotTier(List<HotDataset> datasets, int minDurableCopies) {
+        int replayed = 0;
+        List<String> diverged = new ArrayList<>();
+        for (HotDataset d : datasets) {
+            HotRestore.Result result = HotRestore.replay(hotLogs.log(d.mapName), d, hz.getMap(d.mapName));
+            replayed += result.applied;
+            diverged.addAll(result.diverged);
+        }
+        if (!diverged.isEmpty()) {
+            throw new IllegalStateException("hot restore: equal-epoch divergence on " + diverged.size()
+                    + " key(s), which the atomic write path makes impossible; refusing to start."
+                    + " Keys: " + diverged);
+        }
+        HotRestore.awaitClusterReplay(hz, replayed, minDurableCopies, RESTORE_TIMEOUT);
+        hotReadable = true;
+        log.info("hot tier restored: {} record(s) replayed from this node's redo logs", replayed);
+    }
+
+    /** True once every reachable instance has replayed its redo log. */
+    public boolean hotReadable() {
+        return hotReadable;
+    }
+
+    private void requireHotReadable() {
+        if (!hotReadable) {
+            throw new IllegalStateException(
+                    "hot reads are closed until every reachable instance has replayed its redo log;"
+                            + " serving a partially recovered hot store would answer as if complete");
+        }
+    }
+
+    /**
      * Where the warm tier lives. The operator mounts the pod's per-replica volume
      * at /app/data; STRATUM_DATA_DIR overrides it for a local run, which is the
      * only case where /app/data does not exist.
@@ -151,6 +225,7 @@ public class EventStore {
     // -----------------------------------------------------------------------
 
     public Optional<AgentEvent> getByKey(String eventId) {
+        requireHotReadable();
         return Optional.ofNullable(events.get(eventId));
     }
 
@@ -159,6 +234,7 @@ public class EventStore {
      * Results are sorted by (timestampMs DESC, event_id ASC).
      */
     public List<AgentEvent> query(SqlPredicates preds) {
+        requireHotReadable();
         Predicate<String, AgentEvent> predicate = buildPredicate(preds);
         Collection<AgentEvent> raw = (predicate != null) ? events.values(predicate) : events.values();
         List<AgentEvent> sorted = new ArrayList<>(raw);
@@ -248,6 +324,7 @@ public class EventStore {
     public void shutdown() {
         cleaner.shutdownNow();
         if (warm != null) warm.close();
+        if (hotLogs != null) hotLogs.close();
         if (hz != null) hz.shutdown();
     }
 
