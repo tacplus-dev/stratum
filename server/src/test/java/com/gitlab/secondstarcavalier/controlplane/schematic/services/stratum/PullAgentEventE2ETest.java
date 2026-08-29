@@ -334,15 +334,20 @@ class PullAgentEventE2ETest {
     }
 
     /**
-     * The filter surface is exactly the four (spec.query_field) annotations, and
+     * The filter surface is exactly the (spec.query_field) annotations, and
      * nothing else. AgentEvent carries no (spec.redact) field today; if one is
      * ever added it must not become filterable, and this list is where that
      * shows up.
+     *
+     * storeEpochMsFrom/To are the store-epoch range: (spec.store_epoch) requires
+     * QUERY_OP_RANGE on its field, so declaring the epoch necessarily widens this
+     * surface by exactly those two bounds.
      */
     @Test
     void filterSurfaceIsExactlyTheAnnotatedFields() {
         assertEquals(
-                List.of("spiffeId", "timestampMsFrom", "timestampMsTo", "sessionId", "agentId"),
+                List.of("spiffeId", "timestampMsFrom", "timestampMsTo", "sessionId", "agentId",
+                        "storeEpochMsFrom", "storeEpochMsTo"),
                 PullAgentEvent.filterFieldNames(),
                 "the generated AgentEventFilter surface changed");
     }

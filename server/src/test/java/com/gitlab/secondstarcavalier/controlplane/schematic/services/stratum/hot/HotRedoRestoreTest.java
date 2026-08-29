@@ -33,12 +33,12 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
  * first time {@code service_store}'s redo log has actually run in stratum.
  *
  * <p>The dataset here is hand-built rather than taken from the generated
- * {@code StratumHotStores}, because no record in the proto tree carries
- * {@code (spec.store_epoch)} yet, so the generated list is empty. The runtime
- * under test is entirely generic — it reads the descriptor, not the type — so a
- * descriptor over a real record type exercises the same code the generated one
- * will. What is NOT covered by this is the generator's own output, which
- * {@code HotStoreGeneratorTest} pins separately.
+ * {@code StratumHotStores}: the runtime under test is entirely generic — it reads
+ * the descriptor, not the type — and a hand-built descriptor is how that
+ * genericity is stated, over an epoch field the declaration does not use. The
+ * generated descriptor is driven end to end by {@code HotAgentEventE2ETest}
+ * instead, and the generator's own output is pinned by
+ * {@code HotStoreGeneratorTest}.
  */
 class HotRedoRestoreTest {
 
