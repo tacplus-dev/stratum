@@ -16,13 +16,17 @@ import java.util.Set;
  * without depending on when the sweep last ran.
  *
  * <h2>Why pending keys are held by memory, not skipped by both</h2>
- * The disk leg already excludes keys whose asynchronous write has not committed
- * (see {@link WarmIndex#pendingKeys()}). If the memory cut were the boundary test
- * alone, a row that is both aged AND pending would be excluded by both legs and
- * vanish from results until its write drained. Ownership is therefore the exact
- * complement of the disk leg's exclusion: memory owns a row while its write is
- * pending OR its epoch is inside the window, disk owns it otherwise, and every row
- * is owned by exactly one leg at every instant.
+ * The disk leg already excludes keys whose in-memory copy may be ahead of their
+ * on-disk one (see {@link WarmIndex#pendingKeys()}). That is a CLAIM window, not
+ * merely a write-in-flight one: it opens when the ingest path claims the key —
+ * before the memory put that can make memory's copy the newer one — and closes when
+ * the disk write commits, or when the claim is released because no write will
+ * follow. If the memory cut were the boundary test alone, a row that is both aged
+ * AND claimed would be excluded by both legs and vanish from results until the
+ * claim cleared. Ownership is therefore the exact complement of the disk leg's
+ * exclusion: memory owns a row while its key is claimed OR its epoch is inside the
+ * window, disk owns it otherwise, and every row is owned by exactly one leg at
+ * every instant.
  *
  * <h2>Why it is a snapshot</h2>
  * One value, taken once per query, applied to every row of that query. Re-reading
@@ -35,7 +39,7 @@ public final class WarmResidency {
     /** Memory serves {@code epoch >= boundaryMs}; disk serves {@code epoch < boundaryMs}. */
     public final long boundaryMs;
 
-    /** Keys whose disk copy is still behind memory. Live view of the index's set. */
+    /** Keys whose disk copy may be behind memory. Live view of the index's set. */
     private final Set<String> pending;
 
     WarmResidency(long boundaryMs, Set<String> pending) {

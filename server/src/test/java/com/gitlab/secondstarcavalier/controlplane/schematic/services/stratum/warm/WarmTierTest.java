@@ -416,6 +416,79 @@ class WarmTierTest {
     }
 
     /**
+     * The claim covers the interval BEFORE the write is enqueued.
+     *
+     * The duplicate the pending set exists to prevent does not begin at the disk
+     * write, it begins at the memory put: from there memory's copy is the newer one
+     * while the disk still holds the previous one. So the disk leg has to stop
+     * answering for the key at the CLAIM, with nothing else having happened yet —
+     * which is exactly what this asserts, since no memory put and no enqueue follow
+     * it here.
+     */
+    @Test
+    void aClaimHidesTheStaleDiskCopyBeforeAnythingIsEnqueued(@TempDir Path dir) throws Exception {
+        try (WarmStore warm = store(dir, false)) {
+            warm.enqueue(event("k", "2025-03-15T00:00:00Z", "spiffe://one"));
+            warm.awaitWrites(10_000);
+            assertEquals(1, warm.count(DATASET, new WarmFilter()));
+
+            AgentEvent update = event("k", "2025-06-15T00:00:00Z", "spiffe://two");
+            assertTrue(warm.claim(update), "a warm dataset holds this type; the claim was refused");
+            assertEquals(0, warm.count(DATASET, new WarmFilter()),
+                    "the disk leg still answers for a key whose memory copy may already be newer");
+            assertEquals(List.of(), warm.query(DATASET, new WarmFilter()));
+
+            // Memory owns the key for exactly as long as the claim is held, so a row
+            // aged past the boundary is not lost by both legs at once.
+            assertTrue(warm.residency(DATASET).inMemory("k", ms("2025-03-15T00:00:00Z")));
+
+            warm.release(update);
+            assertEquals(1, warm.count(DATASET, new WarmFilter()),
+                    "the released claim still hides the key from the disk leg");
+            assertFalse(warm.residency(DATASET).inMemory("k", ms("2025-03-15T00:00:00Z")));
+        }
+    }
+
+    /** A claim on a type no warm dataset holds is refused, so nothing is owed. */
+    @Test
+    void aClaimOnAnUnheldTypeIsRefused(@TempDir Path dir) throws Exception {
+        try (WarmStore warm = new WarmStore(dir.resolve("empty"), List.of())) {
+            assertFalse(warm.claim(event("a", "2025-01-15T00:00:00Z", "spiffe://one")));
+        }
+    }
+
+    /**
+     * The validator-rejection leg releases the claim it was given.
+     *
+     * Nothing else can: no write is submitted, so no commit will ever clear the key.
+     * A leak here is worse than the duplicate the claim prevents — it hides the key
+     * from the disk leg for the life of the process — so the proof is that a later
+     * legitimate write for the SAME key is served afterwards.
+     */
+    @Test
+    void anUnstorableRecordReleasesTheClaimItWasGiven(@TempDir Path dir) throws Exception {
+        try (WarmStore warm = store(dir, false)) {
+            AgentEvent invalid = AgentEvent.newBuilder()
+                    .setEventId("k")
+                    .setTimestampMs(ms("2025-03-15T00:00:00Z"))
+                    .build(); // event_type unset — the generated validator refuses it
+
+            assertTrue(warm.claim(invalid));
+            assertTrue(warm.enqueue(invalid), "the dataset still claims the type");
+            warm.awaitWrites(10_000);
+            assertEquals(1, warm.rejectedCount());
+            assertFalse(warm.index(DATASET).pendingKeys().contains("k"),
+                    "the rejected record left its key claimed forever");
+
+            warm.enqueue(event("k", "2025-03-15T00:00:00Z", "spiffe://one"));
+            warm.awaitWrites(10_000);
+            assertEquals(1, warm.count(DATASET, new WarmFilter()),
+                    "a leaked claim is hiding a legitimately written row from the disk leg");
+            assertEquals(List.of("k"), idsOf(warm.query(DATASET, new WarmFilter())));
+        }
+    }
+
+    /**
      * The hot store drops a record that fails the generated validator, because the
      * read path validates every item in a page and one bad row fails the whole
      * response. A disk copy that outlived the memory copy would reintroduce exactly

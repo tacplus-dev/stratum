@@ -45,6 +45,14 @@ import com.google.protobuf.Message;
  * window it opens and how the disk leg is kept out of it, and
  * {@link #enqueue} for what a crash inside the window loses.
  *
+ * <h2>Claim, then write</h2>
+ * The window the disk leg has to be kept out of starts BEFORE the disk write, at
+ * the moment memory's copy can become the newer one — not at the enqueue. So
+ * {@link #claim} and {@link #release} bracket the memory put, and {@link #enqueue}
+ * runs inside that bracket. Marking the key at the enqueue instead leaves the
+ * interval between the memory put and the enqueue uncovered, and an update to an
+ * already-aged row is served by BOTH legs for its duration.
+ *
  * <h2>Where the boundary is read</h2>
  * The residency boundary is read from ONE place for both legs: {@link #diskRange}
  * is the disk side of it and {@link #residency} is the memory side. Rows are moved
@@ -167,12 +175,48 @@ public final class WarmStore implements AutoCloseable {
     // -----------------------------------------------------------------------
 
     /**
+     * Claims a record's key for the memory leg, BEFORE its memory copy is written.
+     *
+     * This is the half of {@link WarmIndex#pendingKeys()} that {@link #enqueue}
+     * cannot cover: the disk leg has to stop answering for the key from the instant
+     * memory's copy can be the newer one, and that instant is the memory put, not
+     * the enqueue that follows it.
+     *
+     * A claim is a debt. The caller owes the key a {@link #release} unless a
+     * subsequent {@link #enqueue} takes it over — which it does by either submitting
+     * the write (the writer clears the key on commit) or rejecting the record (which
+     * releases it directly). A claim never released hides the key from the disk leg
+     * for the life of the process.
+     *
+     * @return true when a warm dataset claimed the record; false leaves nothing owed.
+     */
+    public boolean claim(Message record) {
+        WarmIndex idx = indexFor(record);
+        if (idx == null) {
+            return false;
+        }
+        idx.markPending(idx.dataset().key(record));
+        return true;
+    }
+
+    /** Drops a claim {@link #claim} took when no disk write followed it. */
+    public void release(Message record) {
+        WarmIndex idx = indexFor(record);
+        if (idx != null) {
+            idx.clearPending(idx.dataset().key(record));
+        }
+    }
+
+    /**
      * Hands a record to the asynchronous disk writer and returns immediately.
      *
      * The key is marked pending SYNCHRONOUSLY, on the ingest thread, before the
      * write is submitted — not inside the writer task. Marking it later would leave
      * a gap in which the disk leg still served the row's previous copy while memory
      * already served the new one, which is the duplicate this exists to prevent.
+     * The mark is idempotent because the ingest path has normally taken the same
+     * claim already (see {@link #claim}); a caller that enqueues without claiming
+     * still gets the narrower cover this line has always given.
      *
      * What the asynchrony costs, stated: a process killed between the memory put and
      * the disk commit loses that commit. The row is not lost — the record is still
@@ -199,6 +243,10 @@ public final class WarmStore implements AutoCloseable {
         } catch (Exception e) {
             rejected.incrementAndGet();
             log.warn("warm tier rejected unstorable {}: {}", idx.dataset().name, e.getMessage());
+            // No write will follow, so nothing else will ever clear the claim the
+            // ingest path took before the memory put. Leaving it would hide the key
+            // from the disk leg permanently.
+            idx.clearPending(idx.dataset().key(record));
             return true;
         }
         idx.markPending(idx.dataset().key(record));

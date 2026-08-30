@@ -16,6 +16,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -169,11 +170,49 @@ public class EventStore {
      * StratumEventStores, so this code names no vservice.
      */
     public boolean store(Message event) {
-        boolean handled = stores.store(event);
-        // AFTER the memory put, and without waiting for it: the ack is the
-        // in-memory replication, the disk commit follows asynchronously.
-        warm.enqueue(event);
-        return handled;
+        return ingest(warm, event, () -> stores.store(event));
+    }
+
+    /**
+     * The warm ingest sequence: claim, memory put, disk enqueue.
+     *
+     * <p>The claim comes FIRST, before the memory put — not with the enqueue that
+     * follows it. From the memory put onwards memory's copy may be the newer one,
+     * and for a MUTABLE row whose previous copy has aged past the residency boundary
+     * that makes both legs match the key at once: memory because the update's epoch
+     * is back inside the window, disk because it still holds the pre-update copy and
+     * the key is not yet pending. Claiming first closes that window; claiming at the
+     * enqueue leaves it open for the width of these two calls.
+     *
+     * <p>The other order — enqueue then memory put — is strictly worse: it turns the
+     * duplicate into a LOST row whenever the asynchronous writer commits before the
+     * memory put lands.
+     *
+     * <p>The {@code finally} exists because a claim not released is worse than the
+     * duplicate it prevents: a permanently pending key is hidden from the disk leg
+     * for the life of the process. It covers the leg where {@code memoryPut} throws
+     * — a HotWrites quorum refusal, say — before the enqueue ever runs. The other
+     * leg, a record the warm validator rejects, is released inside
+     * {@link WarmStore#enqueue}, which is where that decision is made.
+     *
+     * <p>{@code memoryPut} is a parameter rather than an inlined call so this
+     * sequence — the thing the correctness argument is about — is one testable unit
+     * instead of something a test has to re-spell to exercise.
+     */
+    static boolean ingest(WarmStore warm, Message event, BooleanSupplier memoryPut) {
+        boolean claimed = warm.claim(event);
+        boolean enqueued = false;
+        try {
+            boolean handled = memoryPut.getAsBoolean();
+            // AFTER the memory put, and without waiting for it: the ack is the
+            // in-memory replication, the disk commit follows asynchronously.
+            enqueued = warm.enqueue(event);
+            return handled;
+        } finally {
+            if (claimed && !enqueued) {
+                warm.release(event);
+            }
+        }
     }
 
     /**

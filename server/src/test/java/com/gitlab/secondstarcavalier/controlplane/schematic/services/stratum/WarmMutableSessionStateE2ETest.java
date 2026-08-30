@@ -18,6 +18,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.hazelcast.config.Config;
@@ -110,11 +111,20 @@ class WarmMutableSessionStateE2ETest {
                 .build();
     }
 
-    /** One republish of an existing session — the write path an update takes. */
+    /**
+     * One republish of an existing session — the write path an update takes.
+     *
+     * <p>{@link EventStore#ingest} IS that path: claim, memory put, disk enqueue.
+     * Calling it rather than re-spelling its two middle lines is what makes the
+     * ordering under test the production ordering and not a copy of it.
+     */
     private static void publish(AgentSessionState r) throws Exception {
-        assertTrue(stores.store(r), "the typed hot store did not claim the record");
-        assertTrue(warm.enqueue(r), "the warm tier did not claim a declared RESIDENCY_WARM record");
+        long writtenBefore = warm.writtenCount();
+        assertTrue(EventStore.ingest(warm, r, () -> stores.store(r)),
+                "the typed hot store did not claim the record");
         warm.awaitWrites(10_000);
+        assertEquals(writtenBefore + 1, warm.writtenCount(),
+                "the warm tier did not write a declared RESIDENCY_WARM record");
         assertEquals(0, warm.writeFailureCount(), "a warm disk write failed");
     }
 
@@ -421,5 +431,119 @@ class WarmMutableSessionStateE2ETest {
         assertEquals(SessionStatus.SESSION_STATUS_ENDED, servedRow("sess-cold").getStatus(),
                 "the stale copy answered; the update did not reach the slice the disk leg reads");
         assertEquals(12, servedRow("sess-cold").getToolUseCount());
+    }
+
+    /**
+     * P4e: a query that lands INSIDE the claim window sees the updated row once.
+     *
+     * <p>The window is the interval between the memory put and the disk enqueue. For
+     * a mutable row already aged past the boundary, the update puts memory's copy
+     * back inside the residency window while the disk still holds the pre-update
+     * copy — so without a claim taken before the memory put, both legs match the key
+     * and {@code Get<T>Count} reads one too many for the width of those two calls.
+     * P4d measured exactly that: 5 rows and {@code [.., sess-probe, sess-probe]}.
+     *
+     * <p>The query is issued from inside {@link EventStore#ingest}'s own {@code
+     * memoryPut} — the real sequence, with the test supplying only the memory put it
+     * already owns, not a hook the production code carries for the test's benefit.
+     */
+    @Test
+    @Order(7)
+    void aQueryInsideTheClaimWindowCountsAnUpdatedAgedRowExactlyOnce() throws Exception {
+        assertEquals(1, onDisk("sess-cold"),
+                "the fixture is only a claim-window test if sess-cold starts on the disk leg");
+
+        AgentSessionState update = row("sess-cold", System.currentTimeMillis(),
+                SessionStatus.SESSION_STATUS_ACTIVE, 21);
+        List<String> insideIds = new ArrayList<>();
+        long[] insideCount = new long[1];
+        assertTrue(EventStore.ingest(warm, update, () -> {
+            boolean handled = stores.store(update);
+            // Here: memory holds the update, the disk write has not been enqueued.
+            insideCount[0] = servedCount();
+            insideIds.addAll(servedIds());
+            return handled;
+        }));
+
+        assertEquals(3, insideCount[0],
+                "the updated row was counted twice inside the claim window: " + insideIds);
+        assertEquals(List.of("sess-aged", "sess-cold", "sess-fresh"), insideIds,
+                "the updated row was listed twice inside the claim window");
+
+        // And the answer is the same on the far side of the commit.
+        warm.awaitWrites(10_000);
+        assertEquals(3, servedCount());
+        assertEquals(List.of("sess-aged", "sess-cold", "sess-fresh"), servedIds());
+        assertEquals(21, servedRow("sess-cold").getToolUseCount(),
+                "the pre-update copy was served");
+    }
+
+    /**
+     * A memory put that throws releases the claim rather than leaking it.
+     *
+     * <p>A HotWrites quorum refusal fails {@code stores.store} before the enqueue
+     * ever runs, so nothing downstream would clear the key. A claim left set is
+     * worse than the duplicate it prevents — the key is hidden from the disk leg for
+     * the life of the process — which is what the assertions after the throw check:
+     * the row the disk leg still legitimately holds is still served, and a later
+     * legitimate write for the same key is not silently hidden either.
+     */
+    @Test
+    @Order(8)
+    void aMemoryPutThatThrowsReleasesTheClaimItTook() throws Exception {
+        publish(row("sess-refused", EPOCH_JUN, SessionStatus.SESSION_STATUS_ENDED, 4));
+        assertEquals(1, onDisk("sess-refused"), "the fixture must start on the disk leg");
+        assertEquals(4, servedCount());
+
+        AgentSessionState update = row("sess-refused", System.currentTimeMillis(),
+                SessionStatus.SESSION_STATUS_ACTIVE, 5);
+        assertThrows(IllegalStateException.class,
+                () -> EventStore.ingest(warm, update, () -> {
+                    throw new IllegalStateException("hot write refused: quorum not met");
+                }));
+
+        assertEquals(1, onDisk("sess-refused"),
+                "the claim leaked; the disk leg no longer answers for the copy it still holds");
+        assertFalse(warm.residency(DATASET).inMemory("sess-refused", EPOCH_JUN),
+                "a released key must be the disk leg's again, not memory's forever");
+        assertEquals(4, servedCount(), "the row the refused write never replaced was lost");
+        assertEquals(List.of("sess-aged", "sess-cold", "sess-fresh", "sess-refused"), servedIds());
+
+        // The same key writes again normally — proof the release was real, not a
+        // count that happened to come out right.
+        publish(row("sess-refused", EPOCH_MAR, SessionStatus.SESSION_STATUS_ENDED, 6));
+        assertEquals(1, onDisk("sess-refused"),
+                "a stale claim is hiding a legitimately written row from the disk leg");
+        assertEquals(4, servedCount());
+        assertEquals(6, servedRow("sess-refused").getToolUseCount());
+    }
+
+    /**
+     * The other release leg, over the generated record: a record the warm validator
+     * refuses is released inside {@link WarmStore#enqueue}, not left claimed.
+     *
+     * <p>{@code EventStore.ingest}'s own {@code finally} cannot cover this one — the
+     * enqueue returned normally, so from the sequence's point of view the claim was
+     * taken over. The rejection path is where the decision not to write is made, so
+     * it is where the release belongs.
+     */
+    @Test
+    @Order(9)
+    void aRecordTheWarmValidatorRefusesReleasesItsClaim() throws Exception {
+        long rejectedBefore = warm.rejectedCount();
+        // spiffe_id unset — the generated validator refuses it.
+        AgentSessionState invalid = AgentSessionState.newBuilder()
+                .setSessionId("sess-refused")
+                .setStoreEpochMs(System.currentTimeMillis())
+                .build();
+
+        EventStore.ingest(warm, invalid, () -> stores.store(invalid));
+        warm.awaitWrites(10_000);
+        assertEquals(rejectedBefore + 1, warm.rejectedCount(),
+                "the fixture is only a rejection test if the warm validator refuses it");
+
+        assertEquals(1, onDisk("sess-refused"),
+                "the rejected record left its key claimed; the disk leg is hiding a row forever");
+        assertFalse(warm.residency(DATASET).inMemory("sess-refused", EPOCH_MAR));
     }
 }

@@ -98,18 +98,21 @@ public final class WarmIndex implements Closeable {
     private final Map<String, FSDirectory> directories = new ConcurrentHashMap<>();
 
     /**
-     * Keys whose in-memory copy is newer than their on-disk copy because their
-     * asynchronous write has not committed yet.
+     * Keys whose in-memory copy MAY BE newer than their on-disk copy.
      *
-     * The disk leg excludes them. Without that, the interval between the memory put
-     * (which is the ack) and the disk commit is a window in which the row's old copy
-     * still satisfies the disk leg's epoch predicate while the new copy already
-     * satisfies the memory leg's — i.e. a DUPLICATE, which permanently inflates
-     * Get&lt;T&gt;Count. Excluding the key makes memory unambiguously the owner for
-     * exactly as long as the disk copy is stale, which is true by construction:
-     * the pending write stamped epoch = now, so the memory leg does match it.
+     * The disk leg excludes them. The window is not the disk write alone: it opens
+     * at the CLAIM, before the memory put that makes memory's copy the newer one,
+     * and closes at the disk commit that makes the two agree — or at the release,
+     * when no disk write will follow. Marking the key only when the write is
+     * submitted would leave the interval between the memory put and that submission
+     * uncovered, and in it the row's old copy still satisfies the disk leg's epoch
+     * predicate while the new copy already satisfies the memory leg's — i.e. a
+     * DUPLICATE, which inflates Get&lt;T&gt;Count for the length of the window.
+     * Excluding the key makes memory unambiguously the owner for exactly as long as
+     * the disk copy may be stale, which is true by construction: the pending write
+     * stamps epoch = now, so the memory leg does match it.
      *
-     * The set is bounded by the writes in flight, and every instance holds a full
+     * The set is bounded by the ingests in flight, and every instance holds a full
      * local replica, so an instance's pending set covers its own index exactly.
      */
     private final Set<String> pending = ConcurrentHashMap.newKeySet();
@@ -142,6 +145,17 @@ public final class WarmIndex implements Closeable {
 
     void markPending(String key) {
         pending.add(key);
+    }
+
+    /**
+     * Drops a claim no disk write will close.
+     *
+     * A key left pending forever is HIDDEN from the disk leg forever, which is worse
+     * than the duplicate the claim prevents — so every path that claims without
+     * writing has to come back through here.
+     */
+    void clearPending(String key) {
+        pending.remove(key);
     }
 
     /**
