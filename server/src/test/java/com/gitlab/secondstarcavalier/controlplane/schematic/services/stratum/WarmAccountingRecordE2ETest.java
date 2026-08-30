@@ -61,21 +61,19 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
  * a HAND-BUILT descriptor over AgentEvent and so cannot show that a declaration
  * produces one.
  *
- * <h2>What it does NOT cover, stated plainly</h2>
- * <p><b>Memory eviction at the residency boundary does not exist yet.</b> Nothing
- * removes a row from the Hazelcast map when it ages past the window
- * ({@code WarmDataset.boundaryMs} has exactly one caller, the disk leg's prune in
- * {@code WarmStore.diskRange}), and the generated memory leg applies no epoch cut.
- * So the two-leg partition this test asserts on — memory holds
- * {@code epoch >= boundary}, disk holds {@code epoch < boundary} — is STAGED here:
- * the aged rows are written through the warm ingest only and the fresh row through
- * the memory store only, which is the state an eviction sweep would produce. Once
- * eviction lands, both legs are fed by the one {@code EventStore.store} call and
- * this staging goes away. Until then, a warm row that ages past the window while
- * still resident is served by BOTH legs and counted twice — see the final report
- * for the gap.
+ * <h2>No staging</h2>
+ * <p>Every fixture goes through BOTH legs, exactly as {@code EventStore.store}
+ * feeds them: the memory put first, the asynchronous disk write behind it. An
+ * earlier revision of this test staged the partition by hand — aged rows to the
+ * warm ingest only, the fresh row to the memory store only — because nothing then
+ * cut the memory leg at the residency boundary and an aged row that was resident in
+ * both was served twice. {@code WarmResidency} is that cut now, so the partition is
+ * a property of the code under test rather than of the fixture, and
+ * {@link #anAgedRowStillResidentInMemoryIsServedAndCountedExactlyOnce} is what says
+ * so. Eviction — removing the aged row from the map — is a separate concern with
+ * its own test; see {@code WarmEvictionE2ETest}.
  *
- * <p>The stamp itself is also not covered, for the same reason
+ * <p>The stamp itself is not covered, for the same reason
  * {@code HotAgentEventE2ETest} does not cover it: the store epoch is stamped in the
  * generated ServiceManager's subscription dispatch, which needs a bootstrapped
  * service and a broker. Here the fixtures arrive already stamped.
@@ -151,19 +149,22 @@ class WarmAccountingRecordE2ETest {
         // The GENERATED descriptor list, at a window this test can cross.
         warm = new WarmStore(dataRoot, StratumWarmStores.datasets(WINDOW_SECONDS));
 
-        // Aged rows: warm ingest only — the state eviction would leave (see class doc).
-        assertTrue(warm.enqueue(row("acct-mar", 1000, EPOCH_MAR)),
-                "the warm tier did not claim a declared RESIDENCY_WARM record");
-        assertTrue(warm.enqueue(row("acct-jun", 2000, EPOCH_JUN)));
+        // Every row through both legs, in EventStore.store's own order: the memory
+        // put is the ack, the disk write follows it. The aged rows therefore sit in
+        // the Hazelcast map on the WRONG side of the residency boundary, which is
+        // precisely the state the memory-leg cut has to survive.
+        for (AccountingRecord r : List.of(row("acct-mar", 1000, EPOCH_MAR),
+                                          row("acct-jun", 2000, EPOCH_JUN),
+                                          row("acct-fresh", 3000, EPOCH_FRESH))) {
+            assertTrue(stores.store(r), "the generated hot store did not claim the record");
+            assertTrue(warm.enqueue(r), "the warm tier did not claim a declared RESIDENCY_WARM record");
+        }
         warm.awaitWrites(10_000);
         assertEquals(0, warm.writeFailureCount(), "a warm disk write failed");
         assertEquals(0, warm.rejectedCount(), "a fixture failed the generated AccountingRecord validation");
-        assertEquals(2, warm.writtenCount());
-
-        // The in-window row: memory only.
-        assertTrue(stores.store(row("acct-fresh", 3000, EPOCH_FRESH)));
-        assertEquals(1, stores.accountingrecordAccountingRecord().size(),
-                "the fresh fixture failed the generated validation and was dropped");
+        assertEquals(3, warm.writtenCount());
+        assertEquals(3, stores.accountingrecordAccountingRecord().size(),
+                "a fixture failed the generated validation and was dropped");
 
         var authorizer = new com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum
                 .model.chassis.grpcserver.Authorizer(sink -> { }) {
@@ -305,6 +306,59 @@ class WarmAccountingRecordE2ETest {
         assertEquals(redacted(row("acct-mar", 1000, EPOCH_MAR)), served(all, "acct-mar"),
                 "the row must round-trip through the warm tier's stored proto unchanged"
                         + " but for the egress redaction");
+    }
+
+    /**
+     * The warm record has NO hot redo log — asserted against the real generated
+     * {@link StratumHotStores}, which is the descriptor list the running node opens
+     * its logs from.
+     *
+     * <p>A warm record must carry (spec.store_epoch), and the hot generator used to
+     * select on nothing else, so AccountingRecord got a redo log it had no use for:
+     * a second disk write of bytes the warm tier had already committed, and — once
+     * eviction exists — a replay that would put aged rows back into the memory map
+     * the sweep had just cleared them out of. The control is AgentEvent in the same
+     * assertion: the hot record still has its log, so this cannot pass by the hot
+     * tier having been switched off wholesale.
+     */
+    @Test
+    void theWarmRecordHasNoHotRedoLog() {
+        List<String> replayable = new ArrayList<>();
+        for (var d : StratumHotStores.datasets()) {
+            replayable.add(d.mapName);
+        }
+        assertTrue(replayable.contains("agentsensor.AgentEvent"),
+                "the hot record lost its redo log; the exclusion is too wide: " + replayable);
+        assertEquals(List.of("agentsensor.AgentEvent"), replayable,
+                "a RESIDENCY_WARM record still gets a hot redo log");
+    }
+
+    /**
+     * Acceptance item 2's control: a row that has aged past the residency window
+     * while STILL RESIDENT in the Hazelcast map is served once and counted once.
+     *
+     * <p>This is the failure the two-leg union invites and the reason
+     * {@code WarmResidency} exists. Both aged fixtures are in memory AND on disk
+     * here — the assertions below pin that, so the test cannot pass by the rows
+     * having quietly been in one place — and the merged answer is still three rows
+     * and a count of three. Without the memory leg's boundary cut it is five and
+     * five.
+     *
+     * <p>It holds with no sweep having run: the cut is applied per query, not left
+     * to whenever {@code WarmEviction} last fired.
+     */
+    @Test
+    void anAgedRowStillResidentInMemoryIsServedAndCountedExactlyOnce() throws Exception {
+        assertEquals(3, stores.accountingrecordAccountingRecord().size(),
+                "the aged rows must be memory-resident for this to test anything");
+        assertEquals(2, warm.count(DATASET, new WarmFilter()),
+                "both aged rows must also be on disk; the fresh one is inside the leg's ceiling");
+
+        assertEquals(List.of("acct-fresh", "acct-jun", "acct-mar"),
+                idsOf(pull(Query.AccountingRecordFilter.newBuilder().build())),
+                "an aged row that is resident in both legs was served by both");
+        assertEquals(3, count(Query.AccountingRecordFilter.newBuilder().build()),
+                "the merged count double-counted a row resident in memory and on disk");
     }
 
     /**

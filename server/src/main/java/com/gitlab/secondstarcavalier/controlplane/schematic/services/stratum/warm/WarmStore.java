@@ -44,6 +44,13 @@ import com.google.protobuf.Message;
  * stated plainly rather than hidden: see {@link WarmIndex#pendingKeys()} for the
  * window it opens and how the disk leg is kept out of it, and
  * {@link #enqueue} for what a crash inside the window loses.
+ *
+ * <h2>Where the boundary is read</h2>
+ * The residency boundary is read from ONE place for both legs: {@link #diskRange}
+ * is the disk side of it and {@link #residency} is the memory side. Rows are moved
+ * off memory by {@code WarmEviction}, which is a reclaim, not a correctness step —
+ * {@link WarmResidency} makes the memory leg stop serving an aged row from the
+ * instant the boundary passes it, whether or not a sweep has run since.
  */
 public final class WarmStore implements AutoCloseable {
 
@@ -286,6 +293,38 @@ public final class WarmStore implements AutoCloseable {
         long from = callerFrom == null ? Long.MIN_VALUE : callerFrom;
         long to = callerTo == null ? boundary : Math.min(callerTo + 1, boundary);
         return to <= from ? null : new long[] { from, to };
+    }
+
+    // -----------------------------------------------------------------------
+    // Residency — the memory leg's half of the same cut
+    // -----------------------------------------------------------------------
+
+    /**
+     * Which rows of this dataset the MEMORY leg still owns, at this instant.
+     *
+     * {@link #diskRange} is this same boundary read from the disk side; handing the
+     * memory side its complement from the one place is what keeps the two legs from
+     * drifting apart. A dataset this store does not hold is memory-only: nothing has
+     * tiered it, so no disk leg can answer for it.
+     */
+    public WarmResidency residency(String datasetName) {
+        WarmIndex idx = indexes.get(datasetName);
+        if (idx == null) {
+            return WarmResidency.memoryOnly();
+        }
+        return new WarmResidency(idx.dataset().boundaryMs(System.currentTimeMillis()),
+                idx.pendingKeys());
+    }
+
+    /**
+     * True when this node's disk index already holds the key — the precondition for
+     * dropping the row from memory. False for a dataset this store does not hold,
+     * which is the safe answer: an unheld dataset has no disk leg, so nothing may be
+     * evicted from its memory.
+     */
+    public boolean isDurableOnDisk(String datasetName, String key) throws IOException {
+        WarmIndex idx = indexes.get(datasetName);
+        return idx != null && idx.holdsKey(key);
     }
 
     // -----------------------------------------------------------------------

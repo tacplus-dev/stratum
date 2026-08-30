@@ -10,6 +10,7 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -56,6 +57,12 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
  *   write is off the ack path — see WarmStore — so ingest latency is unchanged.
  *   With no warm-typed record declared the tier holds nothing and touches no
  *   file, which is stratum's state today.
+ *
+ *   A row whose store epoch has aged past the residency window is served by the
+ *   disk leg alone — the memory leg's cut (WarmResidency) is applied per query, so
+ *   that is true from the instant the boundary passes, not from the next sweep.
+ *   WarmEviction then drops the row from the map to get the memory back; see
+ *   {@link #runWarmEviction()}.
  *
  * Retention:
  *   Runs on cleanup_interval_seconds. Deletes entries older than
@@ -293,6 +300,20 @@ public class EventStore {
         if (!members.hasNext()) return;
         if (!members.next().equals(hz.getCluster().getLocalMember())) return;
         runRetentionCleanup();
+        // Same schedule and the same one-sweeper gate, deliberately not the same
+        // pass: retention DELETES rows the service no longer keeps, eviction MOVES
+        // rows that are already on disk out of memory. Sharing a timer is all they
+        // share.
+        runWarmEviction();
+    }
+
+    /**
+     * Releases warm rows the disk leg already owns from the Hazelcast map.
+     *
+     * @return rows evicted, by dataset name
+     */
+    private Map<String, Long> runWarmEviction() {
+        return WarmEviction.sweep(hz, warm);
     }
 
     private void runRetentionCleanup() {

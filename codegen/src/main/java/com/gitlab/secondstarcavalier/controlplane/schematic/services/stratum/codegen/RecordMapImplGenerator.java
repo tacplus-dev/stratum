@@ -83,6 +83,7 @@ public final class RecordMapImplGenerator {
         w.println("import " + PROTO_EXCEPTION + ";");
         w.println("import " + COLLECTION_RUNTIME + ";");
         w.println("import " + HOST_PKG + ".warm.WarmFilter;");
+        w.println("import " + HOST_PKG + ".warm.WarmResidency;");
         w.println("import " + HOST_PKG + ".warm.WarmStore;");
         w.println("import " + plane.messagesFqn() + ";");
         w.println("import " + plane.wrapperFqn(MODEL_BASE, SM_PREFIX) + ";");
@@ -137,19 +138,32 @@ public final class RecordMapImplGenerator {
             String matchCast = hasFilter ? (matchFn + "(f, (" + fqn + ") m)") : "true";
 
             // Warm record types are served by TWO legs. The memory leg is the hot
-            // store, scanned exactly as before; the disk leg is the node-local Lucene
-            // index. They are partitioned on the store epoch — memory holds
-            // epoch >= boundary, disk holds epoch < boundary — so the union needs no
-            // deduplication and the count is a clean sum. For a hot record type
-            // (which is every record type until one declares otherwise) these emit
-            // nothing at all and the bodies are byte-identical to before.
+            // store; the disk leg is the node-local Lucene index. They are
+            // partitioned on the store epoch — memory holds epoch >= boundary, disk
+            // holds epoch < boundary — so the union needs no deduplication and the
+            // count is a clean sum. That partition is not free: the memory scan gets
+            // the boundary CUT applied to it here (WarmResidency), because a row
+            // that has aged past the window is still in the Hazelcast map until the
+            // eviction sweep next runs, and without the cut both legs would match it
+            // and Get<T>Count would double it for as long as it sat there. The cut is
+            // per query, so it holds between sweeps rather than after them. For a hot
+            // record type (which is every record type until one declares otherwise)
+            // these emit nothing at all and the bodies are byte-identical to before.
             boolean warm = e.isWarm();
             String warmArg = hasFilter ? "f" : "";
-            String memoryCountLeg =
-                    "            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + matchExpr + ") n++;"
+            String dataset = e.protoPackage + "." + t;
+            String residencyBind = warm
+                    ? ("            WarmResidency res = warm().residency(\"" + dataset + "\");\n")
+                    : "";
+            String memoryCond = warm
+                    ? ("res.inMemory(ev." + keyGetter + "(), ev.get" + pascal(e.storeEpochField)
+                            + "())" + (hasFilter ? " && " + matchExpr : ""))
+                    : matchExpr;
+            String memoryCountLeg = residencyBind
+                    + "            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + memoryCond + ") n++;"
                     + (warm ? "\n            n += " + lower("WarmCount" + t) + "(" + warmArg + ");" : "");
-            String memoryMatchLeg =
-                    "            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + matchExpr + ") matches.add(ev);"
+            String memoryMatchLeg = residencyBind
+                    + "            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + memoryCond + ") matches.add(ev);"
                     + (warm ? "\n            matches.addAll(" + lower("Warm" + t) + "(" + warmArg + "));" : "");
 
             // match<T>: true when a record satisfies the typed filter. Getter-based,

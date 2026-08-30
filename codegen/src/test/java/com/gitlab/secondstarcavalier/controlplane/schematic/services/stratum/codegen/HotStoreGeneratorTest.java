@@ -61,6 +61,22 @@ class HotStoreGeneratorTest {
               int64 store_epoch_ms = 3 [(spec.store_epoch) = true];
             """;
 
+    /**
+     * A warm record: a store epoch is MANDATORY on the warm tier, so this is the
+     * shape every warm record has and the reason the epoch test alone is not the
+     * right predicate.
+     */
+    private static final String WARM_EVENT = """
+              option (spec.record) = {
+                key: "demo_id"
+                retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
+                residency: {window: RESIDENCY_WARM}
+              };
+              string demo_id = 1;
+              int64 timestamp_ms = 2;
+              int64 store_epoch_ms = 3 [(spec.store_epoch) = true];
+            """;
+
     private static final String NO_EPOCH_EVENT = """
               option (spec.record) = {
                 key: "demo_id"
@@ -135,6 +151,34 @@ class HotStoreGeneratorTest {
     @Test
     void aRecordWithoutAStoreEpochGetsNoRedoDescriptor(@TempDir Path dir) throws IOException {
         String src = HotStoreGenerator.render(List.of(only(proto(dir, NO_EPOCH_EVENT))));
+
+        assertFalse(src.contains("new HotDataset("), src);
+        assertTrue(src.contains("public static List<HotDataset> datasets()"), src);
+    }
+
+    /**
+     * A RESIDENCY_WARM record gets NO redo descriptor, even though it necessarily
+     * carries a store epoch.
+     *
+     * The two tiers are supposed to recover differently — hot from snapshot + redo
+     * replay, warm from its own disk tier — and the epoch test alone would have
+     * given every warm record both. That is a second write of the same bytes for no
+     * durability gain, and once the row ages past its residency window it is
+     * actively wrong: replay would put back into memory exactly the rows the
+     * eviction sweep removed from it, and then both legs would serve them. Its
+     * control is {@link #aRecordWithAStoreEpochGetsAReplayableDescriptor} — the same
+     * fixture WITHOUT the residency clause does get one, so this cannot pass by the
+     * fixture simply having failed to declare an epoch.
+     */
+    @Test
+    void aWarmRecordGetsNoRedoDescriptorDespiteCarryingAStoreEpoch(@TempDir Path dir)
+            throws IOException {
+        EventTopicDiscovery.TopicEvent warm = only(proto(dir, WARM_EVENT));
+        assertTrue(warm.isWarm(), "the fixture is not warm; the test would pass vacuously");
+        assertEquals("store_epoch_ms", warm.storeEpochField,
+                "the fixture must carry the epoch, or this is the no-epoch test again");
+
+        String src = HotStoreGenerator.render(List.of(warm));
 
         assertFalse(src.contains("new HotDataset("), src);
         assertTrue(src.contains("public static List<HotDataset> datasets()"), src);

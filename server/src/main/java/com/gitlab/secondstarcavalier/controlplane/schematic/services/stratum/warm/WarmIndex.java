@@ -235,9 +235,24 @@ public final class WarmIndex implements Closeable {
     }
 
     /**
+     * True when some slice of this index already holds the key — i.e. the row is
+     * committed on THIS node's disk and the disk leg can answer for it.
+     *
+     * {@code pendingKeys} says a write has not committed YET; this says a copy is
+     * there now. Eviction needs the second, not the first: a write that failed
+     * outright leaves the key un-pending and absent, and dropping the row from
+     * memory on the strength of "no longer pending" would lose it on this node
+     * until the event log is replayed.
+     */
+    public boolean holdsKey(String key) throws IOException {
+        return sliceHolding(key, null) != null;
+    }
+
+    /**
      * The sealed slice already holding this key, or null. Only slices OTHER than
      * the one being written need checking — {@code updateDocument} handles a
-     * same-slice copy itself.
+     * same-slice copy itself. A null {@code exceptSlice} excludes nothing, which is
+     * what {@link #holdsKey} wants.
      */
     private String sliceHolding(String key, String exceptSlice) throws IOException {
         Query q = new TermQuery(new Term(KEY_FIELD, key));
