@@ -262,6 +262,18 @@ public final class WarmStore implements AutoCloseable {
         return true;
     }
 
+    /**
+     * The warm dataset holding this record's type, or null when no dataset does.
+     *
+     * The ingest path reads the record's declared attributes — its key and its
+     * mutability — from here, so the one place that maps a message to its dataset
+     * stays {@link #indexFor}.
+     */
+    public WarmDataset datasetFor(Message record) {
+        WarmIndex idx = indexFor(record);
+        return idx == null ? null : idx.dataset();
+    }
+
     private WarmIndex indexFor(Message record) {
         for (WarmIndex idx : indexes.values()) {
             if (idx.dataset().type.isInstance(record)) {

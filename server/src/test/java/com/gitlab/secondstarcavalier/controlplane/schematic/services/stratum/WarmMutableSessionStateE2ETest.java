@@ -120,12 +120,22 @@ class WarmMutableSessionStateE2ETest {
      */
     private static void publish(AgentSessionState r) throws Exception {
         long writtenBefore = warm.writtenCount();
-        assertTrue(EventStore.ingest(warm, r, () -> stores.store(r)),
+        assertTrue(EventStore.ingest(warm, r, WarmMutableSessionStateE2ETest::memoryHolds, () -> stores.store(r)),
                 "the typed hot store did not claim the record");
         warm.awaitWrites(10_000);
         assertEquals(writtenBefore + 1, warm.writtenCount(),
                 "the warm tier did not write a declared RESIDENCY_WARM record");
         assertEquals(0, warm.writeFailureCount(), "a warm disk write failed");
+    }
+
+    /**
+     * The memory leg as {@link EventStore#store} reads it: the typed map the
+     * generated store writes, named by the dataset. AgentSessionState is MUTABLE, so
+     * the append-only duplicate guard never fires on it — this is the real predicate
+     * so that stays a property of the code under test rather than of the fixture.
+     */
+    private static boolean memoryHolds(String datasetName, String key) {
+        return hz.getMap(datasetName).containsKey(key);
     }
 
     /** The GENERATED warm descriptor for this record — the point of the test. */
@@ -457,7 +467,7 @@ class WarmMutableSessionStateE2ETest {
                 SessionStatus.SESSION_STATUS_ACTIVE, 21);
         List<String> insideIds = new ArrayList<>();
         long[] insideCount = new long[1];
-        assertTrue(EventStore.ingest(warm, update, () -> {
+        assertTrue(EventStore.ingest(warm, update, WarmMutableSessionStateE2ETest::memoryHolds, () -> {
             boolean handled = stores.store(update);
             // Here: memory holds the update, the disk write has not been enqueued.
             insideCount[0] = servedCount();
@@ -498,7 +508,7 @@ class WarmMutableSessionStateE2ETest {
         AgentSessionState update = row("sess-refused", System.currentTimeMillis(),
                 SessionStatus.SESSION_STATUS_ACTIVE, 5);
         assertThrows(IllegalStateException.class,
-                () -> EventStore.ingest(warm, update, () -> {
+                () -> EventStore.ingest(warm, update, WarmMutableSessionStateE2ETest::memoryHolds, () -> {
                     throw new IllegalStateException("hot write refused: quorum not met");
                 }));
 
@@ -537,7 +547,7 @@ class WarmMutableSessionStateE2ETest {
                 .setStoreEpochMs(System.currentTimeMillis())
                 .build();
 
-        EventStore.ingest(warm, invalid, () -> stores.store(invalid));
+        EventStore.ingest(warm, invalid, WarmMutableSessionStateE2ETest::memoryHolds, () -> stores.store(invalid));
         warm.awaitWrites(10_000);
         assertEquals(rejectedBefore + 1, warm.rejectedCount(),
                 "the fixture is only a rejection test if the warm validator refuses it");

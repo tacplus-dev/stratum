@@ -16,6 +16,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiPredicate;
 import java.util.function.BooleanSupplier;
 
 import org.slf4j.Logger;
@@ -34,6 +35,7 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumMapConfig;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumEpochExtractor;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumEventTypeExtractor;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.warm.WarmDataset;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.warm.WarmStore;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotDataset;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotRedoLogs;
@@ -170,7 +172,18 @@ public class EventStore {
      * StratumEventStores, so this code names no vservice.
      */
     public boolean store(Message event) {
-        return ingest(warm, event, () -> stores.store(event));
+        return ingest(warm, event, this::memoryHolds, () -> stores.store(event));
+    }
+
+    /**
+     * True when the memory leg already holds this key of this dataset.
+     *
+     * The dataset name IS the Hazelcast map name — one identifier names the type in
+     * both tiers (see {@link com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.warm.WarmDataset#name}) —
+     * so this asks the typed map the generated store writes, not a second copy of it.
+     */
+    private boolean memoryHolds(String datasetName, String key) {
+        return hz.getMap(datasetName).containsKey(key);
     }
 
     /**
@@ -199,7 +212,11 @@ public class EventStore {
      * sequence — the thing the correctness argument is about — is one testable unit
      * instead of something a test has to re-spell to exercise.
      */
-    static boolean ingest(WarmStore warm, Message event, BooleanSupplier memoryPut) {
+    static boolean ingest(WarmStore warm, Message event, BiPredicate<String, String> memoryHolds,
+                          BooleanSupplier memoryPut) {
+        if (rejectsAppendOnlyDuplicate(warm, event, memoryHolds)) {
+            return true;
+        }
         boolean claimed = warm.claim(event);
         boolean enqueued = false;
         try {
@@ -213,6 +230,52 @@ public class EventStore {
                 warm.release(event);
             }
         }
+    }
+
+    /**
+     * Refuses a write that would break an APPEND_ONLY dataset's unique-key contract.
+     *
+     * <p>The two legs disagree about what a duplicate key MEANS: the memory leg is an
+     * IMap keyed by the record's key, so a second write of an existing key upserts,
+     * while the disk leg appends a second document. Nothing notices until the first
+     * copy ages past the residency boundary — from then on the key is served by memory
+     * with the new copy and by disk with the old one, and the row count visibly jumps.
+     * Neither leg is wrong on its own; the record's own declaration is what says the
+     * key may not repeat, so this is the place to hold it.
+     *
+     * <p>Refused rather than reconciled: making memory hold multiple values per key,
+     * or making an append-only log update in place, are both changes to the tiers'
+     * write semantics for a case the declaration says cannot happen. Nothing in
+     * production emits a duplicate today, so a legitimate write sees no change — this
+     * only fires on the violation that previously corrupted the two legs silently.
+     *
+     * <p>Logged and dropped, not thrown — the same shape as the validator rejection in
+     * {@link WarmStore#enqueue}. This runs on the EventBus subscription thread, where
+     * throwing would retry the offending record forever.
+     *
+     * <p>What it does NOT catch, stated: a key whose only copy has already been evicted
+     * from memory is not in the memory leg to be found, so a duplicate republished
+     * after eviction still gets through. Covering that costs a disk lookup on the ingest
+     * path of every append-only write; the memory check costs one map lookup and covers
+     * the republish window that actually occurs.
+     *
+     * @return true when the record was refused — meaning handled, not stored.
+     */
+    private static boolean rejectsAppendOnlyDuplicate(WarmStore warm, Message event,
+                                                      BiPredicate<String, String> memoryHolds) {
+        WarmDataset dataset = warm.datasetFor(event);
+        if (dataset == null || !dataset.appendOnly) {
+            return false;
+        }
+        String key = dataset.key(event);
+        if (!memoryHolds.test(dataset.name, key)) {
+            return false;
+        }
+        log.warn("rejected duplicate key on append-only {}: {} is already stored."
+                + " The record type declares MUTABILITY_APPEND_ONLY, so its key may not repeat;"
+                + " storing it would leave the memory and disk legs permanently disagreeing"
+                + " about that key.", dataset.name, key);
+        return true;
     }
 
     /**
