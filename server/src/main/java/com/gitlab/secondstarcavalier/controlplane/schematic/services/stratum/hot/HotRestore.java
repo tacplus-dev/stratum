@@ -67,11 +67,23 @@ public final class HotRestore {
     public static final class Result {
         public final int applied;
         public final int skipped;
+        /**
+         * Records READ from this node's log, whatever each one's outcome was.
+         *
+         * <p>This, not {@link #applied}, is what says the node had a redo log: on a
+         * rolling restart the peers still own the partitions, so this node's rows
+         * are already present at their own-or-newer epoch and every record replays
+         * as SKIPPED. {@code applied == 0} there means "nothing needed catching
+         * up", not "nothing was there" — the two are only distinguishable by
+         * whether anything was read at all.
+         */
+        public final int read;
         public final List<String> diverged;
 
-        Result(int applied, int skipped, List<String> diverged) {
+        Result(int applied, int skipped, int read, List<String> diverged) {
             this.applied = applied;
             this.skipped = skipped;
+            this.read = read;
             this.diverged = diverged;
         }
     }
@@ -86,7 +98,7 @@ public final class HotRestore {
     public static Result replay(RedoLog redoLog, HotDataset dataset, IMap<String, Message> map) {
         List<String> diverged = new ArrayList<>();
         int[] counts = new int[2];
-        redoLog.restore(rec -> {
+        int read = redoLog.restore(rec -> {
             long epoch = epochOf(rec, dataset);
             Message candidate = rec.deleted ? null : dataset.fromJson.apply(rec.payload);
             Integer outcome = map.executeOnKey(rec.key,
@@ -99,7 +111,7 @@ public final class HotRestore {
                 counts[1]++;
             }
         });
-        return new Result(counts[0], counts[1], diverged);
+        return new Result(counts[0], counts[1], read, diverged);
     }
 
     /**
@@ -130,16 +142,22 @@ public final class HotRestore {
      * Reports this node's replay done and waits for every other reachable member
      * to report the same (Q2).
      *
+     * @param redoRecordsRead records read from this node's logs across all datasets
+     *                         ({@link Result#read} summed) — NOT records applied.
+     *                         A node whose log replayed entirely as SKIPPED still
+     *                         had a log, and on a rolling restart that is the
+     *                         normal case; counting applied records only would
+     *                         raise the alarm below on every healthy restart.
      * @param minDurableCopies the declared floor; fewer contributors than this is
      *                         LOUD, because the recovered store is then thinner
      *                         than the durability the writes were acked under
      * @return the number of instances that contributed a log
      * @throws IllegalStateException if the wait times out
      */
-    public static int awaitClusterReplay(HazelcastInstance hz, int recordsReplayed,
+    public static int awaitClusterReplay(HazelcastInstance hz, int redoRecordsRead,
                                          int minDurableCopies, Duration timeout) {
         IMap<String, Integer> ledger = hz.getMap(LEDGER_MAP);
-        ledger.put(hz.getCluster().getLocalMember().getUuid().toString(), recordsReplayed);
+        ledger.put(hz.getCluster().getLocalMember().getUuid().toString(), redoRecordsRead);
 
         long deadlineMs = System.currentTimeMillis() + timeout.toMillis();
         int members;
@@ -161,9 +179,14 @@ public final class HotRestore {
             }
         }
 
+        // A contributor is an instance that HAD a readable, non-empty redo log —
+        // not one that had rows to apply. A node whose every record was already
+        // present at its own-or-newer epoch (the rolling-restart case) contributed
+        // its log in full; a node with no log, or an empty one, read nothing and
+        // contributed nothing.
         int contributors = 0;
-        for (Integer replayed : ledger.values()) {
-            if (replayed != null && replayed > 0) {
+        for (Integer recordsRead : ledger.values()) {
+            if (recordsRead != null && recordsRead > 0) {
                 contributors++;
             }
         }

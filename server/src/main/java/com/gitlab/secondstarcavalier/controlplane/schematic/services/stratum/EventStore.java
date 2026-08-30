@@ -226,11 +226,13 @@ public class EventStore {
      * {@code EpochMergeProcessor}.
      */
     private void restoreHotTier(List<HotDataset> datasets, int minDurableCopies) {
-        int replayed = 0;
+        int applied = 0;
+        int read = 0;
         List<String> diverged = new ArrayList<>();
         for (HotDataset d : datasets) {
             HotRestore.Result result = HotRestore.replay(hotLogs.log(d.mapName), d, hz.getMap(d.mapName));
-            replayed += result.applied;
+            applied += result.applied;
+            read += result.read;
             diverged.addAll(result.diverged);
         }
         if (!diverged.isEmpty()) {
@@ -238,9 +240,14 @@ public class EventStore {
                     + " key(s), which the atomic write path makes impossible; refusing to start."
                     + " Keys: " + diverged);
         }
-        HotRestore.awaitClusterReplay(hz, replayed, minDurableCopies, RESTORE_TIMEOUT);
+        // What the barrier is told is records READ, not records applied: on a rolling
+        // restart the peers still own the partitions, so this node's rows come back
+        // already at their own-or-newer epoch and every record replays as SKIPPED.
+        // Reporting applied records would make a healthy node look like it had no log.
+        HotRestore.awaitClusterReplay(hz, read, minDurableCopies, RESTORE_TIMEOUT);
         hotReadable = true;
-        log.info("hot tier restored: {} record(s) replayed from this node's redo logs", replayed);
+        log.info("hot tier restored: {} record(s) read from this node's redo logs, {} applied",
+                read, applied);
     }
 
     /** True once every reachable instance has replayed its redo log. */

@@ -342,6 +342,68 @@ class HotRedoRestoreTest {
         assertEquals(0, HotRestore.awaitClusterReplay(hz, 0, 2, java.time.Duration.ofSeconds(5)));
     }
 
+    /**
+     * The rolling-restart false positive: a node whose log replayed entirely as
+     * SKIPPED still contributed its log.
+     *
+     * <p>One node at a time restarts; its peers keep owning the partitions, so
+     * every row in the restarted node's log is already in the map at the
+     * same-or-newer epoch and the replay applies NOTHING. That is a healthy
+     * restart, and the durability alarm must not fire on it. The map here is
+     * pre-loaded by replaying the same log once — that is what a peer still
+     * holding the partition looks like to the second replay.
+     *
+     * <p>The assertion is on the contributor count rather than on captured log
+     * output: the count IS the condition the {@code log.error} is gated on, and
+     * the module has both logback-classic and slf4j-simple on the test classpath,
+     * so which binding an appender would attach to is not determined.
+     */
+    @Test
+    void aLogThatReplayedEntirelySkippedStillCountsAsAContribution(@TempDir Path dir) throws Exception {
+        HotDataset d = dataset(1);
+        Path node = dir.resolve("rolling");
+        writeLog(node, d, event("evt-1", 1000L, "s1"));
+        writeLog(node, d, event("evt-2", 1001L, "s2"));
+
+        hz = member("stratum-rolling-restart-test");
+        IMap<String, Message> map = hz.getMap(MAP);
+        // The peers' copies, still owned across this node's restart.
+        assertEquals(2, replayFrom(node, d, map).applied);
+
+        HotRestore.Result afterRestart = replayFrom(node, d, map);
+
+        assertEquals(0, afterRestart.applied, "a rolling restart has nothing to catch up");
+        assertEquals(2, afterRestart.skipped);
+        assertEquals(2, afterRestart.read, "the log was present and read in full");
+        assertTrue(afterRestart.diverged.isEmpty());
+
+        assertEquals(1, HotRestore.awaitClusterReplay(hz, afterRestart.read, 1, java.time.Duration.ofSeconds(5)),
+                "a node whose whole log replayed as SKIPPED had a redo log; reporting applied"
+                        + " records instead would raise the durability alarm on every healthy"
+                        + " rolling restart");
+    }
+
+    /**
+     * The paired control: the alarm still fires when it should. A node with no
+     * redo log at all reads nothing, and reading nothing is still no contribution.
+     */
+    @Test
+    void aNodeWithNoRedoLogStillContributesNothing(@TempDir Path dir) throws Exception {
+        HotDataset d = dataset(1);
+        Path empty = dir.resolve("never-owned-a-partition");
+
+        hz = member("stratum-absent-log-test");
+        IMap<String, Message> map = hz.getMap(MAP);
+        HotRestore.Result result = replayFrom(empty, d, map);
+
+        assertEquals(0, result.applied);
+        assertEquals(0, result.skipped);
+        assertEquals(0, result.read, "there was no log to read");
+
+        assertEquals(0, HotRestore.awaitClusterReplay(hz, result.read, 2, java.time.Duration.ofSeconds(5)),
+                "an absent log is still zero contribution, and below the floor that stays LOUD");
+    }
+
     // ------------------------------------------------------------------ helpers
 
     /** The active log's bytes, or "" before the first append has created it. */
