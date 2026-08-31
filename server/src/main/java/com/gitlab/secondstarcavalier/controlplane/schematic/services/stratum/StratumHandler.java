@@ -38,7 +38,11 @@ public class StratumHandler extends StratumVServiceBase {
 
     private final ServiceManager sm;
     private volatile Stratum.Config config;
-    private EventStore      eventStore;
+    // volatile: the record plane reads this field from gRPC threads on every call
+    // (see provideRecordPlane's suppliers), while initFromConfig replaces it. The
+    // restore gate below is only meaningful if a reader sees the CURRENT store —
+    // observing the previous one would report the new store's restore as finished.
+    private volatile EventStore eventStore;
     private final AtomicBoolean coldStartHandled = new AtomicBoolean(false);
     private volatile ColdStartRebuilder coldStartRebuilder;
     private StratumRecordMaps recordMaps;
@@ -74,7 +78,16 @@ public class StratumHandler extends StratumVServiceBase {
         if (recordMaps == null) {
             // Suppliers, not captured references: initFromConfig rebuilds the stores on
             // config updates, and the generated impl must always see the current ones.
-            recordMaps = new StratumRecordMaps(() -> eventStore.stores(), () -> eventStore.warm());
+            recordMaps = new StratumRecordMaps(() -> eventStore.stores(), () -> eventStore.warm(),
+                    // The hot tier's restore gate. It is not always true by the time a
+                    // read arrives: initFromConfig replaces the EventStore on every
+                    // config delivery, and the plane stays registered across that, so a
+                    // read landing during a reload sees a store that is null or still
+                    // replaying its redo logs. Both answer "not readable".
+                    () -> {
+                        EventStore store = eventStore;
+                        return store != null && store.hotReadable();
+                    });
         }
         return recordMaps;
     }

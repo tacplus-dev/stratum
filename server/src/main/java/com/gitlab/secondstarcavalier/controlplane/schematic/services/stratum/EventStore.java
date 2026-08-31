@@ -36,6 +36,7 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.haz
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumEpochExtractor;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumEventTypeExtractor;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.warm.WarmDataset;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.warm.WarmIndex;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.warm.WarmStore;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotDataset;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotRedoLogs;
@@ -253,11 +254,25 @@ public class EventStore {
      * {@link WarmStore#enqueue}. This runs on the EventBus subscription thread, where
      * throwing would retry the offending record forever.
      *
-     * <p>What it does NOT catch, stated: a key whose only copy has already been evicted
-     * from memory is not in the memory leg to be found, so a duplicate republished
-     * after eviction still gets through. Covering that costs a disk lookup on the ingest
-     * path of every append-only write; the memory check costs one map lookup and covers
-     * the republish window that actually occurs.
+     * <p>BOTH legs are asked, and the disk leg is why: a key the memory leg does not
+     * hold is not thereby absent. The whole store is empty on a COLD BOOT, and a cold
+     * boot is precisely when {@code ColdStartRebuilder} replays the entire event log
+     * from offset 0 — while this node's warm volume survived the restart and still
+     * holds every one of those records. Checking memory alone, every replayed
+     * append-only record reads as fresh and is appended to the disk index a second
+     * time. Nothing repairs it afterwards either: {@link WarmIndex#reconcile} keeps
+     * one copy per KEY and so is a no-op for a type whose keys never repeat by
+     * declaration. The duplication is therefore permanent, and it surfaces as a
+     * doubled Get&lt;T&gt;Count the moment the rows age past the residency boundary.
+     * The same check closes the smaller window the memory leg always missed: a key
+     * whose only copy had been evicted from memory.
+     *
+     * <p>What that costs, stated: one Lucene term lookup across the dataset's slices on
+     * the ingest path of every append-only record whose key memory does not already
+     * hold — which in steady state is every one of them. The warm tier is sized for
+     * order 25k rows/year (see {@link WarmIndex}), so this is three orders of magnitude
+     * inside its headroom; on a hot record type it costs nothing at all, because
+     * {@code datasetFor} returns null before any of it runs.
      *
      * @return true when the record was refused — meaning handled, not stored.
      */
@@ -268,14 +283,34 @@ public class EventStore {
             return false;
         }
         String key = dataset.key(event);
-        if (!memoryHolds.test(dataset.name, key)) {
+        String leg = memoryHolds.test(dataset.name, key) ? "memory" : diskLegHolding(warm, dataset, key);
+        if (leg == null) {
             return false;
         }
-        log.warn("rejected duplicate key on append-only {}: {} is already stored."
+        log.warn("rejected duplicate key on append-only {}: {} is already stored on the {} leg."
                 + " The record type declares MUTABILITY_APPEND_ONLY, so its key may not repeat;"
                 + " storing it would leave the memory and disk legs permanently disagreeing"
-                + " about that key.", dataset.name, key);
+                + " about that key.", dataset.name, key, leg);
         return true;
+    }
+
+    /**
+     * {@code "disk"} when this node's warm index already holds the key, else null.
+     *
+     * <p>A disk error resolves as "not held", i.e. the record is STORED. That direction
+     * is deliberate: an unreadable index makes the answer unknown, and on an unknown
+     * answer a duplicate row is recoverable — the reconcile and retention sweeps both
+     * still run over it — while a dropped record is not, because the refusal reads as
+     * handled and the subscription never redelivers it.
+     */
+    private static String diskLegHolding(WarmStore warm, WarmDataset dataset, String key) {
+        try {
+            return warm.isDurableOnDisk(dataset.name, key) ? "disk" : null;
+        } catch (IOException e) {
+            log.error("append-only duplicate check could not read the disk leg of {} for key {};"
+                    + " storing the record rather than dropping it", dataset.name, key, e);
+            return null;
+        }
     }
 
     /**

@@ -167,6 +167,27 @@ public final class EventStoreGenerator {
         w.println("    }");
         w.println();
 
+        // mapNames — the Hazelcast names of every typed store, for the Config builder.
+        //
+        // Emitted rather than hand-listed because StratumMapConfig has to give EVERY
+        // record map the same durability settings, and a hand-written list is a
+        // second place the record set is recorded: it goes stale the moment a proto
+        // is added or .off-ed, and a map missing from it silently falls back to
+        // Hazelcast's defaults — one backup and NO split-brain protection — under a
+        // config that claims to state both.
+        w.println("    /** Every typed store's Hazelcast map name, in declaration order. */");
+        StringBuilder names = new StringBuilder();
+        for (EventTopicDiscovery.TopicEvent e : events) {
+            if (names.length() > 0) {
+                names.append(", ");
+            }
+            names.append('"').append(mapName(e)).append('"');
+        }
+        w.println("    public static java.util.List<String> mapNames() {");
+        w.println("        return java.util.List.of(" + names + ");");
+        w.println("    }");
+        w.println();
+
         // typed accessors (read path)
         for (EventTopicDiscovery.TopicEvent e : events) {
             w.println("    public IMap<String, " + fqn(e) + "> " + field(e) + "() { return " + field(e) + "; }");

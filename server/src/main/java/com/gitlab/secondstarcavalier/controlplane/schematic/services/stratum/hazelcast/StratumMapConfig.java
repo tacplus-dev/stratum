@@ -15,6 +15,8 @@ import com.hazelcast.config.SplitBrainProtectionConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.StratumEventStores;
+
 /**
  * StratumMapConfig builds the Hazelcast Config for the stratum hot event store.
  *
@@ -134,9 +136,62 @@ public final class StratumMapConfig {
             }
         }
 
+        // The durability floor is a property of the STORE, not of one record type, so
+        // it is applied to every typed map the generator emits — not to MAP_NAME
+        // alone. It used to be MAP_NAME alone, and the other three maps
+        // (scotty.ScottyActivity, accountingrecord.AccountingRecord,
+        // agentsensor.AgentSessionState) therefore took Hazelcast's defaults: one
+        // synchronous backup, which coincidentally matches a floor of 2 and stops
+        // matching the moment the floor moves, and NO split-brain protection at all,
+        // so a minority partition accepted their writes locally. The "2 durable
+        // copies" claim was true of one map out of four.
+        //
+        // The protection config is one shared, named object; each map references it.
+        SplitBrainProtectionConfig protection = new SplitBrainProtectionConfig(
+                SPLIT_BRAIN_PROTECTION_NAME, true, minDurableCopies);
+        cfg.addSplitBrainProtectionConfig(protection);
+        for (String name : StratumEventStores.mapNames()) {
+            cfg.addMapConfig(durableMap(name, minDurableCopies));
+        }
+
+        log.info("stratum hot maps {}: min_durable_copies={}, backupCount={}, asyncBackupCount=0,"
+                + " split-brain minimumClusterSize={}",
+                StratumEventStores.mapNames(), minDurableCopies, minDurableCopies - 1, minDurableCopies);
+
+        return cfg;
+    }
+
+    /**
+     * One typed record map, at the deployment's durability floor.
+     *
+     * <p>Named per map rather than declared once as a wildcard: Hazelcast resolves a
+     * map to the most specific config, so a wildcard entry alongside the named
+     * MAP_NAME entry below would leave MAP_NAME reading only its own — the exact
+     * split that produced this bug. Naming every map keeps one code path.
+     */
+    private static MapConfig durableMap(String name, int minDurableCopies) {
+        MapConfig mapCfg = new MapConfig(name);
+
+        // SYNCHRONOUS backups only. The put must not complete until every replica
+        // that counts towards the floor holds the value; an async backup is not
+        // held when the write returns, so counting one would mean acking a
+        // durability that does not exist yet.
+        mapCfg.setBackupCount(minDurableCopies - 1);
+        mapCfg.setAsyncBackupCount(0);
+
+        // Below the floor the members are not there to replicate to, so the write
+        // is refused at the cluster level as well as at the write gate. A minority
+        // partition that keeps accepting writes is how a store stops being atomic.
+        mapCfg.setSplitBrainProtectionName(SPLIT_BRAIN_PROTECTION_NAME);
+
+        if (!MAP_NAME.equals(name)) {
+            return mapCfg;
+        }
+
         // events map: OBJECT in-memory format so Hazelcast reflects directly on AgentEvent
         // getters for predicate evaluation — no serialization overhead for in-JVM queries.
-        MapConfig mapCfg = new MapConfig(MAP_NAME);
+        // Read-path concerns, and still hand-written because the read side is not
+        // generated; they attach to this one map only.
         mapCfg.setInMemoryFormat(InMemoryFormat.OBJECT);
 
         // Attribute names are JavaBean PROPERTY names, not proto field names.
@@ -156,27 +211,6 @@ public final class StratumMapConfig {
         mapCfg.addIndexConfig(new IndexConfig(IndexType.HASH,   "agentId"));
         mapCfg.addIndexConfig(new IndexConfig(IndexType.HASH,
                 StratumEventTypeExtractor.ATTRIBUTE_NAME));
-
-        // SYNCHRONOUS backups only. The put must not complete until every replica
-        // that counts towards the floor holds the value; an async backup is not
-        // held when the write returns, so counting one would mean acking a
-        // durability that does not exist yet.
-        mapCfg.setBackupCount(minDurableCopies - 1);
-        mapCfg.setAsyncBackupCount(0);
-
-        // Below the floor the members are not there to replicate to, so the write
-        // is refused at the cluster level as well as at the write gate. A minority
-        // partition that keeps accepting writes is how a store stops being atomic.
-        SplitBrainProtectionConfig protection = new SplitBrainProtectionConfig(
-                SPLIT_BRAIN_PROTECTION_NAME, true, minDurableCopies);
-        cfg.addSplitBrainProtectionConfig(protection);
-        mapCfg.setSplitBrainProtectionName(SPLIT_BRAIN_PROTECTION_NAME);
-
-        log.info("stratum hot map {}: min_durable_copies={}, backupCount={}, asyncBackupCount=0,"
-                + " split-brain minimumClusterSize={}",
-                MAP_NAME, minDurableCopies, minDurableCopies - 1, minDurableCopies);
-
-        cfg.addMapConfig(mapCfg);
-        return cfg;
+        return mapCfg;
     }
 }

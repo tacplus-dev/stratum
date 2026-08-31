@@ -75,6 +75,14 @@ class HotAgentEventE2ETest {
     private static RecordMapGrpc.RecordMapBlockingStub stub;
 
     /**
+     * The hot tier's restore gate, as the plane reads it. Mutable so the closed
+     * state — a node whose peers have not replayed yet — can be driven over a real
+     * RPC rather than asserted about the generator's output.
+     */
+    private static final java.util.concurrent.atomic.AtomicBoolean hotReadable =
+            new java.util.concurrent.atomic.AtomicBoolean(true);
+
+    /**
      * A record as the subscription dispatch hands it over: store epoch stamped by
      * the store, business timestamp written by the author. They are deliberately
      * far apart so an assertion cannot pass by reading the wrong clock.
@@ -124,7 +132,7 @@ class HotAgentEventE2ETest {
             }
         };
         server = NettyServerBuilder.forPort(0)
-                .addService(new RecordMap(new StratumRecordMaps(() -> stores, () -> warm), authorizer))
+                .addService(new RecordMap(new StratumRecordMaps(() -> stores, () -> warm, hotReadable::get), authorizer))
                 .build()
                 .start();
         channel = PullAgentEvent.channel("localhost:" + server.getPort(), true);
@@ -202,6 +210,41 @@ class HotAgentEventE2ETest {
                         .build(),
                 null, 10);
         assertEquals(0, none.count, "a bound past every row must return nothing");
+    }
+
+    /**
+     * The restore gate reaches the LIVE read path.
+     *
+     * <p>It used to guard {@code EventStore.getByKey} and {@code EventStore.query},
+     * which nothing calls; the RPCs that actually read the store — this one included —
+     * never asked. A node that had replayed only its own redo log therefore answered
+     * counts and pages off a store missing every row its peers owned, and the answer
+     * looked complete.
+     *
+     * <p>Both halves, over a real gRPC round trip: closed refuses with UNAVAILABLE
+     * (the condition clears on its own, so the caller should retry), and the SAME call
+     * with the gate open returns the same two rows the other tests see. Without the
+     * second half this would pass just as well against a plane that refused
+     * everything.
+     */
+    @Test
+    void theLiveReadPathRefusesUntilTheRestoreGateOpens() {
+        hotReadable.set(false);
+        try {
+            io.grpc.StatusRuntimeException refused = org.junit.jupiter.api.Assertions.assertThrows(
+                    io.grpc.StatusRuntimeException.class,
+                    () -> PullAgentEvent.run(stub, Query.AgentEventFilter.newBuilder().build(), null, 10),
+                    "the read path served a store that had not finished restoring");
+            assertEquals(io.grpc.Status.Code.UNAVAILABLE, refused.getStatus().getCode(),
+                    "a restoring store is retryable, not an error the caller must handle: "
+                            + refused.getStatus());
+        } finally {
+            hotReadable.set(true);
+        }
+
+        assertEquals(2, PullAgentEvent.run(
+                stub, Query.AgentEventFilter.newBuilder().build(), null, 10).count,
+                "the gate stayed shut after the restore completed");
     }
 
     /**

@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.StratumEventStores;
+
 import com.hazelcast.config.Config;
 import com.hazelcast.config.MapConfig;
 import com.hazelcast.config.SplitBrainProtectionConfig;
@@ -67,6 +69,36 @@ class StratumMapConfigDurabilityTest {
         assertTrue(protection.isEnabled());
         assertEquals(2, protection.getMinimumClusterSize(),
                 "a minority partition that keeps accepting writes is how a store stops being atomic");
+    }
+
+    /**
+     * EVERY typed record map carries the durability settings, not just the hot map.
+     *
+     * <p>Only {@link StratumMapConfig#MAP_NAME} used to get them. The other record maps
+     * — accountingrecord.AccountingRecord, agentsensor.AgentSessionState,
+     * scotty.ScottyActivity — took Hazelcast's defaults instead: one synchronous
+     * backup, which happens to agree with a floor of 2 and stops agreeing the moment
+     * the floor moves, and NO split-brain protection at all, so a minority partition
+     * accepted their writes locally. The "2 durable copies" claim held for one map in
+     * four.
+     *
+     * <p>The name list comes from the GENERATED store, so a record type added or
+     * .off-ed moves this assertion with it rather than leaving a map behind.
+     */
+    @Test
+    void everyRecordMapCarriesTheDurabilityFloor() {
+        Config cfg = StratumMapConfig.build(List.of(), 3);
+
+        assertTrue(StratumEventStores.mapNames().size() > 1,
+                "this build generated one record map; the uniformity claim is untested");
+        for (String name : StratumEventStores.mapNames()) {
+            MapConfig map = cfg.getMapConfigs().get(name);
+            assertNotNull(map, name + " has no MapConfig, so it silently takes Hazelcast's defaults");
+            assertEquals(2, map.getBackupCount(), name + " is not at the declared floor");
+            assertEquals(0, map.getAsyncBackupCount(), name + " counts an async backup towards the floor");
+            assertEquals(StratumMapConfig.SPLIT_BRAIN_PROTECTION_NAME, map.getSplitBrainProtectionName(),
+                    name + " accepts writes in a minority partition");
+        }
     }
 
     /** The documented default, so an undeclared record is not shipped unprotected. */

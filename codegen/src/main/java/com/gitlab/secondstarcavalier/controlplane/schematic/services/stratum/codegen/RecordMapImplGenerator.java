@@ -77,6 +77,7 @@ public final class RecordMapImplGenerator {
         w.println("import java.util.ArrayList;");
         w.println("import java.util.UUID;");
         w.println("import java.util.concurrent.ConcurrentHashMap;");
+        w.println("import java.util.function.BooleanSupplier;");
         w.println("import java.util.function.Supplier;");
         w.println("import io.grpc.stub.StreamObserver;");
         w.println("import " + CALLER + ";");
@@ -105,19 +106,42 @@ public final class RecordMapImplGenerator {
         w.println("    // The warm disk tier. Supplied, not captured, for the same reason the hot");
         w.println("    // stores are: StratumHandler rebuilds both on every config update.");
         w.println("    private final Supplier<WarmStore> warmSupplier;");
+        w.println("    // Whether the hot tier's cold-start restore has finished. Supplied for the");
+        w.println("    // same reason the stores are, and read per call because it FLIPS during the");
+        w.println("    // life of the instance.");
+        w.println("    private final BooleanSupplier hotReadable;");
         w.println("    // query_id -> the caller's typed filter (" + msgs + ".<T>Filter), or Boolean.TRUE");
         w.println("    // for filterless record types (match-all).");
         w.println("    private final ConcurrentHashMap<String, Object> queries = new ConcurrentHashMap<>();");
         w.println();
         w.println("    public " + CLASS_NAME + "(Supplier<StratumEventStores> storesSupplier,");
-        w.println("            Supplier<WarmStore> warmSupplier) {");
+        w.println("            Supplier<WarmStore> warmSupplier, BooleanSupplier hotReadable) {");
         w.println("        this.storesSupplier = storesSupplier;");
         w.println("        this.warmSupplier = warmSupplier;");
+        w.println("        this.hotReadable = hotReadable;");
         w.println("    }");
         w.println();
         w.println("    private StratumEventStores stores() { return storesSupplier.get(); }");
         w.println();
         w.println("    private WarmStore warm() { return warmSupplier.get(); }");
+        w.println();
+        w.println("    /**");
+        w.println("     * Refuses a read until every reachable instance has replayed its redo log.");
+        w.println("     *");
+        w.println("     * This is the RPC-side half of EventStore's restore barrier, and it is");
+        w.println("     * emitted at every site that scans the store because those sites ARE the");
+        w.println("     * read path: a node that has replayed only its own log holds a store that");
+        w.println("     * looks answerable and is missing every row its peers owned, and a count or");
+        w.println("     * a page taken off it reads as complete. UNAVAILABLE, not INTERNAL — the");
+        w.println("     * condition clears on its own and the caller should retry.");
+        w.println("     */");
+        w.println("    private void requireHotReadable() throws ProtoException {");
+        w.println("        if (!hotReadable.getAsBoolean()) {");
+        w.println("            throw new ProtoException(ProtoException.UNAVAILABLE,");
+        w.println("                    \"the record store is still restoring: hot reads are closed until\"");
+        w.println("                            + \" every reachable instance has replayed its redo log\");");
+        w.println("        }");
+        w.println("    }");
         w.println();
         w.println("    private Object requireQuery(String queryId) throws ProtoException {");
         w.println("        Object q = queries.get(queryId);");
@@ -198,9 +222,13 @@ public final class RecordMapImplGenerator {
 
             // Emitted at the top of every store-scanning body: bind `f` to the
             // handle's filter (or validate existence for filterless types).
-            String bindFilter = hasFilter
+            // Emitted as the FIRST statement of every body that scans the store, ahead
+            // of the handle lookup: "the store is not readable yet" is true of the whole
+            // instance and does not depend on the handle being valid.
+            String gate = "        requireHotReadable();";
+            String bindFilter = gate + "\n" + (hasFilter
                     ? ("        " + filterTy + " f = " + lower(t) + "Filter(req.getQueryId());")
-                    : "        requireQuery(req.getQueryId());";
+                    : "        requireQuery(req.getQueryId());");
 
             // create<T>Query — register the filter under a fresh handle.
             w.println();
@@ -232,9 +260,7 @@ public final class RecordMapImplGenerator {
             w.println("    @Override");
             w.println("    public " + msgs + ".Sample" + t + "Response " + lower("Get" + t + "Sample")
                     + "(Caller caller, " + msgs + ".Sample" + t + "Request req) throws ProtoException {");
-            w.println(hasFilter
-                    ? ("        " + filterTy + " f = " + lower(t) + "Filter(req.getQueryId());")
-                    : "        requireQuery(req.getQueryId());");
+            w.println(bindFilter);
             w.println("        java.util.List<" + fqn + "> matches = new ArrayList<>();");
             w.println("        try {");
             w.println(memoryMatchLeg);
@@ -252,9 +278,7 @@ public final class RecordMapImplGenerator {
             w.println("    @Override");
             w.println("    public CollectionRuntime.Page<" + fqn + "> " + lower("List" + t)
                     + "(Caller caller, " + msgs + ".Pull" + t + "Request req, CollectionRuntime.PageParams page) throws ProtoException {");
-            w.println(hasFilter
-                    ? ("        " + filterTy + " f = " + lower(t) + "Filter(req.getQueryId());")
-                    : "        requireQuery(req.getQueryId());");
+            w.println(bindFilter);
             w.println("        java.util.List<" + fqn + "> matches = new ArrayList<>();");
             w.println("        try {");
             w.println(memoryMatchLeg);
@@ -281,6 +305,7 @@ public final class RecordMapImplGenerator {
                 w.println("    @Override");
                 w.println("    public " + msgs + ".QueryStats " + lower("Update" + t + "Query")
                         + "(Caller caller, " + msgs + ".Refine" + t + "Request req) throws ProtoException {");
+                w.println(gate);
                 w.println("        requireQuery(req.getQueryId());");
                 w.println("        " + filterTy + " f = req.getFilter();");
                 w.println("        queries.put(req.getQueryId(), f);");

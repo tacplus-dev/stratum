@@ -177,7 +177,10 @@ class WarmMutableSessionStateE2ETest {
             }
         };
         server = NettyServerBuilder.forPort(0)
-                .addService(new RecordMap(new StratumRecordMaps(() -> stores, () -> warm), authorizer))
+                .addService(new RecordMap(
+                        // The hot tier's restore gate, open: this fixture has no cold
+                        // start to wait for. HotAgentEventE2ETest drives it closed.
+                        new StratumRecordMaps(() -> stores, () -> warm, () -> true), authorizer))
                 .build()
                 .start();
         channel = PullAgentEvent.channel("localhost:" + server.getPort(), true);

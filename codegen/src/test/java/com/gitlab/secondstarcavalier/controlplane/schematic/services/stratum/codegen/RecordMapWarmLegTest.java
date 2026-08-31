@@ -150,6 +150,48 @@ class RecordMapWarmLegTest {
         assertFalse(src.contains("\"demo.DemoEvent\""), src);
     }
 
+    /**
+     * Every RPC that scans the store checks the hot tier's restore gate first.
+     *
+     * <p>The gate used to guard {@code EventStore.getByKey} and
+     * {@code EventStore.query} — two methods with no caller anywhere — while the live
+     * read path, which is this generated class, never asked. A node that had replayed
+     * only its own redo log therefore served counts and pages off a store missing
+     * every row its peers owned, and they read as complete.
+     *
+     * <p>The count is the same 6 sites the disk leg is emitted at, plus nothing:
+     * create&lt;T&gt;Query and delete&lt;T&gt;Query touch the handle registry only, so
+     * gating them would refuse a caller work that does not read the store at all.
+     */
+    @Test
+    void everyStoreScanningRpcChecksTheRestoreGate(@TempDir Path dir) throws IOException {
+        String src = generate(dir, HOT_BODY);
+
+        assertTrue(src.contains("BooleanSupplier hotReadable"), src);
+        assertTrue(src.contains("private void requireHotReadable() throws ProtoException {"), src);
+        assertTrue(src.contains("ProtoException.UNAVAILABLE"),
+                "the condition clears on its own; the caller should retry, not fail:\n" + src);
+
+        // getCount, getSample, list, updateQuery, watch, subscribeCount.
+        assertEquals(6, count(src, "        requireHotReadable();"),
+                "a store-scanning RPC is serving a partially restored store:\n" + src);
+    }
+
+    /** The paired control: the two handle-only RPCs are NOT gated. */
+    @Test
+    void theHandleOnlyRpcsAreNotGated(@TempDir Path dir) throws IOException {
+        String src = generate(dir, HOT_BODY);
+
+        for (String method : List.of("createDemoEventQuery", "deleteDemoEventQuery")) {
+            int at = src.indexOf(" " + method + "(");
+            assertTrue(at > 0, method + " was not emitted:\n" + src);
+            int end = src.indexOf("\n    }", at);
+            assertFalse(src.substring(at, end).contains("requireHotReadable();"),
+                    method + " reads no store, so gating it refuses work that cannot be stale:\n"
+                            + src.substring(at, end));
+        }
+    }
+
     /** The plane always takes the warm store, so the wiring compiles before any proto opts in. */
     @Test
     void thePlaneAlwaysTakesTheWarmStore(@TempDir Path dir) throws IOException {

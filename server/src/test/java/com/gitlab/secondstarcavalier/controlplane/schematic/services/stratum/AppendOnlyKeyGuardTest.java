@@ -188,6 +188,79 @@ class AppendOnlyKeyGuardTest {
     }
 
     /**
+     * The COLD BOOT case: memory is empty, the disk leg is not, and the replay must
+     * not duplicate the rows it already holds.
+     *
+     * <p>A pod restart destroys the Hazelcast map and keeps the warm volume. Seeing an
+     * empty store cluster-wide, {@code ColdStartRebuilder} replays the whole event log
+     * from offset 0 — so every append-only record already on this node's disk arrives
+     * again with memory unable to recognise it. Checking the memory leg alone, all of
+     * them read as fresh keys and each is APPENDED to the Lucene index a second time.
+     * Nothing repairs it: {@code WarmIndex.reconcile} keeps one copy per key and
+     * returns immediately for an append-only dataset, so the duplicate is permanent
+     * and shows up as a doubled Get&lt;T&gt;Count once the rows age past the boundary.
+     *
+     * <p>The map is cleared rather than the member restarted because clearing is
+     * exactly what the restart leaves behind — an empty memory leg over a populated
+     * disk one — and it is the state the guard has to answer for.
+     */
+    @Test
+    void aColdBootReplayDoesNotDuplicateWhatTheDiskLegAlreadyHolds() throws Exception {
+        AccountingRecord r = accounting("acct-cold-boot", 11, System.currentTimeMillis());
+        assertTrue(EventStore.ingest(warm, r, AppendOnlyKeyGuardTest::memoryHolds,
+                () -> stores.store(r)));
+        warm.awaitWrites(10_000);
+        assertTrue(warm.isDurableOnDisk(APPEND_ONLY_DATASET, "acct-cold-boot"),
+                "the disk leg never committed the row this test is about");
+
+        // The restart: memory is gone, the volume is not.
+        stores.accountingrecordAccountingRecord().remove("acct-cold-boot");
+        assertFalse(memoryHolds(APPEND_ONLY_DATASET, "acct-cold-boot"));
+
+        long writtenBefore = warm.writtenCount();
+        long rejectedBefore = warm.rejectedCount();
+        AtomicBoolean memoryPutRan = new AtomicBoolean();
+
+        // The replayed record: the SAME key, exactly as the event log holds it.
+        assertTrue(EventStore.ingest(warm, r, AppendOnlyKeyGuardTest::memoryHolds, () -> {
+            memoryPutRan.set(true);
+            return stores.store(r);
+        }), "a refused record must read as handled, or the subscription retries it forever");
+
+        assertFalse(memoryPutRan.get(), "the replayed record reached the memory put");
+        warm.awaitWrites(10_000);
+        assertEquals(writtenBefore, warm.writtenCount(),
+                "the cold-boot replay appended a second document for a key the disk leg holds;"
+                        + " append-only never deletes, so that duplicate is permanent");
+        assertEquals(rejectedBefore, warm.rejectedCount(),
+                "a contract refusal is not an unstorable record");
+        assertFalse(warm.residency(APPEND_ONLY_DATASET).inMemory("acct-cold-boot", 0L),
+                "the refused write leaked a claim; the disk leg is hiding the key it holds");
+    }
+
+    /**
+     * The paired control for the disk check: a key NEITHER leg holds is still stored.
+     *
+     * <p>Without this the fix above is indistinguishable from refusing every
+     * append-only write once the dataset has any content at all.
+     */
+    @Test
+    void aKeyOnNeitherLegIsStillStoredAfterTheDiskCheck() throws Exception {
+        warm.awaitWrites(10_000);
+        long writtenBefore = warm.writtenCount();
+
+        AccountingRecord r = accounting("acct-neither-leg", 13, System.currentTimeMillis());
+        assertFalse(warm.isDurableOnDisk(APPEND_ONLY_DATASET, "acct-neither-leg"));
+        assertTrue(EventStore.ingest(warm, r, AppendOnlyKeyGuardTest::memoryHolds,
+                () -> stores.store(r)));
+
+        warm.awaitWrites(10_000);
+        assertEquals(writtenBefore + 1, warm.writtenCount(),
+                "the disk check refused a key no leg was holding");
+        assertEquals(13, stores.accountingrecordAccountingRecord().get("acct-neither-leg").getDurationMs());
+    }
+
+    /**
      * The control: a MUTABLE warm record still republishes, unchanged.
      *
      * <p>AgentSessionState declares RESIDENCY_WARM and no mutability — it is

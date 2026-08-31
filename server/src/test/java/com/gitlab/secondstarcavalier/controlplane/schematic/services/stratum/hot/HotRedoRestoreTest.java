@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
@@ -332,6 +333,42 @@ class HotRedoRestoreTest {
     }
 
     /**
+     * The staggered-start race.
+     *
+     * <p>A StatefulSet's pods do not start together. The FIRST one up is alone, so a
+     * barrier that asks only "has every member I can SEE reported?" is satisfied by
+     * its own report before a peer has joined at all — and hot reads open on a store
+     * holding one node's redo log, which is the precise condition the barrier exists
+     * to refuse. min_durable_copies is the declaration of how many instances there
+     * are meant to be, so the expected count never falls below it.
+     *
+     * <p>Two members is what the default floor asks for; this node is one, and it
+     * must not pass alone.
+     */
+    @Test
+    void theFirstPodUpDoesNotPassTheBarrierAlone(@TempDir Path dir) throws Exception {
+        hz = member("stratum-barrier-stagger-test");
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> HotRestore.awaitClusterReplay(hz, 5, 2, java.time.Duration.ofSeconds(2)),
+                "the first pod up passed a two-instance barrier by itself");
+        assertTrue(e.getMessage().contains("only 1 of 2 expected instances"), e.getMessage());
+    }
+
+    /**
+     * The paired control: the same node, same floor, passes the moment the peer's
+     * report lands. The refusal above is the barrier waiting, not the barrier stuck.
+     */
+    @Test
+    void theBarrierPassesOnceThePeerHasReported(@TempDir Path dir) throws Exception {
+        hz = member("stratum-barrier-peer-test");
+        peerReported(hz, "peer-a", 5);
+
+        assertEquals(2, HotRestore.awaitClusterReplay(hz, 5, 2, java.time.Duration.ofSeconds(5)),
+                "both instances read a log, so both contributed one");
+    }
+
+    /**
      * A node that replayed nothing is not a contributor. Below the floor that is
      * LOGGED loudly rather than treated as a normal start — the recovered store is
      * then thinner than the durability its writes were acked under.
@@ -339,6 +376,7 @@ class HotRedoRestoreTest {
     @Test
     void anEmptyReplayIsNotCountedAsAContribution(@TempDir Path dir) throws Exception {
         hz = member("stratum-barrier-empty-test");
+        peerReported(hz, "peer-a", 0);
         assertEquals(0, HotRestore.awaitClusterReplay(hz, 0, 2, java.time.Duration.ofSeconds(5)));
     }
 
@@ -400,11 +438,24 @@ class HotRedoRestoreTest {
         assertEquals(0, result.skipped);
         assertEquals(0, result.read, "there was no log to read");
 
+        peerReported(hz, "peer-a", 0);
         assertEquals(0, HotRestore.awaitClusterReplay(hz, result.read, 2, java.time.Duration.ofSeconds(5)),
                 "an absent log is still zero contribution, and below the floor that stays LOUD");
     }
 
     // ------------------------------------------------------------------ helpers
+
+    /**
+     * A peer's entry in the shared replay ledger, without a second member.
+     *
+     * <p>{@link #member} disables both join mechanisms, so two instances here cannot
+     * form one cluster. A peer contributes exactly one thing to this barrier — its
+     * report — so writing that report directly is the whole of what a second pod
+     * would do, and it lets a floor-of-two case be exercised on one member.
+     */
+    private static void peerReported(HazelcastInstance hz, String peerUuid, int recordsRead) {
+        hz.<String, Integer>getMap(HotRestore.LEDGER_MAP).put(peerUuid, recordsRead);
+    }
 
     /** The active log's bytes, or "" before the first append has created it. */
     private static String logContents(HotRedoLogs logs) throws Exception {

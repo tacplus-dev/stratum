@@ -148,9 +148,12 @@ public final class HotRestore {
      *                         had a log, and on a rolling restart that is the
      *                         normal case; counting applied records only would
      *                         raise the alarm below on every healthy restart.
-     * @param minDurableCopies the declared floor; fewer contributors than this is
-     *                         LOUD, because the recovered store is then thinner
-     *                         than the durability the writes were acked under
+     * @param minDurableCopies the declared floor. It bounds the wait as well as the
+     *                         alarm: it is how many instances there are SUPPOSED to
+     *                         be, so the barrier cannot be satisfied by fewer, and
+     *                         fewer contributors than this is LOUD, because the
+     *                         recovered store is then thinner than the durability
+     *                         the writes were acked under
      * @return the number of instances that contributed a log
      * @throws IllegalStateException if the wait times out
      */
@@ -160,16 +163,32 @@ public final class HotRestore {
         ledger.put(hz.getCluster().getLocalMember().getUuid().toString(), redoRecordsRead);
 
         long deadlineMs = System.currentTimeMillis() + timeout.toMillis();
-        int members;
+        int expected;
         while (true) {
-            members = hz.getCluster().getMembers().size();
-            if (ledger.size() >= members) {
+            // The expected count is recomputed on every pass, and it never falls below
+            // the declared floor. The pods of a StatefulSet do not start together, so
+            // the FIRST one up is alone: it sees a cluster of one, its own report
+            // satisfies "has everyone I can see reported?" immediately, and hot reads
+            // open on a store holding one node's redo log — the exact condition this
+            // barrier exists to refuse, reached by the barrier itself. The observed
+            // size cannot answer "is the cluster here yet?" while the cluster is still
+            // assembling; min_durable_copies is the declaration that can, so it is the
+            // floor, and the observed size only ever raises the expectation above it.
+            //
+            // A deployment that really runs one instance says so with
+            // STRATUM_MIN_DURABLE_COPIES=1 — the same declared number that already
+            // decides the map's backup count and its split-brain minimum, so a
+            // single-node run that has not set it cannot take a write either.
+            expected = Math.max(hz.getCluster().getMembers().size(), minDurableCopies);
+            if (ledger.size() >= expected) {
                 break;
             }
             if (System.currentTimeMillis() >= deadlineMs) {
-                throw new IllegalStateException("hot restore: only " + ledger.size() + " of " + members
-                        + " reachable instances reported their redo replay within " + timeout
-                        + "; refusing to serve a silently incomplete hot store");
+                throw new IllegalStateException("hot restore: only " + ledger.size() + " of " + expected
+                        + " expected instances reported their redo replay within " + timeout
+                        + " (cluster size " + hz.getCluster().getMembers().size()
+                        + ", min_durable_copies " + minDurableCopies
+                        + "); refusing to serve a silently incomplete hot store");
             }
             try {
                 Thread.sleep(100);
@@ -195,9 +214,9 @@ public final class HotRestore {
                     + " min_durable_copies={}. Every acked write was durable on {} nodes, so the"
                     + " recovered store may be missing rows whose only surviving copies were on the"
                     + " instances that contributed nothing.",
-                    contributors, members, minDurableCopies, minDurableCopies);
+                    contributors, expected, minDurableCopies, minDurableCopies);
         } else {
-            log.info("hot restore complete: {} of {} instances contributed a redo log", contributors, members);
+            log.info("hot restore complete: {} of {} instances contributed a redo log", contributors, expected);
         }
         return contributors;
     }
