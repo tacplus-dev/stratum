@@ -91,7 +91,10 @@ class EventTopicDiscoveryTest {
                   int64 timestamp_ms = 3 [(spec.query_field) = {op: QUERY_OP_RANGE}];
                 """));
 
-        assertEquals(List.of("timestamp_ms"), ev.queryFields.stream().map(f -> f.name).toList());
+        // event_id (the record's own key) is folded in as an implicit EQ
+        // criterion even though it carries no (spec.query_field) of its own —
+        // see EventTopicDiscovery.withKeyCriterion.
+        assertEquals(List.of("timestamp_ms", "event_id"), ev.queryFields.stream().map(f -> f.name).toList());
     }
 
     /**
@@ -134,5 +137,49 @@ class EventTopicDiscoveryTest {
 
         EventTopicDiscovery.TopicEvent ev = only(dir);
         assertEquals("event_id", ev.recordKey);
+    }
+
+    /**
+     * A record's key is always an implicit EQ query field, whether or not the
+     * author also annotated it with (spec.query_field) — this is what makes a
+     * point read by key possible at all. Without it, RecordMapImplGenerator's
+     * match<T>() never checks the key a caller filtered on, and a read for a
+     * wrong/never-created id matches every row instead of none.
+     */
+    @Test
+    void recordKeyIsAlwaysAnImplicitQueryField(@TempDir Path dir) throws IOException {
+        EventTopicDiscovery.TopicEvent ev = only(proto(dir, """
+                  option (spec.record) = {key: "spiffe_id"};
+                  string spiffe_id = 1;
+                  string owner_id = 2;
+                """));
+
+        List<EventTopicDiscovery.QueryField> fields = ev.queryFields;
+        assertEquals(1, fields.size(), "expected only the folded-in key: " + fields.stream().map(f -> f.name).toList());
+        assertEquals("spiffe_id", fields.get(0).name);
+        assertEquals("string", fields.get(0).protoType);
+        assertTrue(!fields.get(0).range, "the key criterion is EQ, not RANGE");
+    }
+
+    /** An explicit (spec.query_field) on the key is not duplicated by the fold. */
+    @Test
+    void explicitQueryFieldOnKeyIsNotDuplicated(@TempDir Path dir) throws IOException {
+        EventTopicDiscovery.TopicEvent ev = only(proto(dir, """
+                  option (spec.record) = {key: "spiffe_id"};
+                  string spiffe_id = 1 [(spec.query_field) = {op: QUERY_OP_EQ}];
+                """));
+
+        assertEquals(List.of("spiffe_id"), ev.queryFields.stream().map(f -> f.name).toList());
+    }
+
+    /** A repeated or map-typed key cannot be an EQ criterion, so it is skipped. */
+    @Test
+    void repeatedKeyIsNotFoldedIn(@TempDir Path dir) throws IOException {
+        EventTopicDiscovery.TopicEvent ev = only(proto(dir, """
+                  option (spec.record) = {key: "tags"};
+                  repeated string tags = 1;
+                """));
+
+        assertTrue(ev.queryFields.isEmpty(), "a repeated key must not become a filter criterion: " + ev.queryFields.stream().map(f -> f.name).toList());
     }
 }

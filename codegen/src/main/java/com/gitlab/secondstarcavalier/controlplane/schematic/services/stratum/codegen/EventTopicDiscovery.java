@@ -350,8 +350,13 @@ public final class EventTopicDiscovery {
             String eventBody = bodies.getOrDefault(type, "");
             String recordOption = recordOptionBlock(eventBody);
             boolean isRecord = !recordOption.isEmpty();
+            String recordKey = parseRecordKey(recordOption);
+            List<QueryField> queryFields = parseQueryFields(eventBody);
+            if (isRecord) {
+                queryFields = withKeyCriterion(queryFields, recordKey, eventBody);
+            }
             result.add(new TopicEvent(protoPackage, type, relPath,
-                    isRecord, parseRecordKey(recordOption), parseQueryFields(eventBody),
+                    isRecord, recordKey, queryFields,
                     parseRetentionTimestampField(recordOption),
                     parseResidency(recordOption), parseResidencyWindowSeconds(recordOption),
                     parseMutability(recordOption), parseStoreEpochField(eventBody),
@@ -499,5 +504,49 @@ public final class EventTopicDiscovery {
             fields.add(new QueryField(name, protoType, range));
         }
         return fields;
+    }
+
+    // A field declaration for a given name, e.g. "string spiffe_id = 4" or
+    // "repeated string tags = 5" or "map<string, string> labels = 6" — used to
+    // look up the record key's own proto type below.
+    private static Pattern fieldDeclPattern(String name) {
+        return Pattern.compile("(?<!\\w)(repeated\\s+)?([\\w.]+(?:\\s*<[^>]*>)?)\\s+"
+                + Pattern.quote(name) + "\\s*=\\s*\\d+");
+    }
+
+    /**
+     * Folds a record's key field into its query fields as an implicit EQ
+     * criterion, when it is not already an explicit one.
+     *
+     * tacplus's own generated Rust reader always sets the key as a filter
+     * criterion for a point read (pkg/internal/proto/record_map.go,
+     * appendKeyFilterCriterion) — the plane's <T>Filter message carries a
+     * field for it even when the record's author never annotated the key
+     * with (spec.query_field). Stratum's match<T>() is generated from this
+     * class's OWN independently-parsed query field list, not from that
+     * generated message, so without this it never checked the key criterion
+     * a reader sent: a point read for a never-created or wrong id matched
+     * every row and returned an arbitrary existing one instead of "not
+     * found". Skipped when the key's own declaration is repeated or a map —
+     * the same "not a plain scalar" exclusion tacplus applies — since
+     * neither can be an EQ criterion.
+     */
+    private static List<QueryField> withKeyCriterion(List<QueryField> fields, String key, String eventBody) {
+        for (QueryField qf : fields) {
+            if (qf.name.equals(key)) {
+                return fields;
+            }
+        }
+        Matcher m = fieldDeclPattern(key).matcher(eventBody);
+        if (!m.find() || m.group(1) != null) {
+            return fields; // key field not found, or declared repeated
+        }
+        String type = m.group(2).trim();
+        if (type.startsWith("map")) {
+            return fields;
+        }
+        List<QueryField> withKey = new ArrayList<>(fields);
+        withKey.add(new QueryField(key, type, false));
+        return withKey;
     }
 }
