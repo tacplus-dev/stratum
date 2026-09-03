@@ -9,6 +9,7 @@ import org.apache.maven.plugins.annotations.Parameter;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -127,6 +128,16 @@ public class StratumCodegenMojo extends AbstractMojo {
                     // its impl is a delegation shim onto the s2s one.
                     RecordQueryImplGenerator.generate(out, plane.c2s, events);
                     getLog().info("Generated StratumRecordQueries.java");
+                } else {
+                    // build-fleet.sh never mvn cleans this module, so a stale
+                    // StratumRecordQueries.java from an earlier build (compiled
+                    // against a different record catalog) would otherwise linger
+                    // and fail to compile against the current generated classes.
+                    Path stale = out.resolve(RecordQueryImplGenerator.HOST_PKG.replace('.', '/'))
+                            .resolve(RecordQueryImplGenerator.CLASS_NAME + ".java");
+                    if (Files.deleteIfExists(stale)) {
+                        getLog().info("Deleted stale StratumRecordQueries.java (no c2s plane)");
+                    }
                 }
             }
 

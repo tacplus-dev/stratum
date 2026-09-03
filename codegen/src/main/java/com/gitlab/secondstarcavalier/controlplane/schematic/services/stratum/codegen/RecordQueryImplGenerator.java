@@ -39,14 +39,14 @@ import java.util.List;
  */
 public final class RecordQueryImplGenerator {
 
-    private static final String HOST_PKG =
+    static final String HOST_PKG =
             "com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum";
     private static final String MODEL_BASE = HOST_PKG + ".model";
     private static final String SM_PREFIX = "s2sm";
     private static final String CALLER = MODEL_BASE + ".chassis.servicemanager.Caller";
     private static final String PROTO_EXCEPTION = MODEL_BASE + ".types.sys.errors.ProtoException";
     private static final String COLLECTION_RUNTIME = MODEL_BASE + ".chassis.collection.CollectionRuntime";
-    private static final String CLASS_NAME = "StratumRecordQueries";
+    static final String CLASS_NAME = "StratumRecordQueries";
 
     private RecordQueryImplGenerator() {}
 
