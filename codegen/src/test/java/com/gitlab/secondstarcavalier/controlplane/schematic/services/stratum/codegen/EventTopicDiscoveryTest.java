@@ -85,7 +85,7 @@ class EventTopicDiscoveryTest {
     @Test
     void commentedOutAnnotationsAreNotParsed(@TempDir Path dir) throws IOException {
         EventTopicDiscovery.TopicEvent ev = only(proto(dir, """
-                  option (spec.record) = {key: "event_id"};
+                  option (spec.record) = {key: "event_id", s2s_read: {auth_services: ["demo"]}};
                   string event_id = 1;
                   // string spiffe_id = 2 [(spec.query_field) = {op: QUERY_OP_EQ}];
                   int64 timestamp_ms = 3 [(spec.query_field) = {op: QUERY_OP_RANGE}];
@@ -140,16 +140,18 @@ class EventTopicDiscoveryTest {
     }
 
     /**
-     * A record's key is always an implicit EQ query field, whether or not the
-     * author also annotated it with (spec.query_field) — this is what makes a
-     * point read by key possible at all. Without it, RecordMapImplGenerator's
-     * match<T>() never checks the key a caller filtered on, and a read for a
-     * wrong/never-created id matches every row instead of none.
+     * A record's key is folded in as an implicit EQ query field only when the
+     * record also declares (spec.record).s2s_read — the same gate tacplus's
+     * own record_map.go applies (declaresRead) before appendKeyFilterCriterion,
+     * because a record with no reader has no <T>Filter message for the key to
+     * land in. Without the gate, RecordMapImplGenerator's match<T>() checks a
+     * key criterion that never exists in the generated Filter type, which is
+     * the symbol javac rejects.
      */
     @Test
-    void recordKeyIsAlwaysAnImplicitQueryField(@TempDir Path dir) throws IOException {
+    void recordKeyIsImplicitQueryFieldWhenS2sReadIsDeclared(@TempDir Path dir) throws IOException {
         EventTopicDiscovery.TopicEvent ev = only(proto(dir, """
-                  option (spec.record) = {key: "spiffe_id"};
+                  option (spec.record) = {key: "spiffe_id", s2s_read: {auth_services: ["demo"]}};
                   string spiffe_id = 1;
                   string owner_id = 2;
                 """));
@@ -161,11 +163,29 @@ class EventTopicDiscoveryTest {
         assertTrue(!fields.get(0).range, "the key criterion is EQ, not RANGE");
     }
 
+    /**
+     * A record with no s2s_read grant has no <T>Filter message at all on
+     * tacplus's side, so stratum must not fold the key in either — this is
+     * the bug big8-p4's fourth attempt hit: folding it in unconditionally
+     * produced a hasXxxId() check against a Filter type that was never
+     * generated with that field.
+     */
+    @Test
+    void recordKeyIsNotFoldedInWithoutS2sRead(@TempDir Path dir) throws IOException {
+        EventTopicDiscovery.TopicEvent ev = only(proto(dir, """
+                  option (spec.record) = {key: "spiffe_id"};
+                  string spiffe_id = 1;
+                  string owner_id = 2;
+                """));
+
+        assertTrue(ev.queryFields.isEmpty(), "a record with no s2s_read must not get a folded-in key criterion: " + ev.queryFields.stream().map(f -> f.name).toList());
+    }
+
     /** An explicit (spec.query_field) on the key is not duplicated by the fold. */
     @Test
     void explicitQueryFieldOnKeyIsNotDuplicated(@TempDir Path dir) throws IOException {
         EventTopicDiscovery.TopicEvent ev = only(proto(dir, """
-                  option (spec.record) = {key: "spiffe_id"};
+                  option (spec.record) = {key: "spiffe_id", s2s_read: {auth_services: ["demo"]}};
                   string spiffe_id = 1 [(spec.query_field) = {op: QUERY_OP_EQ}];
                 """));
 
@@ -176,7 +196,7 @@ class EventTopicDiscoveryTest {
     @Test
     void repeatedKeyIsNotFoldedIn(@TempDir Path dir) throws IOException {
         EventTopicDiscovery.TopicEvent ev = only(proto(dir, """
-                  option (spec.record) = {key: "tags"};
+                  option (spec.record) = {key: "tags", s2s_read: {auth_services: ["demo"]}};
                   repeated string tags = 1;
                 """));
 

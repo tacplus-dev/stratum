@@ -239,6 +239,13 @@ public final class EventTopicDiscovery {
     // It is a bare enum value on the record option, not a nested literal.
     private static final Pattern MUTABILITY = Pattern.compile(
             "(?<!\\w)mutability:\\s*(MUTABILITY_\\w+)");
+    // Whether the record option declares an s2s_read grant at all, e.g.
+    //   s2s_read: {auth_services: ["scotty"]}
+    // Presence, not content, is what gates the key criterion below — this
+    // mirrors tacplus's own gate (record_map.go's declaresRead), which folds
+    // the key into <T>Filter only when the record declares a reader.
+    private static final Pattern S2S_READ = Pattern.compile(
+            "(?<!\\w)s2s_read:\\s*\\{");
     // The field carrying (spec.store_epoch), e.g.
     //   int64 store_epoch_ms = 9 [(spec.store_epoch) = true, (spec.query_field) = {op: QUERY_OP_RANGE}];
     private static final Pattern STORE_EPOCH_FIELD = Pattern.compile(
@@ -352,7 +359,7 @@ public final class EventTopicDiscovery {
             boolean isRecord = !recordOption.isEmpty();
             String recordKey = parseRecordKey(recordOption);
             List<QueryField> queryFields = parseQueryFields(eventBody);
-            if (isRecord) {
+            if (isRecord && S2S_READ.matcher(recordOption).find()) {
                 queryFields = withKeyCriterion(queryFields, recordKey, eventBody);
             }
             result.add(new TopicEvent(protoPackage, type, relPath,
@@ -518,17 +525,21 @@ public final class EventTopicDiscovery {
      * Folds a record's key field into its query fields as an implicit EQ
      * criterion, when it is not already an explicit one.
      *
-     * tacplus's own generated Rust reader always sets the key as a filter
-     * criterion for a point read (pkg/internal/proto/record_map.go,
-     * appendKeyFilterCriterion) — the plane's <T>Filter message carries a
-     * field for it even when the record's author never annotated the key
-     * with (spec.query_field). Stratum's match<T>() is generated from this
+     * tacplus's own generated Rust reader sets the key as a filter criterion
+     * for a point read whenever the record declares (spec.record).s2s_read
+     * (pkg/internal/proto/record_map.go, appendKeyFilterCriterion, gated on
+     * declaresRead) — the plane's <T>Filter message carries a field for it
+     * even when the record's author never annotated the key with
+     * (spec.query_field). Stratum's match<T>() is generated from this
      * class's OWN independently-parsed query field list, not from that
      * generated message, so without this it never checked the key criterion
      * a reader sent: a point read for a never-created or wrong id matched
      * every row and returned an arbitrary existing one instead of "not
-     * found". Skipped when the key's own declaration is repeated or a map —
-     * the same "not a plain scalar" exclusion tacplus applies — since
+     * found". Callers gate this on the same s2s_read presence tacplus does —
+     * a record with no reader has no <T>Filter to match, so folding the key
+     * in anyway just fabricates a field the generated Filter message never
+     * has. Also skipped when the key's own declaration is repeated or a
+     * map — the same "not a plain scalar" exclusion tacplus applies — since
      * neither can be an EQ criterion.
      */
     private static List<QueryField> withKeyCriterion(List<QueryField> fields, String key, String eventBody) {
