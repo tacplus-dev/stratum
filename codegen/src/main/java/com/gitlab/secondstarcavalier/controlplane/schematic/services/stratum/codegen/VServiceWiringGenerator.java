@@ -68,7 +68,9 @@ public class VServiceWiringGenerator {
         }
         if (plane != null) {
             w.println("import " + plane.s2s.wrapperFqn(MODEL_BASE, SM_PREFIX) + ";");
-            w.println("import " + plane.c2s.wrapperFqn(MODEL_BASE, SM_PREFIX) + ";");
+            if (plane.c2s != null) {
+                w.println("import " + plane.c2s.wrapperFqn(MODEL_BASE, SM_PREFIX) + ";");
+            }
         }
         w.println();
 
@@ -150,7 +152,6 @@ public class VServiceWiringGenerator {
      */
     private static void writeRecordPlane(PrintWriter w, VServiceDiscovery.RecordPlane plane) {
         String s2s = plane.s2s.serviceName;
-        String c2s = plane.c2s.serviceName;
 
         w.println("    // --- record query plane (" + plane.s2s.protoRelPath + ") ---");
         w.println();
@@ -164,16 +165,21 @@ public class VServiceWiringGenerator {
         w.println("        handleConfig(cfg);");
         w.println("    }");
         w.println();
-        w.println("    @Override");
-        w.println("    public final " + c2s + "." + c2s + "Handler get" + c2s + "GrpcImpl() {");
-        w.println("        return new StratumRecordQueries(provideRecordPlane());");
-        w.println("    }");
-        w.println();
-        w.println("    @Override");
-        w.println("    public void handle" + c2s + "Config(Stratum.Config cfg) throws Exception {");
-        w.println("        handleConfig(cfg);");
-        w.println("    }");
-        w.println();
+
+        if (plane.c2s != null) {
+            String c2s = plane.c2s.serviceName;
+            w.println("    @Override");
+            w.println("    public final " + c2s + "." + c2s + "Handler get" + c2s + "GrpcImpl() {");
+            w.println("        return new StratumRecordQueries(provideRecordPlane());");
+            w.println("    }");
+            w.println();
+            w.println("    @Override");
+            w.println("    public void handle" + c2s + "Config(Stratum.Config cfg) throws Exception {");
+            w.println("        handleConfig(cfg);");
+            w.println("    }");
+            w.println();
+        }
+
         w.println("    /**");
         w.println("     * The one query-plane implementation, shared by both surfaces.");
         w.println("     */");

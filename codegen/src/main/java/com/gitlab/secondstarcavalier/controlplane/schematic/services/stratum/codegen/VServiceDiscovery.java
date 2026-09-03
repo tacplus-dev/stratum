@@ -95,7 +95,10 @@ public class VServiceDiscovery {
         }
     }
 
-    /** The record query plane: the two sibling services tacplus emits for a trait. */
+    /**
+     * The record query plane: the s2s service tacplus emits for a trait, plus its
+     * c2s sibling when the trait declares one — c2s may be null for an s2s-only plane.
+     */
     public static final class RecordPlane {
         public final HostedVService s2s;
         public final HostedVService c2s;
@@ -107,7 +110,9 @@ public class VServiceDiscovery {
 
         @Override
         public String toString() {
-            return s2s.serviceName + " (s2s) + " + c2s.serviceName + " (c2s) in " + s2s.protoRelPath;
+            return s2s.serviceName + " (s2s)"
+                    + (c2s != null ? " + " + c2s.serviceName + " (c2s)" : "")
+                    + " in " + s2s.protoRelPath;
         }
     }
 
@@ -172,9 +177,8 @@ public class VServiceDiscovery {
         if (s2s == null && c2s == null) {
             return null;
         }
-        if (s2s == null || c2s == null) {
-            throw new IOException("record query plane is half-declared: found only the "
-                    + (s2s != null ? "s2s" : "c2s") + " sibling");
+        if (s2s == null) {
+            throw new IOException("record query plane is half-declared: found only the c2s sibling");
         }
         return new RecordPlane(s2s, c2s);
     }

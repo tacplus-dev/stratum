@@ -122,10 +122,12 @@ public class StratumCodegenMojo extends AbstractMojo {
                 RecordMapImplGenerator.generate(out, plane.s2s, events);
                 getLog().info("Generated StratumRecordMaps.java");
 
-                // The c2s half is the same lifecycle under governed verbs, so its
-                // impl is a delegation shim onto the s2s one.
-                RecordQueryImplGenerator.generate(out, plane.c2s, events);
-                getLog().info("Generated StratumRecordQueries.java");
+                if (plane.c2s != null) {
+                    // The c2s half is the same lifecycle under governed verbs, so
+                    // its impl is a delegation shim onto the s2s one.
+                    RecordQueryImplGenerator.generate(out, plane.c2s, events);
+                    getLog().info("Generated StratumRecordQueries.java");
+                }
             }
 
         } catch (IOException e) {
