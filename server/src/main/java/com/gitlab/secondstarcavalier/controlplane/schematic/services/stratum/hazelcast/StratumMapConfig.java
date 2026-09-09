@@ -1,6 +1,7 @@
 // Copyright (c) 2024 Second Star Cavalier, LLC.
 package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
@@ -11,6 +12,7 @@ import com.hazelcast.config.InMemoryFormat;
 import com.hazelcast.config.MapConfig;
 import com.hazelcast.config.NetworkConfig;
 import com.hazelcast.config.SplitBrainProtectionConfig;
+import com.hazelcast.core.HazelcastInstance;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -159,6 +161,69 @@ public final class StratumMapConfig {
                 StratumEventStores.mapNames(), minDurableCopies, minDurableCopies - 1, minDurableCopies);
 
         return cfg;
+    }
+
+    /**
+     * How long a starting member waits for the cluster to reach the declared floor
+     * before giving up. Bounded well inside the health sidecar's window so a
+     * cluster that never forms fails loudly rather than being killed as a hang.
+     */
+    public static final Duration FORMATION_TIMEOUT = Duration.ofMinutes(2);
+
+    /**
+     * Blocks until the cluster holds {@code minDurableCopies} members, which is the
+     * precondition for touching any map built by {@link #durableMap}.
+     *
+     * <p>{@link com.hazelcast.core.Hazelcast#newHazelcastInstance} returns as soon
+     * as THIS member is up, not when the cluster is assembled, and the pods of a
+     * StatefulSet do not start together — so the first pod up is a cluster of one.
+     * Every hot map carries {@link #SPLIT_BRAIN_PROTECTION_NAME} with a
+     * minimumClusterSize of the same floor, and Hazelcast enforces that on proxy
+     * CREATION, not only on writes: {@code hz.getMap(name)} from a cluster of one
+     * throws {@code SplitBrainProtectionException} before a single record is read.
+     * The floor is a statement about the assembled cluster, so the assembly is
+     * waited for rather than the exception being caught — catching it would only
+     * move the same incomplete-cluster start one line later.
+     *
+     * <p>Waiting is bounded and then fatal on purpose. With the floor unmet this
+     * member genuinely cannot serve: it may not take a write, and the redo barrier
+     * it would go on to run ({@code HotRestore.awaitClusterReplay}) cannot be
+     * satisfied by fewer members either. A deployment that really runs one instance
+     * declares {@code STRATUM_MIN_DURABLE_COPIES=1} and never waits here.
+     *
+     * @throws IllegalStateException if the floor is not reached within {@code timeout}
+     */
+    public static void awaitProtectedClusterSize(HazelcastInstance hz, int minDurableCopies,
+                                                 Duration timeout) {
+        int size = hz.getCluster().getMembers().size();
+        if (size >= minDurableCopies) {
+            return;
+        }
+        log.info("waiting for the cluster to reach min_durable_copies={} before opening the hot maps"
+                + " (currently {} member(s)); every hot map's split-brain protection refuses a"
+                + " proxy below the floor", minDurableCopies, size);
+
+        long deadlineMs = System.currentTimeMillis() + timeout.toMillis();
+        while (true) {
+            size = hz.getCluster().getMembers().size();
+            if (size >= minDurableCopies) {
+                log.info("cluster reached {} member(s) — opening the hot maps", size);
+                return;
+            }
+            if (System.currentTimeMillis() >= deadlineMs) {
+                throw new IllegalStateException("stratum: cluster reached only " + size + " of the "
+                        + minDurableCopies + " members min_durable_copies declares, within " + timeout
+                        + "; every hot map refuses to open below that floor, so this member cannot"
+                        + " serve. Set STRATUM_MIN_DURABLE_COPIES=1 for a deliberately"
+                        + " single-instance deployment.");
+            }
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("stratum: interrupted while awaiting cluster formation", e);
+            }
+        }
     }
 
     /**

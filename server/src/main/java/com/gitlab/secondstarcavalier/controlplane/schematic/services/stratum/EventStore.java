@@ -133,6 +133,15 @@ public class EventStore {
                 ? floorOverride
                 : StratumMapConfig.DEFAULT_MIN_DURABLE_COPIES;
         hz = Hazelcast.newHazelcastInstance(StratumMapConfig.build(seedMembers, minDurableCopies));
+
+        // Before ANY hot map is touched. newHazelcastInstance returns when this
+        // member is up, not when the cluster is assembled, so the first pod of the
+        // StatefulSet is briefly a cluster of one — and every line below opens a map
+        // whose split-brain protection refuses a proxy below the floor. Opening one
+        // there threw SplitBrainProtectionException straight out of init.
+        StratumMapConfig.awaitProtectedClusterSize(hz, minDurableCopies,
+                StratumMapConfig.FORMATION_TIMEOUT);
+
         hotWrites = new HotWrites(hz, minDurableCopies - 1, floorOverride);
         stores.init(hz, hotWrites);
         events = hz.getMap(StratumMapConfig.MAP_NAME);
