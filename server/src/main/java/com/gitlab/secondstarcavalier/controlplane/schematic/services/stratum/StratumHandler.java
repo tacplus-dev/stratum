@@ -4,7 +4,6 @@ package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 import org.slf4j.Logger;
@@ -43,7 +42,14 @@ public class StratumHandler extends StratumVServiceBase {
     // restore gate below is only meaningful if a reader sees the CURRENT store —
     // observing the previous one would report the new store's restore as finished.
     private volatile EventStore eventStore;
-    private final AtomicBoolean coldStartHandled = new AtomicBoolean(false);
+    /**
+     * Whether the event-log cold-start replay has actually FINISHED, as opposed to
+     * having been started once. It replaces a "handled" latch that was raised the
+     * moment the replay was kicked off: that could not gate reads, because the
+     * whole point is the window between kickoff and catch-up, and it also made a
+     * reload that shut down an in-flight replay decline to ever run another one.
+     */
+    private volatile boolean coldStartComplete;
     private volatile ColdStartRebuilder coldStartRebuilder;
     private StratumRecordMaps recordMaps;
 
@@ -218,18 +224,48 @@ public class StratumHandler extends StratumVServiceBase {
         // through the broker. Replay is idempotent (IMap put = upsert keyed by
         // event_id), so when it does run a partially-surviving store still
         // converges.
-        if (coldStartHandled.compareAndSet(false, true)) {
-            long held = eventStore.eventCount();
-            int members = eventStore.clusterSize();
+        //
+        // Whichever branch is taken, it ENDS by telling the store where the
+        // cold-start leg of the read gate stands. The gate is closed until it is
+        // told, so a branch that says nothing leaves reads refused forever.
+        EventStore store = eventStore;
+        if (coldStartComplete) {
+            // A config reload after the replay already finished. The data it
+            // recovered is in the shared cluster map, which this new store is a
+            // member of, so its gate opens on the redo barrier alone.
+            store.coldStartReplayComplete();
+        } else {
+            long held = store.eventCount();
+            int members = store.clusterSize();
             if (ColdStartRebuilder.shouldReplay(held)) {
                 log.info("cold boot: store is empty cluster-wide ({} member(s)) — replaying the event log",
                         members);
                 coldStartRebuilder = new ColdStartRebuilder();
-                coldStartRebuilder.startReplay(sm, this);
+                coldStartRebuilder.startReplay(sm, this, () -> onColdStartComplete(store));
             } else {
                 log.info("warm start: {} records held, {} cluster member(s) — skipping event-log replay",
                         held, members);
+                onColdStartComplete(store);
             }
+        }
+    }
+
+    /**
+     * The cold-start leg of the read gate, opened for the store the replay was
+     * started for.
+     *
+     * <p>Bound to that specific store rather than to whatever {@code eventStore}
+     * happens to hold: a reload replaces the store and shuts the old rebuild down,
+     * and a callback from that dying rebuild arriving afterwards must not open the
+     * NEW store's gate on the old store's work. The handler-level flag is only
+     * raised when the two still match, so a reload that interrupted an incomplete
+     * replay re-runs the cold-start decision above rather than inheriting a
+     * completion that never happened.
+     */
+    private void onColdStartComplete(EventStore store) {
+        store.coldStartReplayComplete();
+        if (eventStore == store) {
+            coldStartComplete = true;
         }
     }
 

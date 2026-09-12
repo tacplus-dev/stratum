@@ -46,6 +46,7 @@ class HotRedoRestoreTest {
     private static final String MAP = "agentsensor.AgentEvent";
 
     private HazelcastInstance hz;
+    private HazelcastInstance peer;
     private HotRedoLogs logs;
 
     @AfterEach
@@ -57,6 +58,10 @@ class HotRedoRestoreTest {
         if (hz != null) {
             hz.shutdown();
             hz = null;
+        }
+        if (peer != null) {
+            peer.shutdown();
+            peer = null;
         }
     }
 
@@ -361,8 +366,8 @@ class HotRedoRestoreTest {
      */
     @Test
     void theBarrierPassesOnceThePeerHasReported(@TempDir Path dir) throws Exception {
-        hz = member("stratum-barrier-peer-test");
-        peerReported(hz, "peer-a", 5);
+        twoMemberCluster("stratum-barrier-peer-test");
+        peerReported(peer, 5);
 
         assertEquals(2, HotRestore.awaitClusterReplay(hz, 5, 2, java.time.Duration.ofSeconds(5)),
                 "both instances read a log, so both contributed one");
@@ -375,8 +380,8 @@ class HotRedoRestoreTest {
      */
     @Test
     void anEmptyReplayIsNotCountedAsAContribution(@TempDir Path dir) throws Exception {
-        hz = member("stratum-barrier-empty-test");
-        peerReported(hz, "peer-a", 0);
+        twoMemberCluster("stratum-barrier-empty-test");
+        peerReported(peer, 0);
         assertEquals(0, HotRestore.awaitClusterReplay(hz, 0, 2, java.time.Duration.ofSeconds(5)));
     }
 
@@ -430,7 +435,7 @@ class HotRedoRestoreTest {
         HotDataset d = dataset(1);
         Path empty = dir.resolve("never-owned-a-partition");
 
-        hz = member("stratum-absent-log-test");
+        twoMemberCluster("stratum-absent-log-test");
         IMap<String, Message> map = hz.getMap(MAP);
         HotRestore.Result result = replayFrom(empty, d, map);
 
@@ -438,7 +443,7 @@ class HotRedoRestoreTest {
         assertEquals(0, result.skipped);
         assertEquals(0, result.read, "there was no log to read");
 
-        peerReported(hz, "peer-a", 0);
+        peerReported(peer, 0);
         assertEquals(0, HotRestore.awaitClusterReplay(hz, result.read, 2, java.time.Duration.ofSeconds(5)),
                 "an absent log is still zero contribution, and below the floor that stays LOUD");
     }
@@ -446,15 +451,48 @@ class HotRedoRestoreTest {
     // ------------------------------------------------------------------ helpers
 
     /**
-     * A peer's entry in the shared replay ledger, without a second member.
+     * A peer's entry in the shared replay ledger, filed under that peer's REAL
+     * member UUID.
      *
-     * <p>{@link #member} disables both join mechanisms, so two instances here cannot
-     * form one cluster. A peer contributes exactly one thing to this barrier — its
-     * report — so writing that report directly is the whole of what a second pod
-     * would do, and it lets a floor-of-two case be exercised on one member.
+     * <p>This used to invent a UUID ("peer-a") and write the report directly,
+     * because {@link #member} disables both join mechanisms and two such instances
+     * cannot form one cluster. That simulation is no longer faithful: the barrier
+     * now counts only reports belonging to members of the current cluster view,
+     * precisely because the ledger is keyed by a UUID that changes on every restart
+     * and an entry under a UUID nobody in the cluster holds is indistinguishable
+     * from a dead pod's leftover. A fabricated UUID was therefore simulating the
+     * stale entry the barrier must ignore, not the live peer these tests mean.
+     *
+     * <p>So the peer is a real second member now, and what it reports is filed under
+     * the UUID the cluster actually sees it by.
      */
-    private static void peerReported(HazelcastInstance hz, String peerUuid, int recordsRead) {
-        hz.<String, Integer>getMap(HotRestore.LEDGER_MAP).put(peerUuid, recordsRead);
+    private static void peerReported(HazelcastInstance peer, int recordsRead) {
+        peer.<String, Integer>getMap(HotRestore.LEDGER_MAP)
+                .put(peer.getCluster().getLocalMember().getUuid().toString(), recordsRead);
+    }
+
+    /**
+     * A second member of {@code cluster}, joined over loopback TCP so the two
+     * instances share one cluster view — which is what {@link #member}'s
+     * join-disabled config cannot produce.
+     */
+    private HazelcastInstance joinedMember(String cluster) {
+        Config cfg = new Config();
+        cfg.setClusterName(cluster);
+        cfg.setProperty("hazelcast.phone.home.enabled", "false");
+        cfg.getNetworkConfig().getJoin().getMulticastConfig().setEnabled(false);
+        cfg.getNetworkConfig().getJoin().getTcpIpConfig().setEnabled(true).setMembers(List.of("127.0.0.1"));
+        return Hazelcast.newHazelcastInstance(cfg);
+    }
+
+    /** Brings up a two-member cluster and waits for both to see each other. */
+    private void twoMemberCluster(String cluster) throws Exception {
+        hz = joinedMember(cluster);
+        peer = joinedMember(cluster);
+        for (int i = 0; i < 100 && hz.getCluster().getMembers().size() < 2; i++) {
+            Thread.sleep(100);
+        }
+        assertEquals(2, hz.getCluster().getMembers().size(), "the two members did not form one cluster");
     }
 
     /** The active log's bytes, or "" before the first append has created it. */

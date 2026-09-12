@@ -3,12 +3,17 @@ package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.ho
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.protobuf.Message;
+import com.hazelcast.cluster.Member;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.map.IMap;
 
@@ -164,6 +169,7 @@ public final class HotRestore {
 
         long deadlineMs = System.currentTimeMillis() + timeout.toMillis();
         int expected;
+        Map<String, Integer> reports;
         while (true) {
             // The expected count is recomputed on every pass, and it never falls below
             // the declared floor. The pods of a StatefulSet do not start together, so
@@ -180,11 +186,21 @@ public final class HotRestore {
             // decides the map's backup count and its split-brain minimum, so a
             // single-node run that has not set it cannot take a write either.
             expected = Math.max(hz.getCluster().getMembers().size(), minDurableCopies);
-            if (ledger.size() >= expected) {
+            // Only reports from members of the CURRENT cluster view count. The
+            // ledger is keyed by member UUID, which Hazelcast mints fresh on every
+            // restart, so a departed member's entry outlives it and the raw map
+            // size answers "how many reports have ever been filed?" rather than
+            // "how many of the instances that are here now have replayed?".
+            // Counting the raw size is the barrier's own version of the failure it
+            // exists to refuse: two of three pods die, the survivor's entry stays,
+            // the recovering pod adds its own, the count reaches expected, and hot
+            // reads open while the third pod has replayed nothing.
+            reports = liveReports(hz, ledger);
+            if (reports.size() >= expected) {
                 break;
             }
             if (System.currentTimeMillis() >= deadlineMs) {
-                throw new IllegalStateException("hot restore: only " + ledger.size() + " of " + expected
+                throw new IllegalStateException("hot restore: only " + reports.size() + " of " + expected
                         + " expected instances reported their redo replay within " + timeout
                         + " (cluster size " + hz.getCluster().getMembers().size()
                         + ", min_durable_copies " + minDurableCopies
@@ -203,8 +219,12 @@ public final class HotRestore {
         // present at its own-or-newer epoch (the rolling-restart case) contributed
         // its log in full; a node with no log, or an empty one, read nothing and
         // contributed nothing.
+        //
+        // Counted over the same live-member-filtered reports the barrier broke on,
+        // not over the raw map: a departed member's entry must not be able to talk
+        // the store up to min_durable_copies either.
         int contributors = 0;
-        for (Integer recordsRead : ledger.values()) {
+        for (Integer recordsRead : reports.values()) {
             if (recordsRead != null && recordsRead > 0) {
                 contributors++;
             }
@@ -219,5 +239,42 @@ public final class HotRestore {
             log.info("hot restore complete: {} of {} instances contributed a redo log", contributors, expected);
         }
         return contributors;
+    }
+
+    /**
+     * The ledger entries filed by members of the CURRENT cluster view, with every
+     * other entry deleted on the way past.
+     *
+     * <p>The correctness is in the FILTER, not in the pruning: the barrier is
+     * decided against the live view read in the same pass, so an entry left by a
+     * member that has since departed cannot be counted whether or not anything
+     * ever removed it. The delete is housekeeping — the ledger is keyed by a UUID
+     * that changes on every restart, so without it the map grows by one dead entry
+     * per pod per restart for the life of the cluster.
+     *
+     * <p>A {@code MembershipListener} evicting on {@code memberRemoved} was the
+     * alternative and is NOT used: it would have to be registered, unregistered
+     * and reasoned about across the EventStore's init/shutdown/config-reload
+     * lifecycle, and it fixes nothing this does not — a listener still races the
+     * barrier (the check can run between the member leaving and the event being
+     * delivered), so the check-time filter would have to exist anyway. One
+     * mechanism that is sufficient on its own beats two that are each necessary.
+     *
+     * <p>Filtering costs a cluster-view read per pass, which is a local field read.
+     */
+    private static Map<String, Integer> liveReports(HazelcastInstance hz, IMap<String, Integer> ledger) {
+        Set<String> live = new HashSet<>();
+        for (Member m : hz.getCluster().getMembers()) {
+            live.add(m.getUuid().toString());
+        }
+        Map<String, Integer> reports = new HashMap<>();
+        for (Map.Entry<String, Integer> e : ledger.entrySet()) {
+            if (live.contains(e.getKey())) {
+                reports.put(e.getKey(), e.getValue());
+            } else {
+                ledger.delete(e.getKey());
+            }
+        }
+        return reports;
     }
 }

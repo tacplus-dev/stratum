@@ -98,7 +98,28 @@ public class EventStore {
      * and is missing every row the other nodes owned, and serving that silently is
      * worse than a slow start.
      */
-    private volatile boolean hotReadable;
+    private volatile boolean redoReplayDone;
+    /**
+     * False until the event-log cold-start replay has caught up, or until the
+     * caller has said there was none to run.
+     *
+     * <p>This is a SECOND leg of the same gate, not a refinement of the first. The
+     * redo barrier only covers record types that have a redo log; the types that
+     * do not are recovered by {@code ColdStartRebuilder} replaying the event log,
+     * which runs asynchronously and long after the redo barrier clears. Opening
+     * reads on the redo barrier alone answers queries for those types out of a
+     * store that is still filling — empty or partial results, indistinguishable
+     * from "there is no such data", which is the same silent-incompleteness
+     * failure the redo barrier exists to refuse.
+     *
+     * <p>It is the CALLER that sets this, because only the caller knows whether a
+     * replay was needed: {@code StratumHandler} decides that from the cluster-wide
+     * count and either starts a rebuild that signals on catch-up or declares
+     * immediately that none was required. A deployment with nothing to replay
+     * therefore opens as promptly as it did before rather than waiting on a
+     * rebuild that was never going to run.
+     */
+    private volatile boolean coldStartReplayDone;
     private int retentionDays;
 
     /** How long a cold start waits for its peers' redo replay before giving up. */
@@ -352,21 +373,40 @@ public class EventStore {
         // already at their own-or-newer epoch and every record replays as SKIPPED.
         // Reporting applied records would make a healthy node look like it had no log.
         HotRestore.awaitClusterReplay(hz, read, minDurableCopies, RESTORE_TIMEOUT);
-        hotReadable = true;
+        redoReplayDone = true;
         log.info("hot tier restored: {} record(s) read from this node's redo logs, {} applied",
                 read, applied);
     }
 
-    /** True once every reachable instance has replayed its redo log. */
+    /**
+     * Declares the event-log cold-start replay finished — either because it has
+     * caught up to where the log ended when it started, or because there was none
+     * to run. Idempotent, and called from the rebuild's own thread.
+     */
+    public void coldStartReplayComplete() {
+        coldStartReplayDone = true;
+    }
+
+    /**
+     * True once every reachable instance has replayed its redo log AND the
+     * event-log cold-start replay has finished. Both legs, because they recover
+     * disjoint sets of record types: neither alone means the store is complete.
+     */
     public boolean hotReadable() {
-        return hotReadable;
+        return redoReplayDone && coldStartReplayDone;
     }
 
     private void requireHotReadable() {
-        if (!hotReadable) {
+        if (!redoReplayDone) {
             throw new IllegalStateException(
                     "hot reads are closed until every reachable instance has replayed its redo log;"
                             + " serving a partially recovered hot store would answer as if complete");
+        }
+        if (!coldStartReplayDone) {
+            throw new IllegalStateException(
+                    "hot reads are closed until the event-log cold-start replay has caught up;"
+                            + " record types with no redo log are still being rebuilt, and answering"
+                            + " now would report them as empty rather than as not yet recovered");
         }
     }
 
