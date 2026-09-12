@@ -171,16 +171,28 @@ public class StratumHandler extends StratumVServiceBase {
         return members;
     }
 
-    private void initFromConfig(Stratum.Config cfg) {
+    /**
+     * Applies a config, rebuilding the stores when it has actually changed.
+     *
+     * <p>{@code synchronized}, and that is not belt-and-braces. This method is
+     * reachable from FOUR places -- the lazy init in {@link #provideRecordPlane},
+     * the {@code handleConfig} hot-reload, the config-state plane's delivery and
+     * the plane's {@code setConfig} RPC -- and only the first one used to hold a
+     * monitor. The other three arrive on kernel-callback and gRPC threads, so two
+     * deliveries landing together each ran the whole sequence below: both shut the
+     * SAME previous store down, both built a member, and the field ended up
+     * pointing at one of them while the other stayed joined to the cluster and
+     * owned partitions nobody could reach. The lock is {@code this}, the monitor
+     * {@code provideRecordPlane} already takes, so a lazy init that reloads is
+     * simply re-entrant.
+     */
+    private synchronized void initFromConfig(Stratum.Config cfg) {
         // Nothing to do when the config has not actually changed.
         //
-        // This method is reachable from SIX places: the initial config, the
-        // handleConfig hot-reload, the plane's config handlers, two lazy-init
-        // fallbacks and a request path. Every one of them used to build a new
-        // EventStore, and that calls
-        // Hazelcast.newHazelcastInstance -- so a repeated config delivery left
-        // the previous members RUNNING. Observed live: "EventStore initialised"
-        // three times in one pod, giving three Hazelcast members
+        // Every one of the call sites above used to build a new EventStore, and
+        // that calls Hazelcast.newHazelcastInstance -- so a repeated config
+        // delivery left the previous members RUNNING. Observed live: "EventStore
+        // initialised" three times in one pod, giving three Hazelcast members
         // (stratum-events x3) on ports 5701-5703.
         //
         // That is not just wasted heap and threads. The orphans JOIN the same
@@ -196,6 +208,15 @@ public class StratumHandler extends StratumVServiceBase {
 
         // Replacing the stores means disposing of the old ones FIRST. Hazelcast
         // members do not go away because the reference did.
+        //
+        // It is deliberate that this happens before the replacement is built,
+        // even though it means a failed bring-up below cannot fall back on the
+        // previous member: keeping the old one alive while the new one joins is
+        // the two-members-at-once state the comment above exists to prevent. The
+        // reload window is already a window in which nothing serves — the read
+        // gate refuses through it — so the honest failure is a clean
+        // uninitialised handler, not a second live member.
+        Stratum.Config previous = this.config;
         if (coldStartRebuilder != null) {
             try { coldStartRebuilder.shutdown(); } catch (Exception e) { log.warn("rebuilder shutdown: {}", e.getMessage()); }
             coldStartRebuilder = null;
@@ -211,43 +232,79 @@ public class StratumHandler extends StratumVServiceBase {
                 cfg.getHazelcastMemoryMb(), cfg.getMapIdleTtlSeconds(), cfg.getMaxMaps(),
                 cfg.getRetentionDays(), cfg.getCleanupIntervalSeconds());
 
-        eventStore = new EventStore();
-        eventStore.init(
-                cfg.getRetentionDays(),
-                cfg.getCleanupIntervalSeconds(),
-                seedMembers());
+        EventStore store = newEventStore();
+        boolean live = false;
+        try {
+            store.init(
+                    cfg.getRetentionDays(),
+                    cfg.getCleanupIntervalSeconds(),
+                    seedMembers());
 
-        // Startup replay, but ONLY on a cold boot — see
-        // ColdStartRebuilder.shouldReplay. With peers in the cluster a
-        // restarting member gets its partitions back from them, which is the
-        // common case in production and must not pull the whole event log
-        // through the broker. Replay is idempotent (IMap put = upsert keyed by
-        // event_id), so when it does run a partially-surviving store still
-        // converges.
-        //
-        // Whichever branch is taken, it ENDS by telling the store where the
-        // cold-start leg of the read gate stands. The gate is closed until it is
-        // told, so a branch that says nothing leaves reads refused forever.
-        EventStore store = eventStore;
-        if (coldStartComplete) {
-            // A config reload after the replay already finished. The data it
-            // recovered is in the shared cluster map, which this new store is a
-            // member of, so its gate opens on the redo barrier alone.
-            store.coldStartReplayComplete();
-        } else {
-            long held = store.eventCount();
-            int members = store.clusterSize();
-            if (ColdStartRebuilder.shouldReplay(held)) {
-                log.info("cold boot: store is empty cluster-wide ({} member(s)) — replaying the event log",
-                        members);
-                coldStartRebuilder = new ColdStartRebuilder();
-                coldStartRebuilder.startReplay(sm, this, () -> onColdStartComplete(store));
+            // Published only now. Assigning the field before init returned handed
+            // the record plane a member that had joined the cluster but had not
+            // opened its redo logs or its warm directory yet: every write went
+            // nowhere durable and every read answered UNAVAILABLE, for as long as
+            // the pod lived.
+            eventStore = store;
+
+            // Startup replay, but ONLY on a cold boot — see
+            // ColdStartRebuilder.shouldReplay. With peers in the cluster a
+            // restarting member gets its partitions back from them, which is the
+            // common case in production and must not pull the whole event log
+            // through the broker. Replay is idempotent (IMap put = upsert keyed by
+            // event_id), so when it does run a partially-surviving store still
+            // converges.
+            //
+            // Whichever branch is taken, it ENDS by telling the store where the
+            // cold-start leg of the read gate stands. The gate is closed until it is
+            // told, so a branch that says nothing leaves reads refused forever.
+            if (coldStartComplete) {
+                // A config reload after the replay already finished. The data it
+                // recovered is in the shared cluster map, which this new store is a
+                // member of, so its gate opens on the redo barrier alone.
+                store.coldStartReplayComplete();
             } else {
-                log.info("warm start: {} records held, {} cluster member(s) — skipping event-log replay",
-                        held, members);
-                onColdStartComplete(store);
+                long held = store.eventCount();
+                int members = store.clusterSize();
+                if (ColdStartRebuilder.shouldReplay(held)) {
+                    log.info("cold boot: store is empty cluster-wide ({} member(s)) — replaying the event log",
+                            members);
+                    coldStartRebuilder = new ColdStartRebuilder();
+                    coldStartRebuilder.startReplay(sm, this, () -> onColdStartComplete(store));
+                } else {
+                    log.info("warm start: {} records held, {} cluster member(s) — skipping event-log replay",
+                            held, members);
+                    onColdStartComplete(store);
+                }
+            }
+            live = true;
+        } finally {
+            if (!live) {
+                // Anything built above is unreachable now, so tear it down rather
+                // than leave a member joined to the cluster with no owner. The
+                // config goes back to the one that is actually in effect too: the
+                // plane serves getConfig off this field, and reporting a config
+                // whose bring-up failed is a lie a reader cannot detect.
+                log.error("config reload failed — shutting the half-built EventStore down;"
+                        + " stratum is left uninitialised (previous stores were already released)");
+                if (coldStartRebuilder != null) {
+                    try { coldStartRebuilder.shutdown(); } catch (Exception e) { log.warn("rebuilder shutdown: {}", e.getMessage()); }
+                    coldStartRebuilder = null;
+                }
+                eventStore = null;
+                this.config = previous;
+                try { store.shutdown(); } catch (Exception e) { log.warn("half-built EventStore shutdown: {}", e.getMessage()); }
             }
         }
+    }
+
+    /**
+     * The EventStore this handler brings up. A method rather than a {@code new}
+     * expression so a test can substitute a store whose init blocks or throws on
+     * demand; standing a real Hazelcast member up cannot do either.
+     */
+    EventStore newEventStore() {
+        return new EventStore();
     }
 
     /**
@@ -287,7 +344,15 @@ public class StratumHandler extends StratumVServiceBase {
      */
     @Override
     public void handleEventStreamMessage(String topic, com.google.protobuf.Message event, SubscriptionMeta meta) throws Exception {
-        if (!eventStore.store(event)) {
+        EventStore store = eventStore;
+        if (store == null) {
+            // A config reload whose bring-up failed leaves no store. Refusing the
+            // record hands it back to the subscription to redeliver; accepting it
+            // into nothing is the silent drop the failed reload used to cause.
+            throw new IllegalStateException(
+                    "stratum has no EventStore — the last config reload failed; topic=" + topic);
+        }
+        if (!store.store(event)) {
             log.warn("unhandled event stream topic: {} (offset={})", topic, meta.offset);
         }
     }
