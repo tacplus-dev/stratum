@@ -84,6 +84,7 @@ class RecordPlaneTraitTest {
                   option (spec.record) = {key: "event_id"};
                   string event_id = 1;
                   string spiffe_id = 2 [(spec.query_field) = {op: QUERY_OP_EQ}];
+                  string namespace = 3 [(spec.store_namespace) = true];
                 }
                 """);
         return dir;

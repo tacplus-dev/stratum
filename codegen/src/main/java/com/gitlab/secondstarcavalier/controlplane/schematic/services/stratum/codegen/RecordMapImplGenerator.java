@@ -65,7 +65,7 @@ public final class RecordMapImplGenerator {
     }
 
     private static void writeFile(PrintWriter w, VServiceDiscovery.HostedVService plane,
-                                  List<EventTopicDiscovery.TopicEvent> records) {
+                                  List<EventTopicDiscovery.TopicEvent> records) throws IOException {
         String iface = plane.serviceName;
         String msgs = plane.outerClassName;
         w.println("// Copyright (c) 2024 Second Star Cavalier, LLC.");
@@ -110,9 +110,9 @@ public final class RecordMapImplGenerator {
         w.println("    // same reason the stores are, and read per call because it FLIPS during the");
         w.println("    // life of the instance.");
         w.println("    private final BooleanSupplier hotReadable;");
-        w.println("    // query_id -> the caller's typed filter (" + msgs + ".<T>Filter), or Boolean.TRUE");
-        w.println("    // for filterless record types (match-all).");
-        w.println("    private final ConcurrentHashMap<String, Object> queries = new ConcurrentHashMap<>();");
+        w.println("    // query_id -> the registered query: the opening caller's filter PLUS the");
+        w.println("    // namespace the handle is pinned to.");
+        w.println("    private final ConcurrentHashMap<String, Handle> queries = new ConcurrentHashMap<>();");
         w.println();
         w.println("    public " + CLASS_NAME + "(Supplier<StratumEventStores> storesSupplier,");
         w.println("            Supplier<WarmStore> warmSupplier, BooleanSupplier hotReadable) {");
@@ -143,10 +143,66 @@ public final class RecordMapImplGenerator {
         w.println("        }");
         w.println("    }");
         w.println();
-        w.println("    private Object requireQuery(String queryId) throws ProtoException {");
-        w.println("        Object q = queries.get(queryId);");
-        w.println("        if (q == null) throw new ProtoException(ProtoException.NOT_FOUND, \"unknown query_id: \" + queryId);");
-        w.println("        return q;");
+        w.println("    /**");
+        w.println("     * A registered query: the caller's filter and the tenant it may read.");
+        w.println("     *");
+        w.println("     * The namespace is taken from the OPENING caller's verified claim and never");
+        w.println("     * from anything the request carries, because (spec.store_namespace) is");
+        w.println("     * deliberately not a (spec.query_field): the boundary is not a predicate the");
+        w.println("     * caller gets to write.");
+        w.println("     */");
+        w.println("    private static final class Handle {");
+        w.println("        /** The opening caller's verified namespace claim. */");
+        w.println("        final String namespace;");
+        w.println("        /** False for a /system caller, which keeps this plane's fleet-wide read. */");
+        w.println("        final boolean pinned;");
+        w.println("        /** The caller's typed filter, or Boolean.TRUE for a filterless record type. */");
+        w.println("        final Object filter;");
+        w.println();
+        w.println("        Handle(String namespace, Object filter) {");
+        w.println("            this.namespace = namespace;");
+        w.println("            this.pinned = !namespace.startsWith(\"/system\");");
+        w.println("            this.filter = filter;");
+        w.println("        }");
+        w.println("    }");
+        w.println();
+        w.println("    /**");
+        w.println("     * The caller's verified namespace claim, fail-closed.");
+        w.println("     *");
+        w.println("     * The same claim, and the same EXACT-equality rule, the generated wrapper's");
+        w.println("     * (spec.store_namespace) egress backstop compares returned rows against. A");
+        w.println("     * handle opened without one is a handle whose first cross-tenant row halts");
+        w.println("     * the JVM, so there is nothing to gain by letting it open.");
+        w.println("     */");
+        w.println("    private static String callerNamespace(Caller caller) throws ProtoException {");
+        w.println("        String ns = caller == null ? \"\" : caller.getNamespace();");
+        w.println("        if (ns.isEmpty()) {");
+        w.println("            throw new ProtoException(ProtoException.PERMISSION_DENIED,");
+        w.println("                    \"the record query plane reads rows owned by a namespace and the\"");
+        w.println("                            + \" caller presented no verified namespace claim\");");
+        w.println("        }");
+        w.println("        return ns;");
+        w.println("    }");
+        w.println();
+        w.println("    /**");
+        w.println("     * The handle, refused unless this caller is the one that opened it.");
+        w.println("     *");
+        w.println("     * NOT_FOUND rather than PERMISSION_DENIED: a query_id is a bare UUID shared");
+        w.println("     * across both caller surfaces, and answering \"exists, but not yours\" would");
+        w.println("     * make the registry an existence oracle for other tenants' handles.");
+        w.println("     */");
+        w.println("    private Handle requireQuery(Caller caller, String queryId) throws ProtoException {");
+        w.println("        String ns = callerNamespace(caller);");
+        w.println("        Handle h = queries.get(queryId);");
+        w.println("        if (h == null || !h.namespace.equals(ns)) {");
+        w.println("            throw new ProtoException(ProtoException.NOT_FOUND, \"unknown query_id: \" + queryId);");
+        w.println("        }");
+        w.println("        return h;");
+        w.println("    }");
+        w.println();
+        w.println("    /** Whether a row's owning namespace is one the handle may read. */");
+        w.println("    private static boolean inNamespace(Handle h, String rowNamespace) {");
+        w.println("        return !h.pinned || h.namespace.equals(rowNamespace);");
         w.println("    }");
 
         for (EventTopicDiscovery.TopicEvent e : records) {
@@ -154,6 +210,18 @@ public final class RecordMapImplGenerator {
             String fqn = fqn(e);          // typed FQN
             String acc = field(e);        // stores accessor, e.g. agentsensorAgentEvent
             String keyGetter = "get" + pascal(e.recordKey);
+            // Every (spec.record) carries a (spec.store_namespace) field — tacplus
+            // refuses to generate one that does not. Without it there is no tenant to
+            // scope the handle to, and the emitted query would be the unscoped one
+            // whose first cross-tenant row halts the JVM in the generated wrapper. Fail
+            // the build instead, the way WarmStoreGenerator refuses a warm record with
+            // no store epoch rather than picking a substitute.
+            if (e.storeNamespaceField.isEmpty()) {
+                throw new IOException(e.protoPackage + "." + t + " declares (spec.record) but no"
+                        + " (spec.store_namespace) field; the record query plane cannot scope a"
+                        + " query to a tenant it cannot read off the row");
+            }
+            String nsGetter = "get" + pascal(e.storeNamespaceField);
             boolean hasFilter = !e.queryFields.isEmpty();
             String filterTy = msgs + "." + t + "Filter";
             String matchFn = lower("Match" + t);
@@ -179,16 +247,24 @@ public final class RecordMapImplGenerator {
             String residencyBind = warm
                     ? ("            WarmResidency res = warm().residency(\"" + dataset + "\");\n")
                     : "";
-            String memoryCond = warm
-                    ? ("res.inMemory(ev." + keyGetter + "(), ev.get" + pascal(e.storeEpochField)
-                            + "())" + (hasFilter ? " && " + matchExpr : ""))
-                    : matchExpr;
+            // The tenant boundary, applied to the memory leg's every row: a handle
+            // opened by a /tenants/<t> caller sees that tenant's rows and nothing else,
+            // and a /system handle keeps the fleet-wide read this plane has always
+            // served. It is FIRST so a pinned scan rejects a foreign row before it
+            // evaluates the caller's own predicate on it.
+            String memoryCond = (warm
+                    ? "res.inMemory(ev." + keyGetter + "(), ev.get" + pascal(e.storeEpochField) + "()) && "
+                    : "")
+                    + "inNamespace(h, ev." + nsGetter + "())"
+                    + (hasFilter ? " && " + matchExpr : "");
             String memoryCountLeg = residencyBind
                     + "            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + memoryCond + ") n++;"
-                    + (warm ? "\n            n += " + lower("WarmCount" + t) + "(" + warmArg + ");" : "");
+                    + (warm ? "\n            n += " + lower("WarmCount" + t) + "(h"
+                            + (hasFilter ? ", " + warmArg : "") + ");" : "");
             String memoryMatchLeg = residencyBind
                     + "            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + memoryCond + ") matches.add(ev);"
-                    + (warm ? "\n            matches.addAll(" + lower("Warm" + t) + "(" + warmArg + "));" : "");
+                    + (warm ? "\n            for (" + fqn + " ev : " + lower("Warm" + t) + "(" + warmArg + "))"
+                            + " if (inNamespace(h, ev." + nsGetter + "())) matches.add(ev);" : "");
 
             // match<T>: true when a record satisfies the typed filter. Getter-based,
             // no Hazelcast attribute coupling. Only for filterable record types.
@@ -209,34 +285,34 @@ public final class RecordMapImplGenerator {
                 w.println("        return true;");
                 w.println("    }");
 
-                // <t>Filter(queryId): fetch + cast the handle's stored filter.
-                w.println();
-                w.println("    private " + filterTy + " " + lower(t) + "Filter(String queryId) throws ProtoException {");
-                w.println("        return (" + filterTy + ") requireQuery(queryId);");
-                w.println("    }");
+
             }
 
             if (warm) {
-                emitWarmLeg(w, e, fqn, msgs, hasFilter);
+                emitWarmLeg(w, e, fqn, msgs, hasFilter, nsGetter);
             }
 
-            // Emitted at the top of every store-scanning body: bind `f` to the
-            // handle's filter (or validate existence for filterless types).
-            // Emitted as the FIRST statement of every body that scans the store, ahead
-            // of the handle lookup: "the store is not readable yet" is true of the whole
-            // instance and does not depend on the handle being valid.
+            // Emitted at the top of every store-scanning body: bind `h` to the
+            // caller's own handle — which is also the ownership check, since
+            // requireQuery refuses a handle this caller did not open — and `f` to the
+            // filter it holds.
+            // The gate is emitted as the FIRST statement, ahead of the handle lookup:
+            // "the store is not readable yet" is true of the whole instance and does
+            // not depend on the handle being valid.
             String gate = "        requireHotReadable();";
-            String bindFilter = gate + "\n" + (hasFilter
-                    ? ("        " + filterTy + " f = " + lower(t) + "Filter(req.getQueryId());")
-                    : "        requireQuery(req.getQueryId());");
+            String bindFilter = gate + "\n"
+                    + "        Handle h = requireQuery(caller, req.getQueryId());"
+                    + (hasFilter ? "\n        " + filterTy + " f = (" + filterTy + ") h.filter;" : "");
 
             // create<T>Query — register the filter under a fresh handle.
             w.println();
             w.println("    @Override");
             w.println("    public " + msgs + ".QueryHandle " + lower("Create" + t + "Query")
                     + "(Caller caller, " + msgs + ".Open" + t + "QueryRequest req) throws ProtoException {");
+            w.println("        String ns = callerNamespace(caller);");
             w.println("        String qid = UUID.randomUUID().toString();");
-            w.println("        queries.put(qid, " + (hasFilter ? "req.getFilter()" : "Boolean.TRUE") + ");");
+            w.println("        queries.put(qid, new Handle(ns, "
+                    + (hasFilter ? "req.getFilter()" : "Boolean.TRUE") + "));");
             w.println("        return " + msgs + ".QueryHandle.newBuilder().setQueryId(qid).build();");
             w.println("    }");
 
@@ -293,6 +369,7 @@ public final class RecordMapImplGenerator {
             w.println("    @Override");
             w.println("    public " + msgs + ".QueryStats " + lower("Delete" + t + "Query")
                     + "(Caller caller, " + msgs + ".QueryHandle req) throws ProtoException {");
+            w.println("        requireQuery(caller, req.getQueryId());");
             w.println("        queries.remove(req.getQueryId());");
             w.println("        return " + msgs + ".QueryStats.newBuilder().setQueryId(req.getQueryId()).setSize(0).build();");
             w.println("    }");
@@ -306,9 +383,11 @@ public final class RecordMapImplGenerator {
                 w.println("    public " + msgs + ".QueryStats " + lower("Update" + t + "Query")
                         + "(Caller caller, " + msgs + ".Refine" + t + "Request req) throws ProtoException {");
                 w.println(gate);
-                w.println("        requireQuery(req.getQueryId());");
+                w.println("        Handle h = requireQuery(caller, req.getQueryId());");
                 w.println("        " + filterTy + " f = req.getFilter();");
-                w.println("        queries.put(req.getQueryId(), f);");
+                w.println("        // The namespace is the OPENING caller's and is carried over untouched:");
+                w.println("        // a refine replaces the predicate, never the boundary.");
+                w.println("        queries.put(req.getQueryId(), new Handle(h.namespace, f));");
                 w.println("        long n = 0;");
                 w.println("        try {");
                 w.println(memoryCountLeg);
@@ -377,7 +456,7 @@ public final class RecordMapImplGenerator {
      * residency window. None of it is generated, because none of it is per-type.
      */
     private static void emitWarmLeg(PrintWriter w, EventTopicDiscovery.TopicEvent e,
-                                    String fqn, String msgs, boolean hasFilter) {
+                                    String fqn, String msgs, boolean hasFilter, String nsGetter) {
         String t = e.eventType;
         String dataset = e.protoPackage + "." + t;
         String filterTy = msgs + "." + t + "Filter";
@@ -419,9 +498,25 @@ public final class RecordMapImplGenerator {
         w.println("    }");
 
         w.println();
-        w.println("    /** The disk leg's match count, summed per slice without materialising hits. */");
-        w.println("    private long " + lower("WarmCount" + t) + "(" + params + ") throws Exception {");
-        w.println("        return warm().count(\"" + dataset + "\", " + lower("WarmFilter" + t) + "(" + args + "));");
+        w.println("    /**");
+        w.println("     * The disk leg's match count.");
+        w.println("     *");
+        w.println("     * A fleet-wide (/system) handle is summed per slice without materialising a");
+        w.println("     * single hit, as before. A tenant-pinned handle cannot be: the tier indexes");
+        w.println("     * (spec.query_field) criteria only, and (spec.store_namespace) is");
+        w.println("     * deliberately not one of them — so its own rows are counted off the parsed");
+        w.println("     * hits, which is the same set list<T> and get<T>Sample already page.");
+        w.println("     */");
+        w.println("    private long " + lower("WarmCount" + t) + "(Handle h"
+                + (hasFilter ? ", " + filterTy + " f" : "") + ") throws Exception {");
+        w.println("        if (!h.pinned) {");
+        w.println("            return warm().count(\"" + dataset + "\", " + lower("WarmFilter" + t) + "(" + args + "));");
+        w.println("        }");
+        w.println("        long n = 0;");
+        w.println("        for (" + fqn + " ev : " + lower("Warm" + t) + "(" + args + ")) {");
+        w.println("            if (inNamespace(h, ev." + nsGetter + "())) n++;");
+        w.println("        }");
+        w.println("        return n;");
         w.println("    }");
     }
 

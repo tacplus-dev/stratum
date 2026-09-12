@@ -122,6 +122,19 @@ public final class EventTopicDiscovery {
          */
         public final String storeEpochField;
         /**
+         * The record field carrying (spec.store_namespace) — the row's owning
+         * TENANT, stamped by the generated wrapper at publish time. "" when the
+         * message declares none.
+         *
+         * This is the field the query plane scopes a caller's handle to, and the
+         * same field the generated wrapper's egress backstop compares against
+         * before it halts the JVM. tacplus makes it mandatory on every
+         * (spec.record), so "" on a record means the declaration did not reach
+         * this discovery — which {@link RecordMapImplGenerator} refuses rather
+         * than emitting an unscoped query for.
+         */
+        public final String storeNamespaceField;
+        /**
          * The strictest (spec.min_durable_copies) declared on any field of the
          * record, or {@value EventTopicDiscovery#DEFAULT_MIN_DURABLE_COPIES} when
          * the record declares none — spec.proto's documented default.
@@ -141,7 +154,7 @@ public final class EventTopicDiscovery {
                           boolean isRecord, String recordKey, List<QueryField> queryFields,
                           String retentionTimestampField,
                           String residency, long residencyWindowSeconds, String mutability,
-                          String storeEpochField, int minDurableCopies,
+                          String storeEpochField, String storeNamespaceField, int minDurableCopies,
                           String javaPackage, String outerClassName) {
             this.protoPackage = protoPackage;
             this.eventType = eventType;
@@ -154,6 +167,7 @@ public final class EventTopicDiscovery {
             this.residencyWindowSeconds = residencyWindowSeconds;
             this.mutability = mutability;
             this.storeEpochField = storeEpochField;
+            this.storeNamespaceField = storeNamespaceField;
             this.minDurableCopies = minDurableCopies;
             this.javaPackage = javaPackage;
             this.outerClassName = outerClassName;
@@ -250,6 +264,11 @@ public final class EventTopicDiscovery {
     //   int64 store_epoch_ms = 9 [(spec.store_epoch) = true, (spec.query_field) = {op: QUERY_OP_RANGE}];
     private static final Pattern STORE_EPOCH_FIELD = Pattern.compile(
             "\\w[\\w.]*\\s+(\\w+)\\s*=\\s*\\d+\\s*\\[[^\\]]*\\(spec\\.store_epoch\\)\\s*=\\s*true");
+
+    // The field carrying (spec.store_namespace) — the row's owning tenant, e.g.
+    //   string namespace = 26 [(spec.store_namespace) = true, (spec.assert_max_size) = 256];
+    private static final Pattern STORE_NAMESPACE_FIELD = Pattern.compile(
+            "\\w[\\w.]*\\s+(\\w+)\\s*=\\s*\\d+\\s*\\[[^\\]]*\\(spec\\.store_namespace\\)\\s*=\\s*true");
 
     // A field carrying (spec.min_durable_copies), e.g.
     //   string payload = 3 [(spec.quorum_write) = true, (spec.min_durable_copies) = 3];
@@ -367,7 +386,7 @@ public final class EventTopicDiscovery {
                     parseRetentionTimestampField(recordOption),
                     parseResidency(recordOption), parseResidencyWindowSeconds(recordOption),
                     parseMutability(recordOption), parseStoreEpochField(eventBody),
-                    parseMinDurableCopies(eventBody),
+                    parseStoreNamespaceField(eventBody), parseMinDurableCopies(eventBody),
                     javaPackage, outerClassName));
         }
     }
@@ -461,6 +480,19 @@ public final class EventTopicDiscovery {
      */
     private static String parseStoreEpochField(String eventBody) {
         Matcher m = STORE_EPOCH_FIELD.matcher(eventBody);
+        return m.find() ? m.group(1) : "";
+    }
+
+    /**
+     * The field carrying (spec.store_namespace) — the row's owning tenant. Read
+     * from the message body for the same reason (spec.store_epoch) is: it is a
+     * FIELD annotation, not a clause on the record option.
+     *
+     * "" only when the message declares none, which for a record tacplus itself
+     * refuses to generate (ValidateRecordNamespaceAnnotations).
+     */
+    private static String parseStoreNamespaceField(String eventBody) {
+        Matcher m = STORE_NAMESPACE_FIELD.matcher(eventBody);
         return m.find() ? m.group(1) : "";
     }
 

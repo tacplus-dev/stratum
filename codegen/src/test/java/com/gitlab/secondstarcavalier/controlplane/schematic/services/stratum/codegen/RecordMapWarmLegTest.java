@@ -96,6 +96,7 @@ class RecordMapWarmLegTest {
               string spiffe_id = 2 [(spec.query_field) = {op: QUERY_OP_EQ}];
               int64 timestamp_ms = 3 [(spec.query_field) = {op: QUERY_OP_RANGE}];
               int64 store_epoch_ms = 4 [(spec.store_epoch) = true, (spec.query_field) = {op: QUERY_OP_RANGE}];
+              string namespace = 5 [(spec.store_namespace) = true];
             """;
 
     private static final String HOT_BODY = """
@@ -106,6 +107,7 @@ class RecordMapWarmLegTest {
               string event_id = 1;
               string spiffe_id = 2 [(spec.query_field) = {op: QUERY_OP_EQ}];
               int64 timestamp_ms = 3 [(spec.query_field) = {op: QUERY_OP_RANGE}];
+              string namespace = 4 [(spec.store_namespace) = true];
             """;
 
     @Test
@@ -116,11 +118,15 @@ class RecordMapWarmLegTest {
         assertTrue(src.contains("private java.util.List<com.example.model.types.vservices.demo.Demo.DemoEvent> warmDemoEvent("), src);
         assertTrue(src.contains("private long warmCountDemoEvent("), src);
 
-        // getCount, updateQuery and subscribeCount count; getSample, list and watch collect.
-        assertEquals(3, count(src, "n += warmCountDemoEvent(f);"),
+        // getCount, updateQuery and subscribeCount count; getSample, list and watch
+        // collect. Both legs take the handle: the disk leg is scoped to the handle's
+        // own namespace exactly as the memory leg is.
+        assertEquals(3, count(src, "n += warmCountDemoEvent(h, f);"),
                 "every counting RPC must add the disk leg:\n" + src);
-        assertEquals(3, count(src, "matches.addAll(warmDemoEvent(f));"),
-                "every collecting RPC must add the disk leg:\n" + src);
+        assertEquals(3, count(src,
+                "for (com.example.model.types.vservices.demo.Demo.DemoEvent ev : warmDemoEvent(f))"
+                        + " if (inNamespace(h, ev.getNamespace())) matches.add(ev);"),
+                "every collecting RPC must add the disk leg, scoped to the handle's namespace:\n" + src);
     }
 
     /** The filter translation uses the same set/unset test the in-memory match uses. */
