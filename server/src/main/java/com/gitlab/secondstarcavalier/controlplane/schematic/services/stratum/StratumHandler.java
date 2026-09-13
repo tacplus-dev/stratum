@@ -390,7 +390,15 @@ public class StratumHandler extends StratumVServiceBase {
     static <T> CollectionRuntime.Page<T> pageSorted(
             List<T> all,
             CollectionRuntime.PageParams page,
-            Function<T, List<String>> keyFor) {
+            Function<T, List<String>> keyFor) throws ProtoException {
+        // Rejected, not clamped: a limit no int can hold is a client that has asked
+        // for something it cannot mean, and silently serving it a different page
+        // hides that. Unchecked, the cast wraps negative and blows up inside
+        // subList below as an INTERNAL, which tells the caller nothing.
+        if (page.limit > Integer.MAX_VALUE) {
+            throw new ProtoException(ProtoException.INVALID_ARGUMENT,
+                    "page limit " + page.limit + " exceeds the maximum of " + Integer.MAX_VALUE);
+        }
         all.sort((a, b) -> compareKeys(keyFor.apply(a), keyFor.apply(b)));
         int limit = (int) Math.max(1L, page.limit);
         int start = 0;
@@ -399,7 +407,10 @@ public class StratumHandler extends StratumVServiceBase {
                 start++;
             }
         }
-        int end = Math.min(start + limit, all.size());
+        // In long arithmetic: start + limit is an int overflow away from negative
+        // for an in-range-but-huge limit, which subList reads as an end BEFORE its
+        // start.
+        int end = (int) Math.min((long) start + limit, all.size());
         List<T> items = new ArrayList<>(all.subList(start, end));
         CollectionRuntime.Cursor nextAfter = end < all.size() && !items.isEmpty()
                 ? new CollectionRuntime.Cursor(keyFor.apply(items.get(items.size() - 1)))

@@ -37,7 +37,8 @@ final class ColdStartRebuilder {
 
     private final List<Thread> replayThreads = new ArrayList<>();
     private final AtomicLong restoredCount = new AtomicLong(0);
-    private final ReplayProgress progress = new ReplayProgress();
+    // Package-private: a test registers a backlog on it to drive the catch-up boundary.
+    final ReplayProgress progress = new ReplayProgress();
     private final java.util.concurrent.atomic.AtomicBoolean caughtUpSignalled =
             new java.util.concurrent.atomic.AtomicBoolean(false);
 
@@ -82,6 +83,16 @@ final class ColdStartRebuilder {
 
         synchronized boolean isCaughtUp() {
             return outstanding.isEmpty();
+        }
+
+        /**
+         * True once this PARTITION's backlog has been delivered — i.e. anything
+         * arriving on it now is a live event, not a replayed one. A partition that
+         * was never registered reported a zero watermark and had nothing to replay,
+         * so it is drained too.
+         */
+        synchronized boolean isDrained(String topic, int partition) {
+            return !outstanding.containsKey(key(topic, partition));
         }
     }
 
@@ -152,20 +163,59 @@ final class ColdStartRebuilder {
         String topic = "agentsensor.event_stream";
         startTopicReplay(topic, channelSupplier, credsSupplier,
                 new AgentsensorAgentEventBusEventStreamSubscriber(channelSupplier, credsSupplier, CONSUMER_GROUP),
-                (sub) -> sub.subscribe((event, meta) -> {
-                    handler.handleEventStreamMessage(topic, event,
-                            new Handler.SubscriptionMeta(meta.offset, meta.timestamp, meta.key, meta.topic, meta.partition));
-                    logProgress(restoredCount.incrementAndGet());
-                    // Keyed on the topic we ASKED for, not meta.topic: the envelope
-                    // carries an empty topic when the record predates the meta
-                    // envelope, and a progress key that does not match the one
-                    // expect() registered would never clear.
-                    progress.observed(topic, meta.partition, meta.offset);
-                    signalIfCaughtUp(onCaughtUp);
-                }, false, false, 0),
+                (sub) -> sub.subscribe((event, meta) -> replayRecord(topic, handler, event,
+                        new Handler.SubscriptionMeta(meta.offset, meta.timestamp, meta.key, meta.topic, meta.partition),
+                        onCaughtUp), false, false, 0),
                 onCaughtUp);
 
         log.info("STARTUP REPLAY: started {} subscription threads from offset 0", replayThreads.size());
+    }
+
+    /**
+     * Upserts one replayed record and decides whether the replay is now over.
+     *
+     * <p>Package-private so a test can drive the catch-up boundary without a
+     * broker.
+     */
+    void replayRecord(String topic, Handler handler, com.google.protobuf.Message event,
+            Handler.SubscriptionMeta meta, Runnable onCaughtUp) throws Exception {
+        if (progress.isDrained(topic, meta.partition)) {
+            // This partition's backlog is already delivered, so the record is a LIVE
+            // event and the service's normal subscription is storing it. Writing it
+            // here as well is the duplicate this guard exists for — it matters while
+            // a SIBLING partition is still replaying, which is the only reason the
+            // subscription is still open at all.
+            stopIfCaughtUp();
+            return;
+        }
+        handler.handleEventStreamMessage(topic, event, meta);
+        logProgress(restoredCount.incrementAndGet());
+        // Keyed on the topic we ASKED for, not meta.topic: the envelope
+        // carries an empty topic when the record predates the meta
+        // envelope, and a progress key that does not match the one
+        // expect() registered would never clear.
+        progress.observed(topic, meta.partition, meta.offset);
+        signalIfCaughtUp(onCaughtUp);
+        stopIfCaughtUp();
+    }
+
+    /**
+     * Ends the rebuild subscription the moment the backlog is drained.
+     *
+     * <p>Every record delivered past that point is a LIVE event, and the service's
+     * normal "stratum" subscription is already storing it. A rebuild that stays
+     * subscribed stores each of them a SECOND time, on every replica, for the life
+     * of the process — the replay's idempotent upserts make that invisible rather
+     * than harmless: it is a permanent duplicate of the whole live ingest load.
+     *
+     * <p>InterruptedException is the generated subscriber's stop signal — the same
+     * one {@link #shutdown} uses — and raising it from the handler also cancels the
+     * gRPC call, so the stream is closed rather than left open and idle.
+     */
+    private void stopIfCaughtUp() throws InterruptedException {
+        if (progress.isCaughtUp()) {
+            throw new InterruptedException("cold-start replay caught up — ending the rebuild subscription");
+        }
     }
 
     /** Opens the read gate the first time every topic's backlog is drained. */
@@ -243,7 +293,12 @@ final class ColdStartRebuilder {
                 // An empty topic has no record to arrive and clear the gate, so the
                 // drained backlog has to be noticed here as well as on delivery.
                 signalIfCaughtUp(onCaughtUp);
-                action.subscribe(subscriber);
+                // ...and there is then nothing to subscribe FOR. Subscribing anyway
+                // would deliver only live events, which the service's normal
+                // subscription is already storing — a second writer, permanently.
+                if (!progress.isCaughtUp()) {
+                    action.subscribe(subscriber);
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } catch (Exception e) {

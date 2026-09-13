@@ -253,6 +253,14 @@ public final class WarmStore implements AutoCloseable {
             } catch (Exception e) {
                 writeFailures.incrementAndGet();
                 log.error("warm write failed for {}: {}", idx.dataset().name, e.getMessage(), e);
+                // The claim is only cleared by a COMMITTED write (WarmIndex.write),
+                // so a failed one owes the release itself. Leaving it hides the key
+                // from the disk leg and pins its memory copy for the life of the
+                // process; clearing it makes the key answerable and evictable again
+                // the moment a copy does reach disk — eviction gates on holdsKey,
+                // not on the claim, so an un-pending key with no disk copy is still
+                // held in memory rather than dropped.
+                idx.clearPending(idx.dataset().key(record));
             }
         });
         return true;
