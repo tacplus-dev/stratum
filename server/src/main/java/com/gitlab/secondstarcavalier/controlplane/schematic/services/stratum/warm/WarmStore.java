@@ -355,8 +355,26 @@ public final class WarmStore implements AutoCloseable {
         Long callerFrom = filter.lowerBound(dataset.epochField);
         Long callerTo = filter.upperBound(dataset.epochField);
         long from = callerFrom == null ? Long.MIN_VALUE : callerFrom;
-        long to = callerTo == null ? boundary : Math.min(callerTo + 1, boundary);
+        long to = callerTo == null ? boundary : Math.min(exclusiveUpperBound(callerTo), boundary);
         return to <= from ? null : new long[] { from, to };
+    }
+
+    /**
+     * The EXCLUSIVE form of an INCLUSIVE upper epoch bound.
+     *
+     * {@code Long.MAX_VALUE} has no "one past" value, so it clamps to itself rather
+     * than wrapping: {@code MAX_VALUE + 1} is {@code Long.MIN_VALUE}, which
+     * {@link #diskRange} then reads as an empty interval and skips the disk leg
+     * entirely — a query asking for everything up to the largest representable
+     * instant would come back with no disk rows at all. Clamping drops only the
+     * single instant at {@code Long.MAX_VALUE}, and no real store epoch sits there.
+     */
+    static long exclusiveUpperBound(long inclusive) {
+        try {
+            return Math.addExact(inclusive, 1);
+        } catch (ArithmeticException overflow) {
+            return Long.MAX_VALUE;
+        }
     }
 
     // -----------------------------------------------------------------------

@@ -367,8 +367,14 @@ public final class WarmIndex implements Closeable {
     }
 
     /**
-     * One task per slice on the shared pool. A slice that fails to open fails only
-     * its own task; the rest of the dataset still answers.
+     * One task per slice on the shared pool, and ALL of them have to answer.
+     *
+     * A slice that fails to read fails the whole query. The alternative — return
+     * what the readable slices held — hands the caller a short list and a short
+     * count that are indistinguishable from a complete answer, and the caller has
+     * no way to tell "no such rows" from "one slice would not open". That is the
+     * same silent-incompleteness rule {@code HotRestore} and
+     * {@code ColdStartRebuilder} already refuse to break, applied to the read path.
      */
     private <R> List<R> fanOut(List<String> slices, SliceTask<R> task, ExecutorService pool)
             throws IOException {
@@ -385,8 +391,9 @@ public final class WarmIndex implements Closeable {
                 Thread.currentThread().interrupt();
                 throw new IOException("interrupted while searching " + dataset.name, e);
             } catch (ExecutionException e) {
-                log.warn("warm slice {}/{} failed, other slices still answered: {}",
-                        dataset.name, slices.get(i), e.getCause() == null ? e : e.getCause().toString());
+                Throwable cause = e.getCause() == null ? e : e.getCause();
+                throw new IOException("warm slice " + dataset.name + "/" + slices.get(i)
+                        + " failed; refusing to answer from the slices that did read", cause);
             }
         }
         return results;
