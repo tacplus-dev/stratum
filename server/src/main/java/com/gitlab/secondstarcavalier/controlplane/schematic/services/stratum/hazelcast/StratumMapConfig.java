@@ -153,8 +153,21 @@ public final class StratumMapConfig {
         SplitBrainProtectionConfig protection = new SplitBrainProtectionConfig(
                 SPLIT_BRAIN_PROTECTION_NAME, true, minDurableCopies);
         cfg.addSplitBrainProtectionConfig(protection);
+        // The deployment number is a FLOOR, not the answer. Each record declares its
+        // own (spec.min_durable_copies), the write gate enforces that declared value
+        // per record (HotWrites.effectiveFloor), and until now the map's backupCount
+        // was derived from the deployment number alone — so a record declaring 3
+        // against a deployment default of 2 got one backup, could reach only 2
+        // durable copies, and had EVERY write rejected permanently on a healthy
+        // cluster. max() keeps the deployment number as the floor it is and lets a
+        // record that asks for more get more.
         for (String name : StratumEventStores.mapNames()) {
-            cfg.addMapConfig(durableMap(name, minDurableCopies));
+            int floor = Math.max(minDurableCopies, StratumEventStores.minDurableCopies(name));
+            if (floor > minDurableCopies) {
+                log.info("{} declares min_durable_copies={}, above the deployment floor of {}:"
+                        + " backupCount={}", name, floor, minDurableCopies, floor - 1);
+            }
+            cfg.addMapConfig(durableMap(name, floor));
         }
         // The restore ledger is a MAP too, and it was outside the list above — the
         // same omission the record maps had before this loop existed, with the same
@@ -167,7 +180,8 @@ public final class StratumMapConfig {
         // still write.
         cfg.addMapConfig(durableMap(HotRestore.LEDGER_MAP, minDurableCopies));
 
-        log.info("stratum hot maps {} + the restore ledger {}: min_durable_copies={}, backupCount={},"
+        log.info("stratum hot maps {} + the restore ledger {}: deployment min_durable_copies={},"
+                + " backupCount={} unless a record declares more (logged above),"
                 + " asyncBackupCount=0, split-brain minimumClusterSize={}",
                 StratumEventStores.mapNames(), HotRestore.LEDGER_MAP, minDurableCopies,
                 minDurableCopies - 1, minDurableCopies);
@@ -253,21 +267,22 @@ public final class StratumMapConfig {
     }
 
     /**
-     * One typed record map, at the deployment's durability floor.
+     * One typed record map, at its effective durability floor — the deployment floor
+     * raised, for a record map, by anything the record itself declares.
      *
      * <p>Named per map rather than declared once as a wildcard: Hazelcast resolves a
      * map to the most specific config, so a wildcard entry alongside the named
      * MAP_NAME entry below would leave MAP_NAME reading only its own — the exact
      * split that produced this bug. Naming every map keeps one code path.
      */
-    private static MapConfig durableMap(String name, int minDurableCopies) {
+    private static MapConfig durableMap(String name, int effectiveMinDurableCopies) {
         MapConfig mapCfg = new MapConfig(name);
 
         // SYNCHRONOUS backups only. The put must not complete until every replica
         // that counts towards the floor holds the value; an async backup is not
         // held when the write returns, so counting one would mean acking a
         // durability that does not exist yet.
-        mapCfg.setBackupCount(minDurableCopies - 1);
+        mapCfg.setBackupCount(effectiveMinDurableCopies - 1);
         mapCfg.setAsyncBackupCount(0);
 
         // Below the floor the members are not there to replicate to, so the write

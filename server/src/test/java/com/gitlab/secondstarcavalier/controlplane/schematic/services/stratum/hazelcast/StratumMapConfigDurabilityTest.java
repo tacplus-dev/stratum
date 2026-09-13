@@ -51,10 +51,33 @@ class StratumMapConfigDurabilityTest {
         assertEquals(0, map.getAsyncBackupCount());
     }
 
+    /**
+     * A single-node deployment keeps no backup on anything that has no record of its own
+     * to answer to — which, since the per-record floor landed, is the restore ledger.
+     *
+     * <p>This used to assert 0 on the hot map too, because backupCount came from the
+     * deployment number alone and {@code STRATUM_MIN_DURABLE_COPIES} is documented as an
+     * OVERRIDE, not a minimum. Now a record map takes
+     * {@code max(deployment, declared)}, so a record declaring 2 keeps one backup even at
+     * a declared floor of 1. That is deliberate and harmless: on a one-member cluster
+     * Hazelcast has nowhere to place the backup and simply does not,
+     * {@code HotWrites.durableCopies()} is {@code min(members=1, backups+1=2) = 1}, and
+     * {@code HotWrites.effectiveFloor} is the override 1 — so the laptop still writes.
+     * The override still governs the WRITE GATE; it no longer lowers a record map's
+     * configured backupCount below what the record asks for.
+     */
     @Test
-    void theSingleNodeFloorKeepsNoBackup() {
-        MapConfig map = hotMap(StratumMapConfig.build(List.of(), 1));
-        assertEquals(0, map.getBackupCount());
+    void theSingleNodeFloorKeepsNoBackupOnTheLedger() {
+        Config cfg = StratumMapConfig.build(List.of(), 1);
+
+        MapConfig ledger = cfg.getMapConfigs().get(HotRestore.LEDGER_MAP);
+        assertNotNull(ledger);
+        assertEquals(0, ledger.getBackupCount());
+
+        MapConfig map = hotMap(cfg);
+        assertEquals(Math.max(1, StratumEventStores.minDurableCopies(StratumMapConfig.MAP_NAME)) - 1,
+                map.getBackupCount(),
+                "a record map holds at its own declared floor, which the override does not lower");
     }
 
     @Test
@@ -124,6 +147,76 @@ class StratumMapConfigDurabilityTest {
                 "the ledger counts an async backup towards the floor");
         assertEquals(StratumMapConfig.SPLIT_BRAIN_PROTECTION_NAME, ledger.getSplitBrainProtectionName(),
                 "a minority partition can file and count its own replay reports");
+    }
+
+    /**
+     * A record declaring MORE than the deployment floor gets its own higher backupCount.
+     *
+     * <p>The deployment number is a floor, and it used to be the only input to
+     * backupCount. A record declaring {@code (spec.min_durable_copies) = 3} against a
+     * deployment floor of 2 therefore got one backup — {@code HotWrites.durableCopies()}
+     * could reach only 2 — while {@code HotWrites.effectiveFloor} still held it to its own
+     * declared 3, so EVERY write to that record was rejected permanently on a healthy
+     * cluster.
+     *
+     * <p>Driven at a deployment floor of 1 because that is the relationship the real
+     * generated fleet can express today: every record declares 2, so a floor of 1 is the
+     * case where the record's own declaration is the higher of the two. Nothing here
+     * depends on a specific record declaring a specific number — the expectation comes
+     * from the generated lookup, so a record raising its declaration moves the assertion
+     * with it.
+     */
+    @Test
+    void aRecordDeclaringAboveTheDeploymentFloorGetsItsOwnHigherBackupCount() {
+        Config cfg = StratumMapConfig.build(List.of(), 1);
+
+        boolean sawARaisedMap = false;
+        for (String name : StratumEventStores.mapNames()) {
+            int declared = StratumEventStores.minDurableCopies(name);
+            MapConfig map = cfg.getMapConfigs().get(name);
+            assertNotNull(map, name + " has no MapConfig");
+            assertEquals(Math.max(1, declared) - 1, map.getBackupCount(),
+                    name + " declares min_durable_copies=" + declared
+                            + " but its map was built from the deployment floor alone");
+            sawARaisedMap |= declared > 1;
+        }
+        assertTrue(sawARaisedMap,
+                "no generated record declares above a floor of 1; the raise is untested");
+    }
+
+    /** A record at or below the deployment floor is untouched — the floor stays a floor. */
+    @Test
+    void aRecordAtOrBelowTheDeploymentFloorIsUnaffected() {
+        Config cfg = StratumMapConfig.build(List.of(), 3);
+
+        for (String name : StratumEventStores.mapNames()) {
+            assertTrue(StratumEventStores.minDurableCopies(name) <= 3,
+                    name + " declares above 3; this test no longer covers the at-or-below case");
+            MapConfig map = cfg.getMapConfigs().get(name);
+            assertNotNull(map, name + " has no MapConfig");
+            assertEquals(2, map.getBackupCount(),
+                    name + " was lowered below the deployment floor by its own declaration");
+        }
+    }
+
+    /**
+     * The restore ledger stays on the plain deployment floor.
+     *
+     * <p>It is not a record map: it has no {@code (spec.min_durable_copies)} declaration
+     * and nothing in the generated lookup, so the per-record raise must not reach it.
+     * Driven at a floor of 1, where every record map IS raised — if the ledger were
+     * inside the raise it would show the records' 2 rather than the deployment's 1.
+     */
+    @Test
+    void theRestoreLedgerAlwaysUsesThePlainDeploymentFloor() {
+        Config cfg = StratumMapConfig.build(List.of(), 1);
+
+        assertEquals(0, StratumEventStores.minDurableCopies(HotRestore.LEDGER_MAP),
+                "the ledger is not a generated record map and must not be in the lookup");
+        MapConfig ledger = cfg.getMapConfigs().get(HotRestore.LEDGER_MAP);
+        assertNotNull(ledger, "the restore ledger has no MapConfig");
+        assertEquals(0, ledger.getBackupCount(),
+                "the ledger took a record's per-record floor, which it does not have");
     }
 
     /** The documented default, so an undeclared record is not shipped unprotected. */
