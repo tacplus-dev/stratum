@@ -110,7 +110,7 @@ class PullAgentEventE2ETest {
         // rather than degraded to 1 — the same explicit statement a developer
         // laptop makes. Without it every write here would be refused, which is
         // exactly what the gate is for.
-        stores.init(hz, new HotWrites(hz, 0, 1));
+        stores.init(hz, new HotWrites(hz, 1));
         // The plane's second leg. AgentEvent is RESIDENCY_HOT (as every record type
         // is until one declares otherwise), so this store holds no dataset, opens no
         // directory and answers no disk leg — but the plane still takes it, which is

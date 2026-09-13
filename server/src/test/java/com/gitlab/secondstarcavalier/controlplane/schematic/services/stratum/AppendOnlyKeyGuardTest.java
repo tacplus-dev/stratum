@@ -63,7 +63,7 @@ class AppendOnlyKeyGuardTest {
         hz = Hazelcast.newHazelcastInstance(cfg);
 
         stores = new StratumEventStores();
-        stores.init(hz, new HotWrites(hz, 0, 1));
+        stores.init(hz, new HotWrites(hz, 1));
 
         // The GENERATED descriptor list — the mutability attribute under test arrives
         // through it, so a hand-built descriptor would prove nothing.

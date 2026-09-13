@@ -129,7 +129,7 @@ class TwoTenantQueryScopeE2ETest {
         hz = Hazelcast.newHazelcastInstance(cfg);
 
         stores = new StratumEventStores();
-        stores.init(hz, new HotWrites(hz, 0, 1));
+        stores.init(hz, new HotWrites(hz, 1));
         stores.store(event("a-1", TENANT_A, 1000));
         stores.store(event("a-2", TENANT_A, 2000));
         stores.store(event("b-1", TENANT_B, 3000));

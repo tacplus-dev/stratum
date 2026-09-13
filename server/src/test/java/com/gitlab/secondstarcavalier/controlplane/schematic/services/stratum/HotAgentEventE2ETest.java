@@ -116,7 +116,7 @@ class HotAgentEventE2ETest {
         // explicit statement a developer laptop makes.
         logs = new HotRedoLogs(dataRoot, StratumHotStores.datasets(), 3, Codec.NONE);
         stores = new StratumEventStores();
-        stores.init(hz, new HotWrites(hz, 0, 1));
+        stores.init(hz, new HotWrites(hz, 1));
 
         stores.store(event("hot-1", 1000, EPOCH_1));
         stores.store(event("hot-2", 2000, EPOCH_2));

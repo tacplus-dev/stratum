@@ -178,7 +178,7 @@ public class EventStore {
         StratumMapConfig.awaitProtectedClusterSize(hz, minDurableCopies,
                 StratumMapConfig.FORMATION_TIMEOUT);
 
-        hotWrites = new HotWrites(hz, minDurableCopies - 1, floorOverride);
+        hotWrites = new HotWrites(hz, floorOverride);
         stores.init(hz, hotWrites);
         events = hz.getMap(StratumMapConfig.MAP_NAME);
 

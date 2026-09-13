@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.hazelcast.config.Config;
+import com.hazelcast.config.MapConfig;
 import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.map.IMap;
@@ -38,6 +39,9 @@ class HotQuorumGateTest {
         cfg.setProperty("hazelcast.phone.home.enabled", "false");
         cfg.getNetworkConfig().getJoin().getMulticastConfig().setEnabled(false);
         cfg.getNetworkConfig().getJoin().getTcpIpConfig().setEnabled(false);
+        // A record map sized above the deployment floor, the way StratumMapConfig
+        // sizes one whose record declares more than the deployment does.
+        cfg.addMapConfig(new MapConfig("demo.HighFloor").setBackupCount(2).setAsyncBackupCount(0));
         hz = Hazelcast.newHazelcastInstance(cfg);
     }
 
@@ -53,7 +57,7 @@ class HotQuorumGateTest {
      */
     @Test
     void aWriteBelowTheFloorIsRefusedAndHasNoLocalEffect() {
-        HotWrites hot = new HotWrites(hz, 1, 0);
+        HotWrites hot = new HotWrites(hz, 0);
         IMap<String, String> map = hz.getMap("gate");
 
         DiskStoreException e = assertThrows(DiskStoreException.class,
@@ -69,7 +73,7 @@ class HotQuorumGateTest {
     /** The paired positive: at the declared floor the same write goes through. */
     @Test
     void aWriteAtTheFloorIsAcked() {
-        HotWrites hot = new HotWrites(hz, 0, 0);
+        HotWrites hot = new HotWrites(hz, 0);
         IMap<String, String> map = hz.getMap("gate");
 
         hot.write(map, "demo.Event", "k1", "v1", 1, () -> "{}", 1L);
@@ -83,7 +87,7 @@ class HotQuorumGateTest {
      */
     @Test
     void theDeploymentOverrideReplacesTheDeclaredFloor() {
-        HotWrites hot = new HotWrites(hz, 0, 1);
+        HotWrites hot = new HotWrites(hz, 1);
         IMap<String, String> map = hz.getMap("gate");
 
         assertEquals(1, hot.effectiveFloor(2));
@@ -99,7 +103,8 @@ class HotQuorumGateTest {
      */
     @Test
     void durableCopiesAreCappedByTheVisibleCluster() {
-        assertEquals(1, new HotWrites(hz, 2, 0).durableCopies());
-        assertEquals(1, new HotWrites(hz, 0, 0).durableCopies());
+        HotWrites hot = new HotWrites(hz, 0);
+        assertEquals(1, hot.durableCopies("demo.HighFloor"));
+        assertEquals(1, hot.durableCopies("demo.Event"));
     }
 }

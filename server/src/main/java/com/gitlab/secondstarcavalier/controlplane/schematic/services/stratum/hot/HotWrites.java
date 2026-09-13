@@ -28,17 +28,8 @@ public final class HotWrites {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(HotWrites.class);
 
     private final HazelcastInstance hz;
-    private final int syncBackupCount;
     private final int floorOverride;
 
-    /**
-     * @param syncBackupCount the map's configured {@code backupCount} — the number
-     *                        of SYNCHRONOUS in-memory replicas the put waits for.
-     *                        {@code asyncBackupCount} deliberately plays no part:
-     *                        an async replica is not held when the write returns,
-     *                        so counting it would inflate the durable-copy count
-     *                        with a copy that may not exist yet.
-     */
     /**
      * @param floorOverride the deployment's own durability floor, replacing the
      *                      one the record declares, or 0 to honour the
@@ -50,9 +41,8 @@ public final class HotWrites {
      *                      members looks exactly like a laptop, and the automatic
      *                      version cannot tell them apart.
      */
-    public HotWrites(HazelcastInstance hz, int syncBackupCount, int floorOverride) {
+    public HotWrites(HazelcastInstance hz, int floorOverride) {
         this.hz = hz;
-        this.syncBackupCount = syncBackupCount;
         this.floorOverride = floorOverride;
         if (floorOverride > 0) {
             log.warn("hot writes: durability floor overridden to {} distinct nodes by deployment"
@@ -67,14 +57,32 @@ public final class HotWrites {
     }
 
     /**
-     * Distinct nodes that will hold the value when the write returns: the owner
-     * plus its synchronous backups, capped by the cluster the node can actually
-     * see. A partition cannot create replicas out of members that are not there,
-     * so a 3-member map on a 1-member view supplies one copy, not two.
+     * Distinct nodes that will hold the value when the write returns for
+     * {@code mapName}: the owner plus THAT MAP'S synchronous backups, capped by
+     * the cluster the node can actually see. A partition cannot create replicas
+     * out of members that are not there, so a 3-member map on a 1-member view
+     * supplies one copy, not two.
+     *
+     * <p>The backup count is read from the map's own live Hazelcast config rather
+     * than from one deployment-wide number held here. {@code StratumMapConfig}
+     * sizes each record map at {@code max(deployment floor, the record's declared
+     * min_durable_copies) - 1}, so a record declaring 3 against a deployment
+     * default of 2 really does get the extra physical replica — and a
+     * deployment-wide count reported 2 regardless, leaving every write to that
+     * record refused permanently on a healthy cluster. This reads the physical
+     * truth instead of a copy of a number computed elsewhere.
+     *
+     * <p>{@code findMapConfig} rather than {@code getMapConfig}: it resolves the
+     * same concrete named entry but returns a read-only view without inserting a
+     * default-derived config for a name it does not find, which a lookup on the
+     * write path has no business doing. {@code asyncBackupCount} deliberately
+     * plays no part: an async replica is not held when the write returns, so
+     * counting it would inflate the durable-copy count with a copy that may not
+     * exist yet.
      */
-    public int durableCopies() {
+    public int durableCopies(String mapName) {
         int members = hz.getCluster().getMembers().size();
-        return Math.min(members, syncBackupCount + 1);
+        return Math.min(members, hz.getConfig().findMapConfig(mapName).getBackupCount() + 1);
     }
 
     /**
@@ -94,7 +102,7 @@ public final class HotWrites {
      */
     public <V> void write(IMap<String, V> map, String mapName, String key, V value,
                           int minDurableCopies, Callable<String> toJson, long epoch) {
-        QuorumGate.require(mapName, durableCopies(), effectiveFloor(minDurableCopies));
+        QuorumGate.require(mapName, durableCopies(mapName), effectiveFloor(minDurableCopies));
         // The redo payload is computed only when this deployment keeps a log for
         // the type. Every node opens the same dataset list, so no log here means no
         // log anywhere, and encoding a payload nothing will append is pure cost on

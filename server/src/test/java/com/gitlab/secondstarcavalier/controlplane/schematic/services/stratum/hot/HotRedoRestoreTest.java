@@ -124,7 +124,7 @@ class HotRedoRestoreTest {
         hz = member("stratum-redo-append-test");
         HotDataset d = dataset(1);
         logs = new HotRedoLogs(dir, List.of(d), 3, Codec.NONE);
-        HotWrites hot = new HotWrites(hz, 0, 0);
+        HotWrites hot = new HotWrites(hz, 0);
         IMap<String, Message> map = hz.getMap(MAP);
 
         Agentsensor.AgentEvent e = event("evt-1", 1000L, "s1");
@@ -161,7 +161,7 @@ class HotRedoRestoreTest {
         hz = member("stratum-redo-ack-latency-test");
         HotDataset d = dataset(1);
         logs = new HotRedoLogs(dir, List.of(d), 3, Codec.NONE);
-        HotWrites hot = new HotWrites(hz, 0, 0);
+        HotWrites hot = new HotWrites(hz, 0);
         IMap<String, Message> map = hz.getMap(MAP);
 
         CountDownLatch release = new CountDownLatch(1);
@@ -237,7 +237,7 @@ class HotRedoRestoreTest {
 
         hz = member("stratum-redo-restart-test-a");
         logs = new HotRedoLogs(dir, List.of(d), 3, Codec.NONE);
-        HotWrites hot = new HotWrites(hz, 0, 0);
+        HotWrites hot = new HotWrites(hz, 0);
         IMap<String, Message> map = hz.getMap(MAP);
         for (int i = 0; i < 25; i++) {
             Agentsensor.AgentEvent e = event("evt-" + i, 1000L + i, "s" + i);
