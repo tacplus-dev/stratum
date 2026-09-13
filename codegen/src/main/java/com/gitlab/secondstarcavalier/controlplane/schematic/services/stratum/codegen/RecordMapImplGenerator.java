@@ -113,6 +113,9 @@ public final class RecordMapImplGenerator {
         w.println("    // query_id -> the registered query: the opening caller's filter PLUS the");
         w.println("    // namespace the handle is pinned to.");
         w.println("    private final ConcurrentHashMap<String, Handle> queries = new ConcurrentHashMap<>();");
+        w.println("    // Held across the count-then-put in openHandle, so the per-namespace cap");
+        w.println("    // is a bound and not a best effort. Never held across a store scan.");
+        w.println("    private final Object openLock = new Object();");
         w.println();
         w.println("    public " + CLASS_NAME + "(Supplier<StratumEventStores> storesSupplier,");
         w.println("            Supplier<WarmStore> warmSupplier, BooleanSupplier hotReadable) {");
@@ -203,6 +206,52 @@ public final class RecordMapImplGenerator {
         w.println("    /** Whether a row's owning namespace is one the handle may read. */");
         w.println("    private static boolean inNamespace(Handle h, String rowNamespace) {");
         w.println("        return !h.pinned || h.namespace.equals(rowNamespace);");
+        w.println("    }");
+        w.println();
+        w.println("    /**");
+        w.println("     * The most open query handles one namespace may hold at once.");
+        w.println("     *");
+        w.println("     * A handle leaves this registry through delete<T>Query and through nothing");
+        w.println("     * else — there is no sweep and no expiry — so a caller that opens queries");
+        w.println("     * and never closes them grows the map for the life of the process.");
+        w.println("     *");
+        w.println("     * The bound is PER NAMESPACE, not global: a global one would let a single");
+        w.println("     * tenant's leak refuse every other tenant's first query, which turns a heap");
+        w.println("     * leak into a fleet-wide outage. A namespace comes off the opening caller's");
+        w.println("     * verified claim and cannot be minted by the caller, so bounding each one");
+        w.println("     * bounds the registry to the tenants that exist.");
+        w.println("     */");
+        w.println("    static final int MAX_OPEN_QUERIES_PER_NAMESPACE = 1024;");
+        w.println();
+        w.println("    /**");
+        w.println("     * Registers a handle for {@code ns}, refusing it past the per-namespace cap.");
+        w.println("     *");
+        w.println("     * The count is taken by scanning the registry rather than kept in a second");
+        w.println("     * per-namespace counter: one structure cannot disagree with itself, and the");
+        w.println("     * scan is over a map this very cap bounds. Opening a query is a per-session");
+        w.println("     * operation, not a per-read one, so neither the scan nor the lock is on a");
+        w.println("     * hot path — and the lock is what makes the cap a bound rather than an");
+        w.println("     * approximation, since two concurrent opens that each read cap-1 would");
+        w.println("     * otherwise both be admitted.");
+        w.println("     */");
+        w.println("    private String openHandle(String ns, Object filter) throws ProtoException {");
+        w.println("        String qid = UUID.randomUUID().toString();");
+        w.println("        synchronized (openLock) {");
+        w.println("            int open = 0;");
+        w.println("            for (Handle h : queries.values()) {");
+        w.println("                if (h.namespace.equals(ns)) {");
+        w.println("                    open++;");
+        w.println("                }");
+        w.println("            }");
+        w.println("            if (open >= MAX_OPEN_QUERIES_PER_NAMESPACE) {");
+        w.println("                throw new ProtoException(ProtoException.RESOURCE_EXHAUSTED,");
+        w.println("                        \"namespace \" + ns + \" already holds \" + open + \" open query\"");
+        w.println("                                + \" handles, the maximum of \" + MAX_OPEN_QUERIES_PER_NAMESPACE");
+        w.println("                                + \"; close one with delete<T>Query before opening another\");");
+        w.println("            }");
+        w.println("            queries.put(qid, new Handle(ns, filter));");
+        w.println("        }");
+        w.println("        return qid;");
         w.println("    }");
 
         for (EventTopicDiscovery.TopicEvent e : records) {
@@ -310,9 +359,8 @@ public final class RecordMapImplGenerator {
             w.println("    public " + msgs + ".QueryHandle " + lower("Create" + t + "Query")
                     + "(Caller caller, " + msgs + ".Open" + t + "QueryRequest req) throws ProtoException {");
             w.println("        String ns = callerNamespace(caller);");
-            w.println("        String qid = UUID.randomUUID().toString();");
-            w.println("        queries.put(qid, new Handle(ns, "
-                    + (hasFilter ? "req.getFilter()" : "Boolean.TRUE") + "));");
+            w.println("        String qid = openHandle(ns, "
+                    + (hasFilter ? "req.getFilter()" : "Boolean.TRUE") + ");");
             w.println("        return " + msgs + ".QueryHandle.newBuilder().setQueryId(qid).build();");
             w.println("    }");
 

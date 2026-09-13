@@ -205,7 +205,16 @@ public class VServiceDiscovery {
 
     private static void scanProto(Path proto, Path protoRoot, List<HostedVService> result)
             throws IOException {
-        List<String> lines = Files.readAllLines(proto);
+        List<String> raw = Files.readAllLines(proto);
+        // Everything except the sentinel is read off the COMMENT-STRIPPED text, the
+        // same text EventTopicDiscovery parses records out of. Reading the raw lines
+        // made commented-out proto declare things: a service whose surface option is
+        // commented out still matched SERVICE_S2S and registered a provider for a
+        // service that declares no surface, and a "}" inside a comment closed the
+        // block early and dropped a real service instead. The sentinel is the one
+        // comment that IS a declaration (tacplus writes it as one), so it alone is
+        // still read from the raw line.
+        List<String> lines = EventTopicDiscovery.stripLineComments(raw);
         String relPath = protoRoot.relativize(proto).toString();
         int slash = relPath.indexOf('/');
         String parentDir = slash > 0 ? relPath.substring(0, slash) : "";
@@ -235,7 +244,7 @@ public class VServiceDiscovery {
         int i = 0;
         while (i < lines.size()) {
             String line = lines.get(i).trim();
-            Matcher sentinel = GENERATED_SENTINEL.matcher(line);
+            Matcher sentinel = GENERATED_SENTINEL.matcher(raw.get(i).trim());
             if (sentinel.find()) {
                 // tacplus writes the sentinel on the line immediately above the
                 // service it marks.
@@ -281,7 +290,10 @@ public class VServiceDiscovery {
                 pendingKind = "";
                 i = j;
             } else {
-                if (!line.isEmpty()) {
+                // Tested on the RAW line: a comment between the sentinel and the
+                // service it marks still breaks the pairing, exactly as before. The
+                // stripped line is empty for such a comment and would not.
+                if (!raw.get(i).trim().isEmpty()) {
                     pendingKind = "";
                 }
                 i++;

@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.List;
 
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.StratumEventStores;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotRestore;
 
 import com.hazelcast.config.Config;
 import com.hazelcast.config.MapConfig;
@@ -99,6 +100,30 @@ class StratumMapConfigDurabilityTest {
             assertEquals(StratumMapConfig.SPLIT_BRAIN_PROTECTION_NAME, map.getSplitBrainProtectionName(),
                     name + " accepts writes in a minority partition");
         }
+    }
+
+    /**
+     * The restore ledger is a map like any other, and carries the same settings.
+     *
+     * <p>It was outside the loop above — the record maps' own omission, one map
+     * later. It is the map {@code HotRestore.awaitClusterReplay} decides the
+     * hot-restore barrier on, so on Hazelcast's defaults a minority partition files
+     * and counts its own replay reports locally and opens hot reads over a store the
+     * majority never agreed was recovered. A barrier against incomplete recovery
+     * cannot be a barrier while the ledger it reads is the one map a partition can
+     * still write.
+     */
+    @Test
+    void theRestoreLedgerIsProtectedLikeTheRecordMaps() {
+        Config cfg = StratumMapConfig.build(List.of(), 3);
+
+        MapConfig ledger = cfg.getMapConfigs().get(HotRestore.LEDGER_MAP);
+        assertNotNull(ledger, "the restore ledger has no MapConfig, so it takes Hazelcast's defaults");
+        assertEquals(2, ledger.getBackupCount(), "the ledger is not at the declared floor");
+        assertEquals(0, ledger.getAsyncBackupCount(),
+                "the ledger counts an async backup towards the floor");
+        assertEquals(StratumMapConfig.SPLIT_BRAIN_PROTECTION_NAME, ledger.getSplitBrainProtectionName(),
+                "a minority partition can file and count its own replay reports");
     }
 
     /** The documented default, so an undeclared record is not shipped unprotected. */

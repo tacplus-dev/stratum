@@ -63,8 +63,18 @@ public final class HotRestore {
 
     private static final Logger log = LoggerFactory.getLogger(HotRestore.class);
 
-    /** The cluster-visible replay ledger: member UUID -> records replayed. */
-    static final String LEDGER_MAP = "stratum.hot.__restore_ledger";
+    /**
+     * The cluster-visible replay ledger: member UUID -> records replayed.
+     *
+     * <p>Public because it is a map the Hazelcast config has to configure by name:
+     * it carries the same backup count and the same split-brain protection as the
+     * record maps (see {@code StratumMapConfig.build}). A coordination map left on
+     * Hazelcast's defaults is the same split-brain hole the record maps had — a
+     * minority partition would file and read its own reports locally, and the
+     * barrier that exists to refuse an incomplete recovery would be decided off a
+     * ledger the majority never saw.
+     */
+    public static final String LEDGER_MAP = "stratum.hot.__restore_ledger";
 
     private HotRestore() {}
 

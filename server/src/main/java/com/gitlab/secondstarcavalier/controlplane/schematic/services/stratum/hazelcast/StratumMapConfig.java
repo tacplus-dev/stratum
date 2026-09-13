@@ -18,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.StratumEventStores;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotRestore;
 
 /**
  * StratumMapConfig builds the Hazelcast Config for the stratum hot event store.
@@ -155,10 +156,21 @@ public final class StratumMapConfig {
         for (String name : StratumEventStores.mapNames()) {
             cfg.addMapConfig(durableMap(name, minDurableCopies));
         }
+        // The restore ledger is a MAP too, and it was outside the list above — the
+        // same omission the record maps had before this loop existed, with the same
+        // consequence. It is the map the hot-restore barrier decides on
+        // ({@link HotRestore#awaitClusterReplay}), so on Hazelcast's defaults a
+        // minority partition files and counts its own replay reports locally and
+        // opens hot reads over a store the majority never agreed was recovered. The
+        // barrier is protection against an incomplete recovery; it cannot be
+        // protection while the ledger it reads is the one thing a partition can
+        // still write.
+        cfg.addMapConfig(durableMap(HotRestore.LEDGER_MAP, minDurableCopies));
 
-        log.info("stratum hot maps {}: min_durable_copies={}, backupCount={}, asyncBackupCount=0,"
-                + " split-brain minimumClusterSize={}",
-                StratumEventStores.mapNames(), minDurableCopies, minDurableCopies - 1, minDurableCopies);
+        log.info("stratum hot maps {} + the restore ledger {}: min_durable_copies={}, backupCount={},"
+                + " asyncBackupCount=0, split-brain minimumClusterSize={}",
+                StratumEventStores.mapNames(), HotRestore.LEDGER_MAP, minDurableCopies,
+                minDurableCopies - 1, minDurableCopies);
 
         return cfg;
     }
