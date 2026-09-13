@@ -188,6 +188,19 @@ public final class EventStoreGenerator {
         w.println("    }");
         w.println();
 
+        // minDurableCopies(mapName) — the floorConst() constants keyed by map name, for
+        // callers (StratumMapConfig) that only have the name, not the record type, in hand.
+        w.println("    /** The declared durability floor for a map name, or 0 if unknown. */");
+        w.println("    public static int minDurableCopies(String mapName) {");
+        w.println("        switch (mapName) {");
+        for (EventTopicDiscovery.TopicEvent e : events) {
+            w.println("            case \"" + mapName(e) + "\": return " + floorConst(e) + ";");
+        }
+        w.println("            default: return 0;");
+        w.println("        }");
+        w.println("    }");
+        w.println();
+
         // typed accessors (read path)
         for (EventTopicDiscovery.TopicEvent e : events) {
             w.println("    public IMap<String, " + fqn(e) + "> " + field(e) + "() { return " + field(e) + "; }");

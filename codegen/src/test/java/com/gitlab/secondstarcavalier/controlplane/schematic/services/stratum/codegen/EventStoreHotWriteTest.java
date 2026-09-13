@@ -119,4 +119,23 @@ class EventStoreHotWriteTest {
         assertTrue(src.contains("import com.gitlab.secondstarcavalier.controlplane.schematic"
                 + ".services.stratum.hot.HotWrites;"), src);
     }
+
+    /**
+     * StratumMapConfig needs the per-record floor keyed by Hazelcast map name — it only
+     * has the name, not the record type, when it walks mapNames() to build the Config.
+     */
+    @Test
+    void minDurableCopiesIsKeyedByMapName(@TempDir Path dir) throws IOException {
+        String src = generate(dir, """
+                  option (spec.record) = {key: "demo_id"
+                    retention: {timestamp_field: "timestamp_ms" duration_seconds: 100}};
+                  string demo_id = 1;
+                  int64 timestamp_ms = 2;
+                  string payload = 3 [(spec.quorum_write) = true, (spec.min_durable_copies) = 3];
+                """);
+        assertTrue(src.contains("public static int minDurableCopies(String mapName) {"), src);
+        assertTrue(src.contains(
+                "case \"demo.DemoEvent\": return MIN_DURABLE_COPIES_DEMO_DEMO_EVENT;"), src);
+        assertTrue(src.contains("default: return 0;"), src);
+    }
 }
