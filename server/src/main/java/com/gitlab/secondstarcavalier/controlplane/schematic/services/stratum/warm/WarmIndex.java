@@ -126,6 +126,31 @@ public final class WarmIndex implements Closeable {
      */
     private final AtomicLong slicesSearched = new AtomicLong();
 
+    /**
+     * Slice id -> how many queries have selected it as a candidate and have not
+     * finished reading it.
+     *
+     * Candidate selection and retention's delete are two steps apart in time: the
+     * query lists the slice, then submits one task per slice to a pool that runs
+     * them later. Retention in that gap unlinks the directory, and the read path's
+     * "no directory, no slice" answer — {@link #searcherFor} returning null, which
+     * {@link #searchSlice}/{@link #countSlice} read as "this slice legitimately holds
+     * nothing" — turns the deleted rows into an empty result with no error on it.
+     * That is exactly the silent undercount {@link #fanOut} refuses to produce for
+     * an unreadable slice, arriving one method earlier by a different door.
+     *
+     * So the pin is taken WHILE the candidate list is built, under {@link #pinLock},
+     * and retention takes the same lock around its own check-and-unlink. A slice is
+     * then either pinned before retention looks at it, in which case retention defers
+     * it to the next sweep, or unlinked before the query lists it, in which case the
+     * query never had it as a candidate. There is no third interleaving, so the race
+     * is not detected — it cannot happen.
+     */
+    private final Map<String, Integer> pins = new HashMap<>();
+
+    /** Guards {@link #pins}, and orders it against retention's unlink. */
+    private final Object pinLock = new Object();
+
     WarmIndex(Path root, WarmDataset dataset) {
         this.root = root;
         this.dataset = dataset;
@@ -330,36 +355,59 @@ public final class WarmIndex implements Closeable {
     List<byte[]> search(Query query, long fromMs, long toMsExclusive, int maxPerSlice,
                         ExecutorService pool) throws IOException {
         List<String> candidates = candidateSlices(fromMs, toMsExclusive);
-        List<byte[]> out = new ArrayList<>();
-        for (List<byte[]> hits : fanOut(candidates, sliceId -> searchSlice(sliceId, query, maxPerSlice), pool)) {
-            out.addAll(hits);
+        try {
+            List<byte[]> out = new ArrayList<>();
+            for (List<byte[]> hits : fanOut(candidates, sliceId -> searchSlice(sliceId, query, maxPerSlice), pool)) {
+                out.addAll(hits);
+            }
+            return out;
+        } finally {
+            unpin(candidates);
         }
-        return out;
     }
 
     /** Σ over candidate slices of {@code IndexSearcher.count} — never materialises hits. */
     long count(Query query, long fromMs, long toMsExclusive, ExecutorService pool) throws IOException {
         List<String> candidates = candidateSlices(fromMs, toMsExclusive);
-        long n = 0;
-        for (Long c : fanOut(candidates, sliceId -> countSlice(sliceId, query), pool)) {
-            n += c;
+        try {
+            long n = 0;
+            for (Long c : fanOut(candidates, sliceId -> countSlice(sliceId, query), pool)) {
+                n += c;
+            }
+            return n;
+        } finally {
+            unpin(candidates);
         }
-        return n;
     }
 
     /**
      * The slices whose interval overlaps the query's, by NAME. The interval is
      * always non-empty here — WarmStore's leg prune returns before calling in when
      * it is not — so this is purely the per-slice cut.
+     *
+     * Every slice returned is PINNED against retention (see {@link #pins}); the
+     * caller owes {@link #unpin} on the same list once its fan-out has finished.
      */
     private List<String> candidateSlices(long fromMs, long toMsExclusive) throws IOException {
         List<String> out = new ArrayList<>();
-        for (String sliceId : WarmSlices.list(root)) {
-            if (WarmSlices.intersects(sliceId, fromMs, toMsExclusive)) {
-                out.add(sliceId);
+        synchronized (pinLock) {
+            for (String sliceId : WarmSlices.list(root)) {
+                if (WarmSlices.intersects(sliceId, fromMs, toMsExclusive)) {
+                    out.add(sliceId);
+                    pins.merge(sliceId, 1, Integer::sum);
+                }
             }
         }
         return out;
+    }
+
+    /** Releases the pins {@link #candidateSlices} took, so retention can proceed. */
+    private void unpin(List<String> slices) {
+        synchronized (pinLock) {
+            for (String sliceId : slices) {
+                pins.compute(sliceId, (k, n) -> n == null || n <= 1 ? null : n - 1);
+            }
+        }
     }
 
     private interface SliceTask<R> {
@@ -490,26 +538,43 @@ public final class WarmIndex implements Closeable {
      * so in-flight queries are drained by Lucene's own ref-counting rather than
      * having their files pulled out from under them.
      *
+     * A slice a query has already selected as a candidate is DEFERRED, not dropped:
+     * see {@link #pins} for why unlinking it instead would answer that query short
+     * and silently. Deferral costs the slice one more sweep and nothing else —
+     * retention here is a cutoff test on a directory name, so the next pass reaches
+     * the same verdict.
+     *
      * @return the slice ids dropped
      */
     List<String> dropSlicesEndingBefore(long cutoffMs) throws IOException {
         List<String> dropped = new ArrayList<>();
+        List<String> deferred = new ArrayList<>();
         synchronized (writeLock) {
             for (String sliceId : WarmSlices.list(root)) {
                 if (WarmSlices.endMsExclusive(sliceId) > cutoffMs) {
                     continue;
                 }
-                if (sliceId.equals(currentSliceId)) {
-                    closeCurrentWriter();
+                synchronized (pinLock) {
+                    if (pins.containsKey(sliceId)) {
+                        deferred.add(sliceId);
+                        continue;
+                    }
+                    if (sliceId.equals(currentSliceId)) {
+                        closeCurrentWriter();
+                    }
+                    closeSearcher(sliceId);
+                    deleteTree(root.resolve(sliceId));
                 }
-                closeSearcher(sliceId);
-                deleteTree(root.resolve(sliceId));
                 dropped.add(sliceId);
             }
         }
         if (!dropped.isEmpty()) {
             log.info("warm retention: dropped {} slice(s) of {} older than {}: {}",
                     dropped.size(), dataset.name, cutoffMs, dropped);
+        }
+        if (!deferred.isEmpty()) {
+            log.info("warm retention: deferred {} slice(s) of {} to the next sweep — a query is reading them: {}",
+                    deferred.size(), dataset.name, deferred);
         }
         return dropped;
     }
