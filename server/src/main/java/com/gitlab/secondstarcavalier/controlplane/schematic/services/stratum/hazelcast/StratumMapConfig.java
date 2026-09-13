@@ -165,8 +165,22 @@ public final class StratumMapConfig {
 
     /**
      * How long a starting member waits for the cluster to reach the declared floor
-     * before giving up. Bounded well inside the health sidecar's window so a
-     * cluster that never forms fails loudly rather than being killed as a hang.
+     * before giving up, so a cluster that never forms fails loudly rather than
+     * looking like a hang.
+     *
+     * <p>It is NOT bounded inside a probe window on its own, and must not be read
+     * as if it were: {@link com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.EventStore#RESTORE_TIMEOUT}
+     * runs after it on the same thread, so a worst-case cold start spends 2 + 5
+     * minutes inside {@code EventStore.init} before the handler returns. The two
+     * cannot be overlapped — the redo barrier needs the cluster the first wait is
+     * waiting for, both to open a protected map and to have enough live members to
+     * file reports — so the combined wait is what a start has to survive. What lets
+     * it survive is that nothing about serving depends on this thread finishing
+     * promptly: the generated chassis binds its plaintext grpc.health.v1 listener
+     * in {@code ServiceManager.create()} and holds it at NOT_SERVING until
+     * bootstrap completes, which is after config delivery has run this wait, so a
+     * probe gets a connected "not ready" answer throughout rather than a refused
+     * connection. See {@code StartupHealthGateTest}.
      */
     public static final Duration FORMATION_TIMEOUT = Duration.ofMinutes(2);
 

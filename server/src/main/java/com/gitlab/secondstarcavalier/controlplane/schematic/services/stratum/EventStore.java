@@ -122,7 +122,17 @@ public class EventStore {
     private volatile boolean coldStartReplayDone;
     private int retentionDays;
 
-    /** How long a cold start waits for its peers' redo replay before giving up. */
+    /**
+     * How long a cold start waits for its peers' redo replay before giving up.
+     *
+     * <p>The SECOND of two sequential waits in {@link #init}, after
+     * {@link StratumMapConfig#FORMATION_TIMEOUT}, and deliberately still
+     * sequential: this barrier cannot begin before the cluster floor is met,
+     * because the replay it waits on opens split-brain-protected maps and needs
+     * that many live members to have filed reports. The combined worst case and
+     * why it does not cost the pod its listener are documented on
+     * {@code FORMATION_TIMEOUT}.
+     */
     static final java.time.Duration RESTORE_TIMEOUT = java.time.Duration.ofMinutes(5);
 
     /** Archives retained per hot redo log, matching the diskstore proto default. */
