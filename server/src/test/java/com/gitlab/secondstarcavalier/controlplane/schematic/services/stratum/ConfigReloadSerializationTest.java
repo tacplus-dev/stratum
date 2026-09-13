@@ -61,7 +61,7 @@ class ConfigReloadSerializationTest {
         final int retentionDays;
         volatile boolean shutdown;
         FakeStore(int retentionDays) { this.retentionDays = retentionDays; }
-        @Override public void init(int days, long cleanupSecs, List<String> seeds) { }
+        @Override public void init(int days, long cleanupSecs, long warmWindowSecs, List<String> seeds) { }
         @Override public long eventCount() { return 1; }
         @Override public int clusterSize() { return 1; }
         @Override public void shutdown() { shutdown = true; }
@@ -105,7 +105,7 @@ class ConfigReloadSerializationTest {
             EventStore newEventStore() {
                 return new FakeStore(0) {
                     @Override
-                    public void init(int days, long cleanupSecs, List<String> seeds) {
+                    public void init(int days, long cleanupSecs, long warmWindowSecs, List<String> seeds) {
                         peakConcurrent.accumulateAndGet(concurrent.incrementAndGet(), Math::max);
                         bothInside.countDown();
                         try {
@@ -159,7 +159,7 @@ class ConfigReloadSerializationTest {
             EventStore newEventStore() {
                 FakeStore s = new FakeStore(3) {
                     @Override
-                    public void init(int days, long cleanupSecs, List<String> seeds) { throw new InitFailed(); }
+                    public void init(int days, long cleanupSecs, long warmWindowSecs, List<String> seeds) { throw new InitFailed(); }
                 };
                 attempted.set(s);
                 return s;
@@ -200,7 +200,7 @@ class ConfigReloadSerializationTest {
                         ? new FakeStore(7)
                         : new FakeStore(9) {
                             @Override
-                            public void init(int days, long cleanupSecs, List<String> seeds) { throw new InitFailed(); }
+                            public void init(int days, long cleanupSecs, long warmWindowSecs, List<String> seeds) { throw new InitFailed(); }
                         };
                 stores.add(s);
                 return s;
@@ -238,7 +238,7 @@ class ConfigReloadSerializationTest {
                 FakeStore s = attempt.incrementAndGet() == 1
                         ? new FakeStore(5) {
                             @Override
-                            public void init(int days, long cleanupSecs, List<String> seeds) { throw new InitFailed(); }
+                            public void init(int days, long cleanupSecs, long warmWindowSecs, List<String> seeds) { throw new InitFailed(); }
                         }
                         : new FakeStore(5);
                 stores.add(s);

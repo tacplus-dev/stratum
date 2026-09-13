@@ -6,6 +6,7 @@ import java.util.Map;
 
 import com.google.protobuf.Descriptors;
 import com.google.protobuf.Message;
+import com.google.protobuf.UnknownFieldSet;
 import com.hazelcast.map.EntryProcessor;
 
 /**
@@ -26,6 +27,10 @@ import com.hazelcast.map.EntryProcessor;
  * is evidence that it did not, and picking a winner there would silently convert
  * stratum's atomic store into a convergent one. It is reported, named, and the
  * service refuses to start.
+ *
+ * <p>With exactly one exception, and it is not a softening of that rule: bytes the
+ * redo payload's encoding could not carry in the first place were never evidence
+ * of anything about the write path. See {@link #onlyRedoDroppedFieldsDiffer}.
  */
 public final class EpochMergeProcessor implements EntryProcessor<String, Message, Integer>, Serializable {
 
@@ -76,7 +81,48 @@ public final class EpochMergeProcessor implements EntryProcessor<String, Message
         if (!deleted && existing.equals(candidate)) {
             return SKIPPED;
         }
+        if (!deleted && onlyRedoDroppedFieldsDiffer(existing, candidate)) {
+            return SKIPPED;
+        }
         return DIVERGED;
+    }
+
+    /**
+     * True when the only thing the two disagree about is a field the redo
+     * payload's encoding cannot carry.
+     *
+     * <h2>The failure this exists for</h2>
+     * The redo payload is a field-by-field JSON encoding of the record's DECLARED
+     * fields. A producer shipping a record type with a new field before stratum
+     * picks up the same proto sends bytes stratum parses into the wire object's
+     * UNKNOWN field set — which {@code equals} compares and the encoding drops. So
+     * a rolling restart, where the peer still owns the partition and holds the row
+     * exactly as it came off the wire, replays this node's log into a row that
+     * differs from the candidate in the unknown fields alone. That reported
+     * DIVERGED, which aborts init, which restarts the pod into the identical
+     * refusal: a pod that cannot come back until the producer is rolled back.
+     *
+     * <h2>Why this is not a hole in the divergence check</h2>
+     * The test is deliberately one-directional and exact. The candidate must carry
+     * NO unknown fields and the existing row must carry some — that asymmetry is
+     * the signature of the ENCODING having dropped them, because a candidate only
+     * ever comes back through {@code fromJson}, which cannot produce any. And every
+     * declared field must still match exactly: a key whose known bytes disagree at
+     * one epoch is the write-path violation this class refuses, unknown fields or
+     * not.
+     *
+     * <p>The existing row is kept rather than the candidate, which is what SKIPPED
+     * already means here: it holds a strict superset of the candidate's content.
+     */
+    private static boolean onlyRedoDroppedFieldsDiffer(Message existing, Message candidate) {
+        if (existing.getUnknownFields().asMap().isEmpty()
+                || !candidate.getUnknownFields().asMap().isEmpty()) {
+            return false;
+        }
+        return existing.toBuilder()
+                .setUnknownFields(UnknownFieldSet.getDefaultInstance())
+                .build()
+                .equals(candidate);
     }
 
     /**

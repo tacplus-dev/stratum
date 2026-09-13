@@ -143,10 +143,15 @@ public class EventStore {
      *
      * @param retentionDays       days to retain events
      * @param cleanupIntervalSecs how often the retention job runs
+     * @param warmWindowSeconds   memory-residency window for warm-tiered records;
+     *                            rows older than it are served from disk. Shorter
+     *                            than retention, or nothing ever reaches the disk
+     *                            leg before retention deletes it.
      * @param seedMembers         list of "host:port" addresses for TCP/IP join;
      *                            empty → multicast (dev only)
      */
-    public void init(int retentionDays, long cleanupIntervalSecs, List<String> seedMembers) {
+    public void init(int retentionDays, long cleanupIntervalSecs, long warmWindowSeconds,
+                     List<String> seedMembers) {
         this.retentionDays = retentionDays;
 
         int floorOverride = StratumMapConfig.configuredMinDurableCopies();
@@ -176,7 +181,7 @@ public class EventStore {
         restoreHotTier(hotDatasets, minDurableCopies);
 
         try {
-            warm = new WarmStore(dataRoot(), StratumWarmStores.datasets(WarmStore.DEFAULT_WINDOW_SECONDS));
+            warm = new WarmStore(dataRoot(), StratumWarmStores.datasets(warmWindowSeconds));
         } catch (IOException e) {
             throw new IllegalStateException("warm tier could not open its directory under " + dataRoot(), e);
         }
@@ -189,7 +194,8 @@ public class EventStore {
                 this::runRetentionCleanupIfLeader,
                 cleanupIntervalSecs, cleanupIntervalSecs, TimeUnit.SECONDS);
 
-        log.info("EventStore initialised: retention_days={}, seed_members={}", retentionDays,
+        log.info("EventStore initialised: retention_days={}, warm_window_seconds={}, seed_members={}",
+                retentionDays, warmWindowSeconds,
                 seedMembers.isEmpty() ? "multicast" : seedMembers);
     }
 
@@ -239,6 +245,17 @@ public class EventStore {
      * leg, a record the warm validator rejects, is released inside
      * {@link WarmStore#enqueue}, which is where that decision is made.
      *
+     * <p>The claim is also what makes {@link #rejectsAppendOnlyDuplicate} sound under
+     * concurrency. That check reads two legs and then acts, and between the read and
+     * the act a second delivery of the same key can read them too — both see a key
+     * neither leg holds, both append a Lucene document, and for an append-only
+     * dataset nothing ever removes one of them. The claim closes that window without
+     * a second mechanism: {@link WarmStore#claim} is a compare-and-set, so exactly
+     * one of the two takes it, and the loser is the duplicate the check was looking
+     * for. Node-local is the right scope because the corruption is: the memory leg
+     * upserts by key and cannot double-count, while the Lucene index that can is this
+     * node's own, one full replica per instance.
+     *
      * <p>{@code memoryPut} is a parameter rather than an inlined call so this
      * sequence — the thing the correctness argument is about — is one testable unit
      * instead of something a test has to re-spell to exercise.
@@ -249,6 +266,9 @@ public class EventStore {
             return true;
         }
         boolean claimed = warm.claim(event);
+        if (!claimed && rejectsConcurrentAppendOnlyDelivery(warm, event)) {
+            return true;
+        }
         boolean enqueued = false;
         try {
             boolean handled = memoryPut.getAsBoolean();
@@ -321,6 +341,31 @@ public class EventStore {
                 + " The record type declares MUTABILITY_APPEND_ONLY, so its key may not repeat;"
                 + " storing it would leave the memory and disk legs permanently disagreeing"
                 + " about that key.", dataset.name, key, leg);
+        return true;
+    }
+
+    /**
+     * Refuses an append-only record whose key another in-flight delivery already claimed.
+     *
+     * <p>Reached only when {@link WarmStore#claim} returned false, which has two causes:
+     * no warm dataset holds the type at all — the ordinary hot-only record, and no
+     * refusal — or the key is already claimed. For an append-only dataset the second
+     * cause IS a duplicate: the claim is held from before a memory put until the disk
+     * commit that makes both legs agree, so a key claimed elsewhere is a key
+     * {@link #rejectsAppendOnlyDuplicate} would have caught had the other delivery been
+     * a moment further along.
+     *
+     * @return true when the record was refused — meaning handled, not stored.
+     */
+    private static boolean rejectsConcurrentAppendOnlyDelivery(WarmStore warm, Message event) {
+        WarmDataset dataset = warm.datasetFor(event);
+        if (dataset == null || !dataset.appendOnly) {
+            return false;
+        }
+        log.warn("rejected duplicate key on append-only {}: {} is already being stored by a"
+                + " concurrent delivery. The record type declares MUTABILITY_APPEND_ONLY, so its"
+                + " key may not repeat; storing it would append a second document the disk leg"
+                + " never removes.", dataset.name, dataset.key(event));
         return true;
     }
 

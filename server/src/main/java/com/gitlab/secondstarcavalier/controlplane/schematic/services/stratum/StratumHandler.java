@@ -228,9 +228,10 @@ public class StratumHandler extends StratumVServiceBase {
         }
         this.config = cfg;
         log.info("config: hazelcast_memory_mb={}, map_idle_ttl_seconds={}, max_maps={}, " +
-                 "retention_days={}, cleanup_interval_seconds={}",
+                 "retention_days={}, cleanup_interval_seconds={}, warm_window_seconds={}",
                 cfg.getHazelcastMemoryMb(), cfg.getMapIdleTtlSeconds(), cfg.getMaxMaps(),
-                cfg.getRetentionDays(), cfg.getCleanupIntervalSeconds());
+                cfg.getRetentionDays(), cfg.getCleanupIntervalSeconds(),
+                cfg.getWarmWindowSeconds());
 
         EventStore store = newEventStore();
         boolean live = false;
@@ -238,6 +239,7 @@ public class StratumHandler extends StratumVServiceBase {
             store.init(
                     cfg.getRetentionDays(),
                     cfg.getCleanupIntervalSeconds(),
+                    cfg.getWarmWindowSeconds(),
                     seedMembers());
 
             // Published only now. Assigning the field before init returned handed

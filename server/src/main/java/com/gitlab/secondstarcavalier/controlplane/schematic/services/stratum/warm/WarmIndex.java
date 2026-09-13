@@ -143,8 +143,20 @@ public final class WarmIndex implements Closeable {
     // Write
     // -----------------------------------------------------------------------
 
-    void markPending(String key) {
-        pending.add(key);
+    /**
+     * Takes the claim on a key, atomically.
+     *
+     * <p>The return value is the whole point: {@code Set.add} on a
+     * {@code ConcurrentHashMap} key set is a compare-and-set, so exactly one of any
+     * number of concurrent callers for one key gets true. That is what makes the
+     * ingest path's "have I seen this key" decision and its claim one indivisible
+     * step rather than two — see {@code EventStore.ingest}.
+     *
+     * @return true when THIS call took the claim; false when the key was already
+     *         claimed, in which case the caller owes no release.
+     */
+    boolean markPending(String key) {
+        return pending.add(key);
     }
 
     /**

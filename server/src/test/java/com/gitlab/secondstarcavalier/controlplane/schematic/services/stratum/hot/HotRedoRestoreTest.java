@@ -13,7 +13,9 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 
+import com.google.protobuf.ByteString;
 import com.google.protobuf.Message;
+import com.google.protobuf.UnknownFieldSet;
 import com.hazelcast.config.Config;
 import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
@@ -310,6 +312,69 @@ class HotRedoRestoreTest {
                 "a diverged key must be left exactly as it was, not overwritten");
     }
 
+    /**
+     * The schema-drift crash loop, and its end.
+     *
+     * <p>The redo payload is a field-by-field JSON encoding of the record's
+     * DECLARED fields, so a producer shipping a new field before stratum picks up
+     * the same proto writes a row whose extra bytes land in the wire object's
+     * unknown field set — which {@code equals} compares and the encoding cannot
+     * carry. On a rolling restart the peer still owns the partition and holds the
+     * row exactly as it came off the wire, so this node's replay meets a row that
+     * differs from its own candidate in those unknown fields ALONE.
+     *
+     * <p>Before the fix that reported DIVERGED, and a non-empty {@code diverged}
+     * list is exactly what {@code EventStore.restoreHotTier} throws on: init
+     * aborts, the pod restarts, replays the same log against the same peer row and
+     * refuses again. Permanently, until the producer is rolled back. So the
+     * assertion that {@code diverged} is empty IS the assertion that init no longer
+     * throws.
+     */
+    @Test
+    void aFieldTheRedoEncodingDropsIsNotDivergence(@TempDir Path dir) throws Exception {
+        HotDataset d = dataset(1);
+        Agentsensor.AgentEvent wire = withUnknownField(event("evt-1", 1000L, "s1"), "shipped-ahead");
+        // The payload the encoding actually produced: field 300 is gone from it.
+        assertFalse(d.toJson.apply(wire).contains("shipped-ahead"),
+                "premise: the redo encoding must be the thing that drops the new field");
+        Path node = dir.resolve("a");
+        writeLog(node, d, wire);
+
+        hz = member("stratum-schema-drift-test");
+        IMap<String, Message> map = hz.getMap(MAP);
+        map.put("evt-1", wire);
+
+        HotRestore.Result result = replayFrom(node, d, map);
+
+        assertTrue(result.diverged.isEmpty(),
+                "a row differing only in fields the redo encoding cannot carry was reported as a"
+                        + " write-path violation, which aborts init and crash-loops the pod: "
+                        + result.diverged);
+        assertEquals(1, result.skipped);
+        assertEquals(wire, map.get("evt-1"),
+                "the wire row holds a superset of the replayed one and must be left in place");
+    }
+
+    /**
+     * The paired control: the exemption is for the ENCODING's blind spot, not for
+     * disagreement. The same unknown field on the map's row, and a log whose
+     * declared fields genuinely disagree at the same epoch, still fails closed.
+     */
+    @Test
+    void unknownFieldsDoNotExcuseARealEqualEpochDivergence(@TempDir Path dir) throws Exception {
+        HotDataset d = dataset(1);
+        Path node = dir.resolve("a");
+        writeLog(node, d, withUnknownField(event("evt-1", 1000L, "other"), "shipped-ahead"));
+
+        hz = member("stratum-schema-drift-control-test");
+        IMap<String, Message> map = hz.getMap(MAP);
+        map.put("evt-1", withUnknownField(event("evt-1", 1000L, "one"), "shipped-ahead"));
+
+        assertEquals(List.of("evt-1"), replayFrom(node, d, map).diverged,
+                "session_id is a declared field; the two logs disagreeing about it at one epoch is"
+                        + " still the write-path violation, whatever else the row carries");
+    }
+
     /** The same write replayed from the owner's log and the backup's is idempotent. */
     @Test
     void theSameWriteFromTwoLogsIsNotDivergence(@TempDir Path dir) throws Exception {
@@ -499,6 +564,21 @@ class HotRedoRestoreTest {
     private static String logContents(HotRedoLogs logs) throws Exception {
         Path active = logs.log(MAP).activePath();
         return Files.exists(active) ? Files.readString(active) : "";
+    }
+
+    /**
+     * The event as a producer running a NEWER proto than stratum's would leave it:
+     * a field stratum's copy does not declare, parsed into the unknown field set.
+     * Field 300 is unused by AgentEvent, which is the point — it is what a field
+     * added after this build looks like from here.
+     */
+    private static Agentsensor.AgentEvent withUnknownField(Agentsensor.AgentEvent e, String value) {
+        return e.toBuilder()
+                .setUnknownFields(UnknownFieldSet.newBuilder()
+                        .addField(300, UnknownFieldSet.Field.newBuilder()
+                                .addLengthDelimited(ByteString.copyFromUtf8(value)).build())
+                        .build())
+                .build();
     }
 
     /** Writes one record straight into a node's log, without a cluster. */

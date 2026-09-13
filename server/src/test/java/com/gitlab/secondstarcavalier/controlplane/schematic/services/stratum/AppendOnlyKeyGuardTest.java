@@ -3,6 +3,8 @@ package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum;
 
 import java.nio.file.Path;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.jupiter.api.AfterAll;
@@ -235,6 +237,83 @@ class AppendOnlyKeyGuardTest {
         assertEquals(rejectedBefore, warm.rejectedCount(),
                 "a contract refusal is not an unstorable record");
         assertFalse(warm.residency(APPEND_ONLY_DATASET).inMemory("acct-cold-boot", 0L),
+                "the refused write leaked a claim; the disk leg is hiding the key it holds");
+    }
+
+    /**
+     * TWO CONCURRENT DELIVERIES of one new key: exactly one is stored.
+     *
+     * <p>{@link EventStore#ingest} reads both legs and then acts on what it read. The
+     * window between is real: a second delivery of the same key that reads the legs
+     * before the first one's memory put lands sees a key neither leg holds, and used
+     * to append a second Lucene document for it. Append-only never deletes and
+     * {@code WarmIndex.reconcile} is a no-op for keys that never repeat, so that
+     * second document is permanent and shows up as a doubled Get&lt;T&gt;Count.
+     *
+     * <p>The interleaving is FORCED, not raced: the {@code memoryPut} hook is the one
+     * point inside the window the test can hold, so delivery A parks there — past its
+     * own check and claim, before its memory copy exists — and delivery B runs to
+     * completion against exactly the state the check used to approve. No sleeps and no
+     * retries; the latches make the two orderings the bug needs the only ones possible.
+     */
+    @Test
+    void twoConcurrentDeliveriesOfOneNewKeyStoreItOnce() throws Exception {
+        warm.awaitWrites(10_000);
+        long writtenBefore = warm.writtenCount();
+
+        CountDownLatch aInsideWindow = new CountDownLatch(1);
+        CountDownLatch bFinished = new CountDownLatch(1);
+        AtomicBoolean bMemoryPutRan = new AtomicBoolean();
+        AtomicBoolean aHandled = new AtomicBoolean();
+
+        long epoch = System.currentTimeMillis();
+        AccountingRecord a = accounting("acct-concurrent", 7, epoch);
+        AccountingRecord b = accounting("acct-concurrent", 99, epoch);
+
+        Thread first = new Thread(() -> aHandled.set(EventStore.ingest(warm, a,
+                AppendOnlyKeyGuardTest::memoryHolds, () -> {
+                    aInsideWindow.countDown();
+                    try {
+                        // Held open until B has had its whole turn, so B's view of both
+                        // legs is the one that used to let it through.
+                        bFinished.await(10, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return stores.store(a);
+                })), "ingest-a");
+        first.start();
+
+        assertTrue(aInsideWindow.await(10, TimeUnit.SECONDS), "delivery A never reached the window");
+        assertFalse(memoryHolds(APPEND_ONLY_DATASET, "acct-concurrent"),
+                "A's memory copy landed before B ran; the window under test was not open");
+        assertFalse(warm.isDurableOnDisk(APPEND_ONLY_DATASET, "acct-concurrent"),
+                "A's disk copy landed before B ran; the window under test was not open");
+
+        boolean bHandled = EventStore.ingest(warm, b, AppendOnlyKeyGuardTest::memoryHolds, () -> {
+            bMemoryPutRan.set(true);
+            return stores.store(b);
+        });
+        bFinished.countDown();
+        first.join(10_000);
+        assertFalse(first.isAlive(), "delivery A never completed");
+
+        assertTrue(aHandled.get(), "the winning delivery did not read as handled");
+        assertTrue(bHandled, "a refused record must read as handled, or the subscription"
+                + " retries it forever");
+        assertFalse(bMemoryPutRan.get(), "both concurrent deliveries passed the duplicate check");
+        assertEquals(7, stores.accountingrecordAccountingRecord().get("acct-concurrent").getDurationMs(),
+                "the loser of the race overwrote the memory leg's copy");
+
+        warm.awaitWrites(10_000);
+        assertEquals(writtenBefore + 1, warm.writtenCount(),
+                "both concurrent deliveries appended; the disk leg now holds this key twice and"
+                        + " nothing will ever remove either copy");
+        assertEquals(0, warm.writeFailureCount());
+
+        // The loser took no claim, so it owes no release — the winner's claim is the
+        // only one, and the disk commit cleared it.
+        assertFalse(warm.residency(APPEND_ONLY_DATASET).inMemory("acct-concurrent", 0L),
                 "the refused write leaked a claim; the disk leg is hiding the key it holds");
     }
 

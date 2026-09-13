@@ -76,17 +76,6 @@ public final class WarmStore implements AutoCloseable {
      */
     static final int MAX_HITS_PER_SLICE = 100_000;
 
-    /**
-     * The residency window applied to a record type that declared the warm preset
-     * but no window_seconds of its own.
-     *
-     * (spec.record).residency says this is "the configured default", and stratum's
-     * Stratum.Config carries no field for it — adding one is a proto change, i.e.
-     * tacplus work, not something to hand-roll here. One year is the design's
-     * worked example and is the value until that field exists.
-     */
-    public static final long DEFAULT_WINDOW_SECONDS = 365L * 24 * 60 * 60;
-
     private final Path warmRoot;
     private final Map<String, WarmIndex> indexes = new LinkedHashMap<>();
 
@@ -188,15 +177,22 @@ public final class WarmStore implements AutoCloseable {
      * releases it directly). A claim never released hides the key from the disk leg
      * for the life of the process.
      *
-     * @return true when a warm dataset claimed the record; false leaves nothing owed.
+     * The claim is EXCLUSIVE and atomic: when another delivery of the same key is
+     * already mid-ingest this returns false without disturbing that claim. For an
+     * append-only dataset that answer is also the duplicate decision — see
+     * {@code EventStore.ingest}, which is the only caller that can tell the two
+     * false cases apart.
+     *
+     * @return true when a warm dataset claimed the record FOR THIS CALL; false
+     *         leaves nothing owed, either because no warm dataset holds the type or
+     *         because the key was already claimed.
      */
     public boolean claim(Message record) {
         WarmIndex idx = indexFor(record);
         if (idx == null) {
             return false;
         }
-        idx.markPending(idx.dataset().key(record));
-        return true;
+        return idx.markPending(idx.dataset().key(record));
     }
 
     /** Drops a claim {@link #claim} took when no disk write followed it. */
