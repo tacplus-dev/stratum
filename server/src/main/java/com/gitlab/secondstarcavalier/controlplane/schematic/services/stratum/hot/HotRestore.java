@@ -160,7 +160,12 @@ public final class HotRestore {
      *                         recovered store is then thinner than the durability
      *                         the writes were acked under
      * @return the number of instances that contributed a log
-     * @throws IllegalStateException if the wait times out
+     * @throws IllegalStateException if the wait times out, or if the instances that
+     *                               did contribute came in below {@code
+     *                               minDurableCopies} — a recovery thinner than the
+     *                               durability its writes were acked under is refused,
+     *                               not served. Zero contributors is not that case;
+     *                               see the comment at the check.
      */
     public static int awaitClusterReplay(HazelcastInstance hz, int redoRecordsRead,
                                          int minDurableCopies, Duration timeout) {
@@ -229,15 +234,32 @@ public final class HotRestore {
                 contributors++;
             }
         }
-        if (contributors < minDurableCopies) {
-            log.error("hot restore: only {} of {} instances contributed a redo log, below"
-                    + " min_durable_copies={}. Every acked write was durable on {} nodes, so the"
+        // Below the floor is a REFUSAL, not a warning. The message below says the
+        // recovered store may be missing rows whose only surviving copies were on
+        // the instances that contributed nothing; returning normally after saying
+        // that hands the caller a store it has just described as incomplete, and
+        // restoreHotTier goes straight on to open the hot read gate over it. Same
+        // posture as the barrier timeout above: refuse to serve a silently
+        // incomplete hot store rather than serve it loudly.
+        //
+        // ZERO contributors is the one case that is not this failure. It means no
+        // live instance had a redo log at all — a first deployment, or a total loss
+        // of every volume. Neither is a partial recovery there is anything to refuse:
+        // nothing was replayed thinly, nothing was replayed at all, and the hot tier
+        // is empty rather than under-durable. That case is already covered by the
+        // OTHER leg of the read gate — hotReadable() also requires the event-log
+        // cold-start replay to have finished, which is the recovery path for a store
+        // with no redo logs behind it. Throwing here instead would crash-loop every
+        // first-ever bring-up, which is not a durability failure to fail closed on.
+        if (contributors > 0 && contributors < minDurableCopies) {
+            throw new IllegalStateException("hot restore: only " + contributors + " of " + expected
+                    + " instances contributed a redo log, below min_durable_copies " + minDurableCopies
+                    + ". Every acked write was durable on " + minDurableCopies + " nodes, so the"
                     + " recovered store may be missing rows whose only surviving copies were on the"
-                    + " instances that contributed nothing.",
-                    contributors, expected, minDurableCopies, minDurableCopies);
-        } else {
-            log.info("hot restore complete: {} of {} instances contributed a redo log", contributors, expected);
+                    + " instances that contributed nothing; refusing to serve a silently incomplete"
+                    + " hot store");
         }
+        log.info("hot restore complete: {} of {} instances contributed a redo log", contributors, expected);
         return contributors;
     }
 
