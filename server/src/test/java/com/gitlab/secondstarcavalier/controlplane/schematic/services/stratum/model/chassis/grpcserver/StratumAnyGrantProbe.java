@@ -124,7 +124,7 @@ public class StratumAnyGrantProbe {
         // Same policy the generated RecordMap wrapper registers at startup. The
         // generated RecordQuery wrapper registers none: it is c2s, so the
         // Authorizer takes the entitlement path.
-        a.setMethodAuth("CreateTaskActivityQuery", List.of("argus"));
+        a.setMethodAuth(S2S_METHOD, List.of("argus"));
 
         System.out.println("--- c2s surface (query.RecordQuery) ---");
         attempt(a, C2S_METHOD, "user token, grants=[QUERY_ANY]  (the trait wildcard)",
