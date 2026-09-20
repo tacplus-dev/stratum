@@ -161,11 +161,23 @@ public final class RecordMapImplGenerator {
         w.println("        final boolean pinned;");
         w.println("        /** The caller's typed filter, or Boolean.TRUE for a filterless record type. */");
         w.println("        final Object filter;");
+        w.println("        /**");
+        w.println("         * The soft-delete escape hatch, off by default.");
+        w.println("         *");
+        w.println("         * It rides with the filter because it IS part of the predicate, and it");
+        w.println("         * lives on the handle for the same reason the filter does: every call");
+        w.println("         * after create<T>Query carries only the query_id, so the flag is fixed");
+        w.println("         * once at open and replaced wholesale at update<T>Query. A record type");
+        w.println("         * with no (spec.deleted_flag) field has no soft-delete state, so nothing");
+        w.println("         * reads this for it.");
+        w.println("         */");
+        w.println("        final boolean includeDeleted;");
         w.println();
-        w.println("        Handle(String namespace, Object filter) {");
+        w.println("        Handle(String namespace, Object filter, boolean includeDeleted) {");
         w.println("            this.namespace = namespace;");
         w.println("            this.pinned = !namespace.startsWith(\"/system\");");
         w.println("            this.filter = filter;");
+        w.println("            this.includeDeleted = includeDeleted;");
         w.println("        }");
         w.println("    }");
         w.println();
@@ -234,7 +246,7 @@ public final class RecordMapImplGenerator {
         w.println("     * approximation, since two concurrent opens that each read cap-1 would");
         w.println("     * otherwise both be admitted.");
         w.println("     */");
-        w.println("    private String openHandle(String ns, Object filter) throws ProtoException {");
+        w.println("    private String openHandle(String ns, Object filter, boolean includeDeleted) throws ProtoException {");
         w.println("        String qid = UUID.randomUUID().toString();");
         w.println("        synchronized (openLock) {");
         w.println("            int open = 0;");
@@ -249,7 +261,7 @@ public final class RecordMapImplGenerator {
         w.println("                                + \" handles, the maximum of \" + MAX_OPEN_QUERIES_PER_NAMESPACE");
         w.println("                                + \"; close one with delete<T>Query before opening another\");");
         w.println("            }");
-        w.println("            queries.put(qid, new Handle(ns, filter));");
+        w.println("            queries.put(qid, new Handle(ns, filter, includeDeleted));");
         w.println("        }");
         w.println("        return qid;");
         w.println("    }");
@@ -275,7 +287,18 @@ public final class RecordMapImplGenerator {
             String filterTy = msgs + "." + t + "Filter";
             String matchFn = lower("Match" + t);
             // Java expressions for "does record ev match the handle's predicate".
-            String matchExpr = hasFilter ? (matchFn + "(f, ev)") : "true";
+            // The soft-delete exclusion. For a filterable type it rides INSIDE
+            // match<T>, which is the single predicate get<T>Count / get<T>Sample /
+            // list<T> / watch<T> / subscribe<T>Count all scan with, so one clause
+            // covers all five. A filterless type has no match<T> to put it in — the
+            // generated interface still gives it count/sample/list — so the same
+            // clause is appended to that type's scan condition directly. A type with
+            // no (spec.deleted_flag) field emits neither: the flag tacplus puts on
+            // its Open<T>QueryRequest stays inert until the annotation pass gives it
+            // a marker, and until then the emitted plane is byte-identical to before.
+            String deletedGetter = e.deletedFlagField.isEmpty()
+                    ? "" : "get" + pascal(e.deletedFlagField);
+            String matchExpr = hasFilter ? (matchFn + "(f, h.includeDeleted, ev)") : "true";
             String matchCast = hasFilter ? (matchFn + "(f, (" + fqn + ") m)") : "true";
 
             // Warm record types are served by TWO legs. The memory leg is the hot
@@ -305,7 +328,10 @@ public final class RecordMapImplGenerator {
                     ? "res.inMemory(ev." + keyGetter + "(), ev.get" + pascal(e.storeEpochField) + "()) && "
                     : "")
                     + "inNamespace(h, ev." + nsGetter + "())"
-                    + (hasFilter ? " && " + matchExpr : "");
+                    + (hasFilter ? " && " + matchExpr
+                            : deletedGetter.isEmpty()
+                                    ? ""
+                                    : " && (h.includeDeleted || !ev." + deletedGetter + "())");
             String memoryCountLeg = residencyBind
                     + "            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + memoryCond + ") n++;"
                     + (warm ? "\n            n += " + lower("WarmCount" + t) + "(h"
@@ -319,7 +345,16 @@ public final class RecordMapImplGenerator {
             // no Hazelcast attribute coupling. Only for filterable record types.
             if (hasFilter) {
                 w.println();
-                w.println("    private static boolean " + matchFn + "(" + filterTy + " f, " + fqn + " ev) {");
+                w.println("    private static boolean " + matchFn + "(" + filterTy + " f, boolean includeDeleted, " + fqn + " ev) {");
+                if (!deletedGetter.isEmpty()) {
+                    w.println("        // Soft delete: a flagged row is out of every default query result.");
+                    w.println("        // First, ahead of the caller's own criteria, because it is not one of");
+                    w.println("        // them — it is the plane's default, and include_deleted is the only");
+                    w.println("        // way past it. A by-key point read is expressed as an EQ criterion on");
+                    w.println("        // the record key and so passes through here too, which is what the");
+                    w.println("        // escape hatch is for.");
+                    w.println("        if (!includeDeleted && ev." + deletedGetter + "()) return false;");
+                }
                 for (EventTopicDiscovery.QueryField qf : e.queryFields) {
                     String P = pascal(qf.name);
                     if (qf.range) {
@@ -360,7 +395,7 @@ public final class RecordMapImplGenerator {
                     + "(Caller caller, " + msgs + ".Open" + t + "QueryRequest req) throws ProtoException {");
             w.println("        String ns = callerNamespace(caller);");
             w.println("        String qid = openHandle(ns, "
-                    + (hasFilter ? "req.getFilter()" : "Boolean.TRUE") + ");");
+                    + (hasFilter ? "req.getFilter()" : "Boolean.TRUE") + ", req.getIncludeDeleted());");
             w.println("        return " + msgs + ".QueryHandle.newBuilder().setQueryId(qid).build();");
             w.println("    }");
 
@@ -435,7 +470,9 @@ public final class RecordMapImplGenerator {
                 w.println("        " + filterTy + " f = req.getFilter();");
                 w.println("        // The namespace is the OPENING caller's and is carried over untouched:");
                 w.println("        // a refine replaces the predicate, never the boundary.");
-                w.println("        queries.put(req.getQueryId(), new Handle(h.namespace, f));");
+                w.println("        // include_deleted is replaced outright, like the filter it rides with:");
+                w.println("        // a refine restates the whole predicate.");
+                w.println("        queries.put(req.getQueryId(), new Handle(h.namespace, f, req.getIncludeDeleted()));");
                 w.println("        long n = 0;");
                 w.println("        try {");
                 w.println(memoryCountLeg);

@@ -145,6 +145,26 @@ public final class EventTopicDiscovery {
          * lost members cannot pass for a single-node development tree.
          */
         public final int minDurableCopies;
+        /**
+         * The record field carrying (spec.deleted_flag) — the one bool that records
+         * a row's soft-delete state. "" when the record declares no marker.
+         *
+         * A flagged row is excluded from List / Watch / Count / Sample by default;
+         * a caller opts back in with the query plane's include_deleted. "" means the
+         * record type has no soft-delete state at all, and the generated query plane
+         * is then byte-identical to the pre-marker one — which is why this is a
+         * plain absence and not an error: tacplus emits include_deleted on every
+         * record's Open/Refine message whether or not the type carries a marker, so
+         * the fleet annotation pass can land one type at a time.
+         *
+         * The detection rule mirrors tacplus's own parser.DeletedFlagField
+         * (pkg/internal/common/parser/deleted_flag_validate.go): exactly one
+         * non-repeated bool field carrying the marker, and "" for anything else.
+         * tacplus refuses to generate a file that breaks DF-1..DF-3, so the
+         * malformed cases cannot reach here; answering "" for them generates the
+         * pre-marker plane rather than a wrong one, exactly as tacplus does.
+         */
+        public final String deletedFlagField;
         /** Java package from option java_package, e.g. "...model.types.vservices.agentsensor". */
         public final String javaPackage;
         /** Java outer class name from option java_outer_classname, e.g. "Agentsensor". */
@@ -155,6 +175,7 @@ public final class EventTopicDiscovery {
                           String retentionTimestampField,
                           String residency, long residencyWindowSeconds, String mutability,
                           String storeEpochField, String storeNamespaceField, int minDurableCopies,
+                          String deletedFlagField,
                           String javaPackage, String outerClassName) {
             this.protoPackage = protoPackage;
             this.eventType = eventType;
@@ -169,6 +190,7 @@ public final class EventTopicDiscovery {
             this.storeEpochField = storeEpochField;
             this.storeNamespaceField = storeNamespaceField;
             this.minDurableCopies = minDurableCopies;
+            this.deletedFlagField = deletedFlagField;
             this.javaPackage = javaPackage;
             this.outerClassName = outerClassName;
         }
@@ -274,6 +296,16 @@ public final class EventTopicDiscovery {
     //   string payload = 3 [(spec.quorum_write) = true, (spec.min_durable_copies) = 3];
     private static final Pattern MIN_DURABLE_COPIES = Pattern.compile(
             "\\(spec\\.min_durable_copies\\)\\s*=\\s*(\\d+)");
+
+    // The field carrying (spec.deleted_flag), e.g.
+    //   bool deleted = 7 [(spec.deleted_flag) = true];
+    // Read from the message body for the same reason (spec.store_epoch) is: it is a
+    // FIELD annotation, not a clause on the record option. The leading
+    // "(repeated )?<type>" is captured rather than hard-coded to "bool" so the
+    // malformed declarations tacplus refuses (DF-2/DF-3) can be told apart from an
+    // absent marker below.
+    private static final Pattern DELETED_FLAG_FIELD = Pattern.compile(
+            "(?<!\\w)(repeated\\s+)?(\\w[\\w.]*)\\s+(\\w+)\\s*=\\s*\\d+\\s*\\[[^\\]]*\\(spec\\.deleted_flag\\)\\s*=\\s*true");
 
     // A field carrying (spec.query_field), e.g.
     //   string spiffe_id = 4 [(spec.query_field) = {op: QUERY_OP_EQ}];
@@ -387,6 +419,7 @@ public final class EventTopicDiscovery {
                     parseResidency(recordOption), parseResidencyWindowSeconds(recordOption),
                     parseMutability(recordOption), parseStoreEpochField(eventBody),
                     parseStoreNamespaceField(eventBody), parseMinDurableCopies(eventBody),
+                    parseDeletedFlagField(eventBody),
                     javaPackage, outerClassName));
         }
     }
@@ -494,6 +527,31 @@ public final class EventTopicDiscovery {
     private static String parseStoreNamespaceField(String eventBody) {
         Matcher m = STORE_NAMESPACE_FIELD.matcher(eventBody);
         return m.find() ? m.group(1) : "";
+    }
+
+    /**
+     * The field carrying (spec.deleted_flag), or "" when the record declares none.
+     *
+     * Mirrors tacplus's parser.DeletedFlagField exactly, including its answers to
+     * the cases tacplus's own validator refuses first: a repeated or non-bool
+     * marked field (DF-2) and a second marked field (DF-3) both yield "", which
+     * generates the pre-marker query plane rather than a wrong one. This is a
+     * LOOKUP, not a second opinion — well-formedness is enforced once, by tacplus,
+     * before any of this runs.
+     */
+    private static String parseDeletedFlagField(String eventBody) {
+        Matcher m = DELETED_FLAG_FIELD.matcher(eventBody);
+        String found = "";
+        while (m.find()) {
+            if (m.group(1) != null || !"bool".equals(m.group(2))) {
+                return ""; // DF-2: not a non-repeated bool
+            }
+            if (!found.isEmpty()) {
+                return ""; // DF-3: a row has one soft-delete state
+            }
+            found = m.group(3);
+        }
+        return found;
     }
 
     /**
