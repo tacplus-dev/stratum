@@ -298,6 +298,15 @@ public final class RecordMapImplGenerator {
             // a marker, and until then the emitted plane is byte-identical to before.
             String deletedGetter = e.deletedFlagField.isEmpty()
                     ? "" : "get" + pascal(e.deletedFlagField);
+            // A POINT READ is the exception to that exclusion: this plane has no
+            // Get<T> RPC, so "get the row with this key" is expressed as a filter
+            // that pins the record key and sets nothing else. The record lifecycle
+            // decision says a by-key read returns the row deleted or not, until it
+            // is purged — so for that one filter shape the exclusion is skipped
+            // whatever include_deleted says. Empty when the type has no key
+            // criterion to pin (no s2s_read, so tacplus folded no key into
+            // <T>Filter) or no marker, and then nothing extra is emitted.
+            String pointReadExpr = deletedGetter.isEmpty() ? "" : pointRead(e);
             String matchExpr = hasFilter ? (matchFn + "(f, h.includeDeleted, ev)") : "true";
             String matchCast = hasFilter ? (matchFn + "(f, (" + fqn + ") m)") : "true";
 
@@ -350,10 +359,21 @@ public final class RecordMapImplGenerator {
                     w.println("        // Soft delete: a flagged row is out of every default query result.");
                     w.println("        // First, ahead of the caller's own criteria, because it is not one of");
                     w.println("        // them — it is the plane's default, and include_deleted is the only");
-                    w.println("        // way past it. A by-key point read is expressed as an EQ criterion on");
-                    w.println("        // the record key and so passes through here too, which is what the");
-                    w.println("        // escape hatch is for.");
-                    w.println("        if (!includeDeleted && ev." + deletedGetter + "()) return false;");
+                    w.println("        // way past it for a scan.");
+                    if (pointReadExpr.isEmpty()) {
+                        w.println("        // This type has no key criterion in its filter, so every query");
+                        w.println("        // through here is a scan.");
+                        w.println("        if (!includeDeleted && ev." + deletedGetter + "()) return false;");
+                    } else {
+                        w.println("        // A POINT READ is not a scan. This plane has no Get<T> RPC: a by-key");
+                        w.println("        // read is a filter that pins the record key and sets no other");
+                        w.println("        // criterion, and a Get by key returns the row deleted or not until it");
+                        w.println("        // is purged. The caller has already named the single row it wants, so");
+                        w.println("        // there is nothing for the default to protect it from — the exclusion");
+                        w.println("        // is skipped for that filter shape whatever include_deleted says.");
+                        w.println("        boolean pointRead = " + pointReadExpr + ";");
+                        w.println("        if (!includeDeleted && !pointRead && ev." + deletedGetter + "()) return false;");
+                    }
                 }
                 for (EventTopicDiscovery.QueryField qf : e.queryFields) {
                     String P = pascal(qf.name);
@@ -603,6 +623,42 @@ public final class RecordMapImplGenerator {
         w.println("        }");
         w.println("        return n;");
         w.println("    }");
+    }
+
+    /**
+     * "Is this filter a bare point read on the record key" as a Java expression
+     * over {@code f} — the key criterion set and every other criterion unset.
+     *
+     * <p>Empty when the type's {@code <T>Filter} carries no EQ criterion on the
+     * record key at all, which is every record that declares no
+     * {@code s2s_read}: tacplus folds the key in only for those, so without it
+     * the plane genuinely cannot express a by-key read and there is no shape to
+     * exempt.
+     */
+    private static String pointRead(EventTopicDiscovery.TopicEvent e) {
+        boolean hasKeyCriterion = false;
+        for (EventTopicDiscovery.QueryField qf : e.queryFields) {
+            if (qf.name.equals(e.recordKey) && !qf.range) {
+                hasKeyCriterion = true;
+                break;
+            }
+        }
+        if (!hasKeyCriterion) {
+            return "";
+        }
+        StringBuilder b = new StringBuilder("f.has" + pascal(e.recordKey) + "()");
+        for (EventTopicDiscovery.QueryField qf : e.queryFields) {
+            if (qf.name.equals(e.recordKey)) {
+                continue;
+            }
+            String P = pascal(qf.name);
+            if (qf.range) {
+                b.append(" && !f.has").append(P).append("From() && !f.has").append(P).append("To()");
+            } else {
+                b.append(" && !f.has").append(P).append("()");
+            }
+        }
+        return b.toString();
     }
 
     /** snake_case proto field -> PascalCase getter stem (spiffe_id -> SpiffeId). */
