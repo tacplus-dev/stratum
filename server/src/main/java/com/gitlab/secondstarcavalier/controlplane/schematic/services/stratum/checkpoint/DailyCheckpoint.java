@@ -74,6 +74,14 @@ public final class DailyCheckpoint {
 
     /** Removes a purged key from this node's on-disk index for that type. */
     public interface DiskPurge {
+        /**
+         * No second on-disk row index to purge from — this pod's durable copy of a
+         * row is the checkpoint, and step 2 rewrites it from what survived step 1.
+         * The node-local Lucene index this once addressed was the warm tier's disk
+         * leg and was removed with it on 2026-09-20.
+         */
+        DiskPurge NONE = (mapName, key) -> { };
+
         void purge(String mapName, String key) throws IOException;
     }
 

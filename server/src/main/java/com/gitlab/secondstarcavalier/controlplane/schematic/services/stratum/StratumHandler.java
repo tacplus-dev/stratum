@@ -84,7 +84,7 @@ public class StratumHandler extends StratumVServiceBase {
         if (recordMaps == null) {
             // Suppliers, not captured references: initFromConfig rebuilds the stores on
             // config updates, and the generated impl must always see the current ones.
-            recordMaps = new StratumRecordMaps(() -> eventStore.stores(), () -> eventStore.warm(),
+            recordMaps = new StratumRecordMaps(() -> eventStore.stores(),
                     // The hot tier's restore gate. It is not always true by the time a
                     // read arrives: initFromConfig replaces the EventStore on every
                     // config delivery, and the plane stays registered across that, so a
@@ -228,23 +228,18 @@ public class StratumHandler extends StratumVServiceBase {
         }
         this.config = cfg;
         log.info("config: hazelcast_memory_mb={}, map_idle_ttl_seconds={}, max_maps={}, " +
-                 "retention_days={}, cleanup_interval_seconds={}, warm_window_seconds={}",
+                 "cleanup_interval_seconds={}",
                 cfg.getHazelcastMemoryMb(), cfg.getMapIdleTtlSeconds(), cfg.getMaxMaps(),
-                cfg.getRetentionDays(), cfg.getCleanupIntervalSeconds(),
-                cfg.getWarmWindowSeconds());
+                cfg.getCleanupIntervalSeconds());
 
         EventStore store = newEventStore();
         boolean live = false;
         try {
-            store.init(
-                    cfg.getRetentionDays(),
-                    cfg.getCleanupIntervalSeconds(),
-                    cfg.getWarmWindowSeconds(),
-                    seedMembers());
+            store.init(cfg.getCleanupIntervalSeconds(), seedMembers());
 
             // Published only now. Assigning the field before init returned handed
             // the record plane a member that had joined the cluster but had not
-            // opened its redo logs or its warm directory yet: every write went
+            // opened its redo logs yet: every write went
             // nowhere durable and every read answered UNAVAILABLE, for as long as
             // the pod lived.
             eventStore = store;

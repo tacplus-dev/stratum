@@ -21,7 +21,6 @@ import io.grpc.Server;
 import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 
-import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.warm.WarmStore;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotWrites;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.token.TokenWrapper;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.vservices.query.RecordMap;
@@ -115,7 +114,6 @@ class PullAgentEventE2ETest {
         // is until one declares otherwise), so this store holds no dataset, opens no
         // directory and answers no disk leg — but the plane still takes it, which is
         // what keeps the wiring compiled rather than hypothetical.
-        WarmStore warm = new WarmStore(java.nio.file.Path.of("target", "warm-e2e-unused"), List.of());
         for (AgentEvent e : FIXTURES) {
             stores.store(e);
         }
@@ -143,7 +141,7 @@ class PullAgentEventE2ETest {
                 .addService(new RecordMap(
                         // The hot tier's restore gate, open: this fixture has no cold
                         // start to wait for. HotAgentEventE2ETest drives it closed.
-                        new StratumRecordMaps(() -> stores, () -> warm, () -> true), authorizer))
+                        new StratumRecordMaps(() -> stores, () -> true), authorizer))
                 .build()
                 .start();
         channel = PullAgentEvent.channel("localhost:" + server.getPort(), true);

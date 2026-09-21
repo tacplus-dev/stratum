@@ -74,34 +74,6 @@ public final class EventTopicDiscovery {
         /** Queryable fields (spec.query_field) — empty if the record declares none. */
         public final List<QueryField> queryFields;
         /**
-         * The field the record's retention age is measured from, taken from
-         * (spec.record).retention.timestamp_field — e.g. "timestamp_ms" on
-         * AgentEvent, "occurred_at_ms" on TaskActivity. "" when the record
-         * declares no retention policy.
-         *
-         * Retention is DELIVERY-side state. It used to ride on the record's
-         * timeseries projection annotation; BIG GOAL 3 acceptance item 3 split
-         * transformation from delivery and moved it onto (spec.record), which is
-         * the declaration that actually says this message is stored and delivered.
-         */
-        public final String retentionTimestampField;
-        /**
-         * (spec.record).residency.window — "RESIDENCY_WARM" when the record type
-         * declares the warm window, "" otherwise.
-         *
-         * Absence is HOT, which is what every record does today, so an empty string
-         * here and RESIDENCY_HOT are the same statement. The disk tier is generated
-         * only for the warm ones, which is why this is a string and not a boolean:
-         * RESIDENCY_COLD is a declared-but-refused value in tacplus, and swallowing
-         * it into "not warm" would silently accept a declaration tacplus rejects.
-         */
-        public final String residency;
-        /**
-         * (spec.record).residency.window_seconds — the memory-residency window
-         * override, or 0 for "use the configured default".
-         */
-        public final long residencyWindowSeconds;
-        /**
          * (spec.record).residency.idle_seconds — how long a row may go with NO
          * read and NO write before Hazelcast evicts it from memory. Always a
          * value: {@value EventTopicDiscovery#DEFAULT_RESIDENCY_IDLE_SECONDS}
@@ -203,8 +175,6 @@ public final class EventTopicDiscovery {
 
         public TopicEvent(String protoPackage, String eventType, String protoRelPath,
                           boolean isRecord, String recordKey, List<QueryField> queryFields,
-                          String retentionTimestampField,
-                          String residency, long residencyWindowSeconds,
                           long residencyIdleSeconds, long residencyDeletedMaxAgeSeconds,
                           String mutability,
                           String storeEpochField, String storeNamespaceField, int minDurableCopies,
@@ -216,9 +186,6 @@ public final class EventTopicDiscovery {
             this.isRecord = isRecord;
             this.recordKey = recordKey;
             this.queryFields = queryFields;
-            this.retentionTimestampField = retentionTimestampField;
-            this.residency = residency;
-            this.residencyWindowSeconds = residencyWindowSeconds;
             this.residencyIdleSeconds = residencyIdleSeconds;
             this.residencyDeletedMaxAgeSeconds = residencyDeletedMaxAgeSeconds;
             this.mutability = mutability;
@@ -230,11 +197,6 @@ public final class EventTopicDiscovery {
             this.outerClassName = outerClassName;
         }
 
-        /** True when the record type declares the warm memory-residency window. */
-        public boolean isWarm() {
-            return RESIDENCY_WARM.equals(residency);
-        }
-
         /** True when the record type is written once and never updated or deleted. */
         public boolean isAppendOnly() {
             return MUTABILITY_APPEND_ONLY.equals(mutability);
@@ -244,7 +206,6 @@ public final class EventTopicDiscovery {
         public String toString() {
             return protoPackage + "." + eventType + " (" + protoRelPath + ")"
                     + (queryFields.isEmpty() ? "" : " query=" + queryFields.size())
-                    + (residency.isEmpty() ? "" : " " + residency)
                     + (mutability.isEmpty() ? "" : " " + mutability);
         }
     }
@@ -262,9 +223,6 @@ public final class EventTopicDiscovery {
      * no (spec.min_durable_copies) of its own — spec.proto's documented default.
      */
     public static final int DEFAULT_MIN_DURABLE_COPIES = 2;
-
-    /** The residency preset that puts a record type on the warm disk tier. */
-    public static final String RESIDENCY_WARM = "RESIDENCY_WARM";
 
     /**
      * The effective (spec.record).residency.idle_seconds for a record that
@@ -320,17 +278,6 @@ public final class EventTopicDiscovery {
     // message, which is exactly the coupling BIG GOAL 3 item 3 removed.
     private static final Pattern RECORD_OPTION_START = Pattern.compile(
             "\\(spec\\.record\\)\\s*=\\s*\\{");
-    // The retention clause, matched only within the record option literal, e.g.
-    //   retention: {timestamp_field: "occurred_at_ms" duration_seconds: 7776000}
-    private static final Pattern RETENTION_TIMESTAMP_FIELD = Pattern.compile(
-            "retention:\\s*\\{[^}]*timestamp_field:\\s*\"(\\w+)\"");
-
-    // The residency clause, matched only within the record option literal, e.g.
-    //   residency: {window: RESIDENCY_WARM window_seconds: 31536000}
-    private static final Pattern RESIDENCY_WINDOW = Pattern.compile(
-            "residency:\\s*\\{[^}]*window:\\s*(RESIDENCY_\\w+)");
-    private static final Pattern RESIDENCY_WINDOW_SECONDS = Pattern.compile(
-            "residency:\\s*\\{[^}]*window_seconds:\\s*(\\d+)");
     // The two lifecycle clocks on the same residency clause, e.g.
     //   residency: {idle_seconds: 3600 deleted_max_age_seconds: 2592000}
     //
@@ -486,8 +433,6 @@ public final class EventTopicDiscovery {
             }
             result.add(new TopicEvent(protoPackage, type, relPath,
                     isRecord, recordKey, queryFields,
-                    parseRetentionTimestampField(recordOption),
-                    parseResidency(recordOption), parseResidencyWindowSeconds(recordOption),
                     parseResidencyIdleSeconds(recordOption),
                     parseResidencyDeletedMaxAgeSeconds(recordOption),
                     parseMutability(recordOption), parseStoreEpochField(eventBody),
@@ -509,48 +454,6 @@ public final class EventTopicDiscovery {
         }
         Matcher m = RECORD_KEY.matcher(recordOption);
         return m.find() ? m.group(1) : DEFAULT_RECORD_KEY;
-    }
-
-    /**
-     * The single field this record's retention age is measured from, read from the
-     * record's own (spec.record).retention clause.
-     *
-     * There is exactly one (spec.record) per message, so there is exactly one
-     * answer to "how old is this event" — no reconciliation across several
-     * declarations is needed or possible. That is the point of putting retention
-     * on the delivery declaration: a record may declare any number of
-     * transformations, and none of them can disagree about its lifetime.
-     */
-    private static String parseRetentionTimestampField(String recordOption) {
-        if (recordOption.isEmpty()) {
-            return "";
-        }
-        Matcher m = RETENTION_TIMESTAMP_FIELD.matcher(recordOption);
-        return m.find() ? m.group(1) : "";
-    }
-
-    /**
-     * The record's declared residency preset, read only from inside its own
-     * (spec.record) literal — the same bounding {@link #recordOptionBlock} gives
-     * retention, and for the same reason: residency is a property of the DELIVERY
-     * declaration, and an unbounded scan would happily pick up a clause belonging
-     * to some other annotation further down the message.
-     */
-    private static String parseResidency(String recordOption) {
-        if (recordOption.isEmpty()) {
-            return "";
-        }
-        Matcher m = RESIDENCY_WINDOW.matcher(recordOption);
-        return m.find() ? m.group(1) : "";
-    }
-
-    /** The record's window_seconds override, or 0 for "use the configured default". */
-    private static long parseResidencyWindowSeconds(String recordOption) {
-        if (recordOption.isEmpty()) {
-            return 0;
-        }
-        Matcher m = RESIDENCY_WINDOW_SECONDS.matcher(recordOption);
-        return m.find() ? Long.parseLong(m.group(1)) : 0;
     }
 
     /**

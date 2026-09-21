@@ -89,7 +89,7 @@ class StartupHealthGateTest {
         }
 
         @Override
-        public void init(int days, long cleanupSecs, long warmWindowSecs, List<String> seeds) {
+        public void init(long cleanupSecs, List<String> seeds) {
             formationEntered.countDown();
             awaitOrFail(releaseFormation, "cluster-formation barrier");
             replayEntered.countDown();

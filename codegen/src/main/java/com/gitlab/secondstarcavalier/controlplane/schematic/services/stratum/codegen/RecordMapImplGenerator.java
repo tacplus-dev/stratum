@@ -83,9 +83,6 @@ public final class RecordMapImplGenerator {
         w.println("import " + CALLER + ";");
         w.println("import " + PROTO_EXCEPTION + ";");
         w.println("import " + COLLECTION_RUNTIME + ";");
-        w.println("import " + HOST_PKG + ".warm.WarmFilter;");
-        w.println("import " + HOST_PKG + ".warm.WarmResidency;");
-        w.println("import " + HOST_PKG + ".warm.WarmStore;");
         w.println("import " + plane.messagesFqn() + ";");
         w.println("import " + plane.wrapperFqn(MODEL_BASE, SM_PREFIX) + ";");
         w.println();
@@ -103,9 +100,6 @@ public final class RecordMapImplGenerator {
         w.println("public final class " + CLASS_NAME + " implements " + iface + "." + iface + "Handler {");
         w.println();
         w.println("    private final Supplier<StratumEventStores> storesSupplier;");
-        w.println("    // The warm disk tier. Supplied, not captured, for the same reason the hot");
-        w.println("    // stores are: StratumHandler rebuilds both on every config update.");
-        w.println("    private final Supplier<WarmStore> warmSupplier;");
         w.println("    // Whether the hot tier's cold-start restore has finished. Supplied for the");
         w.println("    // same reason the stores are, and read per call because it FLIPS during the");
         w.println("    // life of the instance.");
@@ -118,15 +112,12 @@ public final class RecordMapImplGenerator {
         w.println("    private final Object openLock = new Object();");
         w.println();
         w.println("    public " + CLASS_NAME + "(Supplier<StratumEventStores> storesSupplier,");
-        w.println("            Supplier<WarmStore> warmSupplier, BooleanSupplier hotReadable) {");
+        w.println("            BooleanSupplier hotReadable) {");
         w.println("        this.storesSupplier = storesSupplier;");
-        w.println("        this.warmSupplier = warmSupplier;");
         w.println("        this.hotReadable = hotReadable;");
         w.println("    }");
         w.println();
         w.println("    private StratumEventStores stores() { return storesSupplier.get(); }");
-        w.println();
-        w.println("    private WarmStore warm() { return warmSupplier.get(); }");
         w.println();
         w.println("    /**");
         w.println("     * Refuses a read until every reachable instance has replayed its redo log.");
@@ -275,8 +266,7 @@ public final class RecordMapImplGenerator {
             // refuses to generate one that does not. Without it there is no tenant to
             // scope the handle to, and the emitted query would be the unscoped one
             // whose first cross-tenant row halts the JVM in the generated wrapper. Fail
-            // the build instead, the way WarmStoreGenerator refuses a warm record with
-            // no store epoch rather than picking a substitute.
+            // the build instead, rather than picking a substitute.
             if (e.storeNamespaceField.isEmpty()) {
                 throw new IOException(e.protoPackage + "." + t + " declares (spec.record) but no"
                         + " (spec.store_namespace) field; the record query plane cannot scope a"
@@ -310,45 +300,27 @@ public final class RecordMapImplGenerator {
             String matchExpr = hasFilter ? (matchFn + "(f, h.includeDeleted, ev)") : "true";
             String matchCast = hasFilter ? (matchFn + "(f, (" + fqn + ") m)") : "true";
 
-            // Warm record types are served by TWO legs. The memory leg is the hot
-            // store; the disk leg is the node-local Lucene index. They are
-            // partitioned on the store epoch — memory holds epoch >= boundary, disk
-            // holds epoch < boundary — so the union needs no deduplication and the
-            // count is a clean sum. That partition is not free: the memory scan gets
-            // the boundary CUT applied to it here (WarmResidency), because a row
-            // that has aged past the window is still in the Hazelcast map until the
-            // eviction sweep next runs, and without the cut both legs would match it
-            // and Get<T>Count would double it for as long as it sat there. The cut is
-            // per query, so it holds between sweeps rather than after them. For a hot
-            // record type (which is every record type until one declares otherwise)
-            // these emit nothing at all and the bodies are byte-identical to before.
-            boolean warm = e.isWarm();
-            String warmArg = hasFilter ? "f" : "";
-            String dataset = e.protoPackage + "." + t;
-            String residencyBind = warm
-                    ? ("            WarmResidency res = warm().residency(\"" + dataset + "\");\n")
-                    : "";
+            // ONE leg. Every record type is served from its Hazelcast map alone:
+            // the 2026-09-20 record lifecycle decision replaced the HOT/WARM split
+            // and its store-epoch residency boundary with a single per-type idle
+            // clock, which Hazelcast runs itself as per-entry max-idle (see
+            // StratumMapConfig). There is no boundary left for a query to cut on —
+            // a row is in the map or it is not — so the scan is unconditional and
+            // no second leg has to be deduplicated against it.
             // The tenant boundary, applied to the memory leg's every row: a handle
             // opened by a /tenants/<t> caller sees that tenant's rows and nothing else,
             // and a /system handle keeps the fleet-wide read this plane has always
             // served. It is FIRST so a pinned scan rejects a foreign row before it
             // evaluates the caller's own predicate on it.
-            String memoryCond = (warm
-                    ? "res.inMemory(ev." + keyGetter + "(), ev.get" + pascal(e.storeEpochField) + "()) && "
-                    : "")
-                    + "inNamespace(h, ev." + nsGetter + "())"
+            String memoryCond = "inNamespace(h, ev." + nsGetter + "())"
                     + (hasFilter ? " && " + matchExpr
                             : deletedGetter.isEmpty()
                                     ? ""
                                     : " && (h.includeDeleted || !ev." + deletedGetter + "())");
-            String memoryCountLeg = residencyBind
-                    + "            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + memoryCond + ") n++;"
-                    + (warm ? "\n            n += " + lower("WarmCount" + t) + "(h"
-                            + (hasFilter ? ", " + warmArg : "") + ");" : "");
-            String memoryMatchLeg = residencyBind
-                    + "            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + memoryCond + ") matches.add(ev);"
-                    + (warm ? "\n            for (" + fqn + " ev : " + lower("Warm" + t) + "(" + warmArg + "))"
-                            + " if (inNamespace(h, ev." + nsGetter + "())) matches.add(ev);" : "");
+            String memoryCountLeg =
+                    "            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + memoryCond + ") n++;";
+            String memoryMatchLeg =
+                    "            for (" + fqn + " ev : stores()." + acc + "().values()) if (" + memoryCond + ") matches.add(ev);";
 
             // match<T>: true when a record satisfies the typed filter. Getter-based,
             // no Hazelcast attribute coupling. Only for filterable record types.
@@ -390,10 +362,6 @@ public final class RecordMapImplGenerator {
                 w.println("    }");
 
 
-            }
-
-            if (warm) {
-                emitWarmLeg(w, e, fqn, msgs, hasFilter, nsGetter);
             }
 
             // Emitted at the top of every store-scanning body: bind `h` to the
@@ -544,85 +512,6 @@ public final class RecordMapImplGenerator {
         }
 
         w.println("}");
-    }
-
-    /**
-     * The disk leg for one warm record type: the caller's typed filter translated
-     * into the tier's criteria, then the hits and the count.
-     *
-     * The translation is deliberately the SAME field list and the SAME
-     * set/unset test the in-memory match uses — {@code has<Field>()} decides
-     * whether a criterion narrows anything, on both legs. A criterion applied to
-     * only one of them would make the two legs disagree, which is the one failure
-     * a two-leg query cannot absorb.
-     *
-     * Where the leg boundary is, whether the leg can be skipped outright, and which
-     * slices are opened are all decided inside WarmStore from the dataset's own
-     * residency window. None of it is generated, because none of it is per-type.
-     */
-    private static void emitWarmLeg(PrintWriter w, EventTopicDiscovery.TopicEvent e,
-                                    String fqn, String msgs, boolean hasFilter, String nsGetter) {
-        String t = e.eventType;
-        String dataset = e.protoPackage + "." + t;
-        String filterTy = msgs + "." + t + "Filter";
-        String params = hasFilter ? (filterTy + " f") : "";
-        String args = hasFilter ? "f" : "";
-
-        w.println();
-        w.println("    /** The caller's filter, as the warm tier's criteria. */");
-        w.println("    private static WarmFilter " + lower("WarmFilter" + t) + "(" + params + ") {");
-        w.println("        WarmFilter wf = new WarmFilter();");
-        for (EventTopicDiscovery.QueryField qf : e.queryFields) {
-            String P = pascal(qf.name);
-            if (qf.range) {
-                w.println("        if (f.has" + P + "From() || f.has" + P + "To()) wf.range(\"" + qf.name + "\",");
-                w.println("                f.has" + P + "From() ? f.get" + P + "From() : null,");
-                w.println("                f.has" + P + "To() ? f.get" + P + "To() : null);");
-            } else if ("string".equals(qf.protoType)) {
-                w.println("        if (f.has" + P + "()) wf.eq(\"" + qf.name + "\", f.get" + P + "());");
-            } else if (WarmStoreGenerator.isEnum(qf.protoType)) {
-                w.println("        if (f.has" + P + "()) wf.eq(\"" + qf.name + "\", (long) f.get" + P + "Value());");
-            } else if ("bool".equals(qf.protoType)) {
-                w.println("        if (f.has" + P + "()) wf.eq(\"" + qf.name + "\", f.get" + P + "() ? 1L : 0L);");
-            } else {
-                w.println("        if (f.has" + P + "()) wf.eq(\"" + qf.name + "\", (long) f.get" + P + "());");
-            }
-        }
-        w.println("        return wf;");
-        w.println("    }");
-
-        w.println();
-        w.println("    /** The disk leg's matching rows. Empty when the leg is provably outside the query. */");
-        w.println("    private java.util.List<" + fqn + "> " + lower("Warm" + t) + "(" + params + ") throws Exception {");
-        w.println("        java.util.List<" + fqn + "> out = new ArrayList<>();");
-        w.println("        for (byte[] bytes : warm().query(\"" + dataset + "\", "
-                + lower("WarmFilter" + t) + "(" + args + "))) {");
-        w.println("            out.add(" + fqn + ".parseFrom(bytes));");
-        w.println("        }");
-        w.println("        return out;");
-        w.println("    }");
-
-        w.println();
-        w.println("    /**");
-        w.println("     * The disk leg's match count.");
-        w.println("     *");
-        w.println("     * A fleet-wide (/system) handle is summed per slice without materialising a");
-        w.println("     * single hit, as before. A tenant-pinned handle cannot be: the tier indexes");
-        w.println("     * (spec.query_field) criteria only, and (spec.store_namespace) is");
-        w.println("     * deliberately not one of them — so its own rows are counted off the parsed");
-        w.println("     * hits, which is the same set list<T> and get<T>Sample already page.");
-        w.println("     */");
-        w.println("    private long " + lower("WarmCount" + t) + "(Handle h"
-                + (hasFilter ? ", " + filterTy + " f" : "") + ") throws Exception {");
-        w.println("        if (!h.pinned) {");
-        w.println("            return warm().count(\"" + dataset + "\", " + lower("WarmFilter" + t) + "(" + args + "));");
-        w.println("        }");
-        w.println("        long n = 0;");
-        w.println("        for (" + fqn + " ev : " + lower("Warm" + t) + "(" + args + ")) {");
-        w.println("            if (inNamespace(h, ev." + nsGetter + "())) n++;");
-        w.println("        }");
-        w.println("        return n;");
-        w.println("    }");
     }
 
     /**

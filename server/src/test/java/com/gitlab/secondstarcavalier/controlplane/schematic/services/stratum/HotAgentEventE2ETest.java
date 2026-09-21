@@ -29,7 +29,6 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotRedoLogs;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotRestore;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotWrites;
-import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.warm.WarmStore;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.diskstore.Codec;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.token.TokenWrapper;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.vservices.query.RecordMap;
@@ -123,7 +122,6 @@ class HotAgentEventE2ETest {
         assertEquals(2, stores.totalCount(),
                 "a fixture failed the generated AgentEvent validation and was dropped");
 
-        WarmStore warm = new WarmStore(Path.of("target", "warm-hot-e2e-unused"), List.of());
         var authorizer = new com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum
                 .model.chassis.grpcserver.Authorizer(sink -> { }) {
             @Override
@@ -132,7 +130,7 @@ class HotAgentEventE2ETest {
             }
         };
         server = NettyServerBuilder.forPort(0)
-                .addService(new RecordMap(new StratumRecordMaps(() -> stores, () -> warm, hotReadable::get), authorizer))
+                .addService(new RecordMap(new StratumRecordMaps(() -> stores, hotReadable::get), authorizer))
                 .build()
                 .start();
         channel = PullAgentEvent.channel("localhost:" + server.getPort(), true);

@@ -174,28 +174,37 @@ class EventStoreResidencyTest {
     }
 
     /**
-     * A record with no retention clause contributes no sweep line rather than a
-     * broken one.
+     * The retention sweep is GONE from the generated store entirely — not merely
+     * emitted with no lines in it.
      *
-     * <p>Hazelcast resolves a predicate attribute by reflecting for a getter, so an
-     * empty attribute name would throw {@code QueryException} inside the scheduled
-     * sweep and abort the whole pass — including the maps whose name WAS right.
-     * Emitting nothing is the honest answer: the lifecycle of such a record is the
-     * two residency clocks, not a business timestamp.
+     * <p>Retention was the old model's only bound on growth, and it measured from a
+     * per-record business timestamp declared as
+     * {@code (spec.record).retention.timestamp_field}. The 2026-09-20 record
+     * lifecycle decision retired that annotation and replaced the sweep with two
+     * clocks: {@code idleSeconds} ages a row out of MEMORY (Hazelcast max-idle), and
+     * the daily checkpoint purges a flagged-deleted row past
+     * {@code deleted_max_age_seconds}. Neither needs a business timestamp, and no
+     * proto declares one any more — so a {@code runRetention} left on the generated
+     * store would be a method the caller could only call to do nothing, and
+     * {@code EventStore} no longer has a caller for it at all.
      */
     @Test
-    void noRetentionClauseEmitsNoSweepLine(@TempDir Path dir) throws IOException {
+    void noRetentionSweepIsGeneratedAtAll(@TempDir Path dir) throws IOException {
         String src = generate(dir, DECLARED);
 
-        assertTrue(src.contains("public void runRetention(long cutoffMs) {"), src);
-        assertFalse(src.contains("Predicates.lessThan(\"\""),
-                "an empty attribute name takes the whole sweep down at run time:\n" + src);
-        assertFalse(src.contains("demoDemoEvent.removeAll("), src);
+        assertFalse(src.contains("runRetention"),
+                "the retired retention sweep is still generated:\n" + src);
+        assertFalse(src.contains("Predicates.lessThan("),
+                "a retention predicate survived:\n" + src);
     }
 
-    /** A record that still declares the old retention clause keeps its sweep line. */
+    /**
+     * ...including for a proto that still carries the retired clause. The clause is
+     * inert now, not a trigger: reading it would resurrect the sweep for exactly the
+     * types slowest to be re-annotated.
+     */
     @Test
-    void aRetentionClauseStillEmitsItsSweepLine(@TempDir Path dir) throws IOException {
+    void aSurvivingRetentionClauseGeneratesNoSweepLine(@TempDir Path dir) throws IOException {
         String src = generate(dir, """
                   option (spec.record) = {key: "demo_id"
                     retention: {timestamp_field: "occurred_at_ms" duration_seconds: 100}};
@@ -203,7 +212,7 @@ class EventStoreResidencyTest {
                   int64 occurred_at_ms = 2;
                 """);
 
-        assertTrue(src.contains(
-                "demoDemoEvent.removeAll(Predicates.lessThan(\"occurredAtMs\", cutoffMs));"), src);
+        assertFalse(src.contains("runRetention"), src);
+        assertFalse(src.contains("occurredAtMs"), src);
     }
 }

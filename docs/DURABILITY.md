@@ -10,8 +10,7 @@ map this document used to describe. A record stratum holds is recoverable from:
    is acked only once that many distinct instances hold it; a below-quorum write
    throws rather than storing locally (`HotWrites`).
 2. **This pod's own volume.** A checkpoint plus a redo log, per pod, under
-   `<dataRoot>` — the subject of the rest of this document. Record types tiered to
-   disk additionally have a node-local Lucene index (`WarmStore`).
+   `<dataRoot>` — the subject of the rest of this document.
 3. **The event log.** Records are event-sourced: they are written only by republish
    on the record's bus, and the record plane is read-only. A pod with no volume and
    no peers rebuilds from offset zero (`ColdStartRebuilder`).
@@ -28,7 +27,7 @@ and one pod doing it for the cluster would leave every other pod with no baselin
 
 1. **Purge.** Every row whose `(spec.deleted_flag)` field is true and whose delete
    `(spec.store_epoch)` is older than the deleted-max-age is appended to the pod's
-   tombstone log and then removed from memory and from this node's Lucene index.
+   tombstone log and then removed from memory.
    The tombstone line is written **before** the removal: a crash between the two
    leaves a line for a row that is still present, which the next sweep writes again
    and which is harmless, while the other order can lose the row with no trace.
@@ -56,7 +55,6 @@ and seen again on retry is simply purged again.
 <dataRoot>/checkpoint/current           a text file holding one <ts>
 <dataRoot>/hot/…/<map>.log              this pod's redo log, the tail since <ts>
 <dataRoot>/tombstones/<yyyy-MM-dd>.jsonl   every row this pod has purged, UTC days
-<dataRoot>/warm/<dataset>/<slice>/      the Lucene leg, for disk-tiered types
 ```
 
 `current` is a **pointer file, not a symlink**. Both are updated by the same atomic
@@ -90,27 +88,58 @@ size of the history. **A purged row can never come back**: it is absent from the
 dump, and the redo tail that still mentioned it was discarded by the same
 transaction's truncate.
 
-## What is NOT cut over yet
+## Memory residency
 
-Stated because the code has two mechanisms where the 2026-09-20 record lifecycle
-decision has one:
+One clock per record type, and Hazelcast runs it: per-entry **max-idle** set from
+`(spec.record).residency.idle_seconds` (`StratumMapConfig`, from the generated
+`StratumEventStores.idleSeconds`). A row stays resident while it is read or
+written and leaves memory once it has gone `idle_seconds` with neither. A read
+resets the clock without restamping `(spec.store_epoch)`, appending to the redo
+log or touching disk.
 
-- **The old retention sweep still runs**, on the same scheduler tick, leader-gated
-  (`EventStore.runCleanupCycle`). No fleet record type carries
-  `(spec.deleted_flag)` yet — the annotation is on tacplus's unmerged branch — so
-  the purge step selects nothing, and removing retention today would simply let
-  every store grow without bound. Retention goes when the fleet annotation pass has
-  run.
-- **`deleted_max_age_seconds` is a flat platform default**, not the per-type
-  annotation the decision specifies: 30 days, overridable with
-  `STRATUM_DELETED_MAX_AGE_SECONDS`. `Config` is a tacplus-owned proto in another
-  repository, so this knob has the same shape `STRATUM_MIN_DURABLE_COPIES` already
-  has. The per-type read replaces it at one call site once the annotation lands.
-- **`WarmResidency` / `WarmEviction`'s memory-residency window is untouched.** It
-  is replaced by Hazelcast per-entry max-idle driven by
-  `(spec.record).residency.idle_seconds`, which is the same blocked annotation.
-  Removing the window before the idle clock exists would leave the two legs of a
-  disk-tiered read with no partition between them.
+This replaced, on 2026-09-20:
+
+- **The HOT/WARM/COLD residency classes** and the per-query residency boundary
+  (`WarmResidency`) that partitioned a warm type's memory and disk legs. There is
+  one leg now, so there is nothing to partition and nothing to deduplicate.
+- **`WarmEviction`**, the periodic sweep that dropped rows whose `store_epoch` had
+  aged past that boundary. It measured a WRITE clock on a sweep interval; max-idle
+  measures reads and writes, per entry, continuously.
+- **The `retention_days` sweep** (`EventStore.runRetentionCleanup`, the generated
+  `StratumEventStores.runRetention`). It measured each record's declared
+  `(spec.record).retention.timestamp_field`, an annotation retired with the same
+  decision — no proto declares one, so the sweep had become a no-op before it was
+  removed.
+- **The node-local Lucene tier** (`WarmStore`/`WarmIndex`), which was keyed on the
+  retired `residency: {window: RESIDENCY_WARM}` preset and generated an empty
+  dataset list once no proto declared it.
+
+### Known gap: idle eviction has no disk leg under it
+
+The decision specifies that an idle-evicted row "lives on disk (Lucene) only" and
+that "the next touch reloads it". **That leg does not exist.** The Lucene tier that
+was removed was the warm model's, keyed on the retired preset and empty; the
+per-type leg the decision calls for ("every type gets the Lucene leg") has not been
+built, and there is no Hazelcast `MapLoader` behind any record map.
+
+Consequences, all of which predate the removal — they arrived with max-idle itself:
+
+- An idle-evicted row is **gone**, not tiered. The next touch reads nothing.
+- The daily checkpoint dumps `HazelcastRows.entries`, i.e. what is resident. A row
+  evicted before the dump is absent from it, and step 3 then truncates the redo tail
+  that still named it — so the loss becomes durable at the next checkpoint.
+
+Until the per-type disk leg and its read-through loader exist, `idle_seconds` is a
+**data-retention bound, not a cache-residency bound**. See
+`looper/schematic/workers/stratum-warm-cutover-questions.md`.
+
+### Cold start keeps its event-log fallback
+
+`ColdStartRebuilder` is retained deliberately; see "Cold start" above. The
+checkpoint makes it unreachable for a pod that has one, which is the cutover the
+decision asked for. A pod with no checkpoint — a first boot, a replaced volume —
+still replays, and deleting that path would leave such a pod with no recovery route
+when the `stratum` consumer group's offsets have already advanced past the history.
 
 ## What stratum does NOT guarantee
 
@@ -140,3 +169,6 @@ decision has one:
   real generated type's `(spec.store_epoch)`.
 - `HotRedoRestoreTest`, `HotRestoreLedgerTest` — the redo leg and the cross-node
   restore barrier. `ColdStartRebuilderTest` — the event-log replay decision.
+- `StratumMapConfigDurabilityTest.everyRecordMapCarriesItsDeclaredIdleClock` — every
+  record map is configured with its declared clock; `IdleResidencyEvictionTest` —
+  that the clock actually evicts, and that a read resets it without writing.

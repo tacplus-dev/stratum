@@ -62,14 +62,15 @@ class HotStoreGeneratorTest {
             """;
 
     /**
-     * A warm record: a store epoch is MANDATORY on the warm tier, so this is the
-     * shape every warm record has and the reason the epoch test alone is not the
-     * right predicate.
+     * What used to be declared as a warm record: the retired
+     * {@code residency: {window: RESIDENCY_WARM}} preset, on a type that carries a
+     * store epoch. Kept as a fixture because protos in the wild may still carry the
+     * retired clause, and the point of the test below is that it no longer changes
+     * the answer.
      */
-    private static final String WARM_EVENT = """
+    private static final String RETIRED_WARM_PRESET_EVENT = """
               option (spec.record) = {
                 key: "demo_id"
-                retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
                 residency: {window: RESIDENCY_WARM}
               };
               string demo_id = 1;
@@ -157,30 +158,29 @@ class HotStoreGeneratorTest {
     }
 
     /**
-     * A RESIDENCY_WARM record gets NO redo descriptor, even though it necessarily
-     * carries a store epoch.
+     * The store epoch is now the WHOLE predicate: a record carrying one gets a redo
+     * descriptor, whatever residency preset it declares.
      *
-     * The two tiers are supposed to recover differently — hot from snapshot + redo
-     * replay, warm from its own disk tier — and the epoch test alone would have
-     * given every warm record both. That is a second write of the same bytes for no
-     * durability gain, and once the row ages past its residency window it is
-     * actively wrong: replay would put back into memory exactly the rows the
-     * eviction sweep removed from it, and then both legs would serve them. Its
-     * control is {@link #aRecordWithAStoreEpochGetsAReplayableDescriptor} — the same
-     * fixture WITHOUT the residency clause does get one, so this cannot pass by the
-     * fixture simply having failed to declare an epoch.
+     * <p>This inverts the assertion this test used to make. Under the HOT/WARM model
+     * a warm record was excluded here, because it recovered through its own Lucene
+     * tier instead and a redo log on top would have replayed back into memory
+     * exactly the rows the eviction sweep had just removed. The 2026-09-20 record
+     * lifecycle decision removed that tier and the window with it: there is one
+     * memory clock now, eviction is Hazelcast max-idle, and recovery for every type
+     * is the checkpoint plus its redo tail. So the exclusion had nothing left to
+     * protect, and a type that declares the retired preset must not silently lose
+     * the redo log its recovery now depends on.
      */
     @Test
-    void aWarmRecordGetsNoRedoDescriptorDespiteCarryingAStoreEpoch(@TempDir Path dir)
+    void aRecordWithAStoreEpochGetsARedoDescriptorEvenUnderTheRetiredWarmPreset(@TempDir Path dir)
             throws IOException {
-        EventTopicDiscovery.TopicEvent warm = only(proto(dir, WARM_EVENT));
-        assertTrue(warm.isWarm(), "the fixture is not warm; the test would pass vacuously");
-        assertEquals("store_epoch_ms", warm.storeEpochField,
+        EventTopicDiscovery.TopicEvent e = only(proto(dir, RETIRED_WARM_PRESET_EVENT));
+        assertEquals("store_epoch_ms", e.storeEpochField,
                 "the fixture must carry the epoch, or this is the no-epoch test again");
 
-        String src = HotStoreGenerator.render(List.of(warm));
+        String src = HotStoreGenerator.render(List.of(e));
 
-        assertFalse(src.contains("new HotDataset("), src);
+        assertTrue(src.contains("new HotDataset("), src);
         assertTrue(src.contains("public static List<HotDataset> datasets()"), src);
     }
 

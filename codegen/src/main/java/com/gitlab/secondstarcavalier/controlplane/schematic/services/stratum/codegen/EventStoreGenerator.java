@@ -12,7 +12,7 @@ import java.util.List;
  *
  * For every EventBus topic event type (discovered by {@link EventTopicDiscovery})
  * it emits a typed {@code IMap<String, EventType>} plus generic operations
- * ({@code store}, {@code totalCount}, {@code runRetention}). Stratum's
+ * ({@code store}, {@code totalCount}, {@code idleSeconds}). Stratum's
  * hand-written code calls only those generic operations and never names a
  * vservice — so adding a vservice (or .off-ing its proto) regenerates this
  * class with no hand-edit, satisfying: a service contains no hand-written
@@ -50,14 +50,13 @@ public final class EventStoreGenerator {
         w.println("import com.google.protobuf.Message;");
         w.println("import com.hazelcast.core.HazelcastInstance;");
         w.println("import com.hazelcast.map.IMap;");
-        w.println("import com.hazelcast.query.Predicates;");
         w.println("import " + HOST_PKG + ".hot.HotWrites;");
         w.println("import org.slf4j.Logger;");
         w.println("import org.slf4j.LoggerFactory;");
         w.println();
         w.println("/**");
         w.println(" * Typed per-vservice hot store. One IMap<event_id, EventType> per");
-        w.println(" * EventBus topic; generic store/count/retention over all of them.");
+        w.println(" * EventBus topic; generic store/count over all of them.");
         w.println(" */");
         w.println("public final class " + CLASS_NAME + " {");
         w.println();
@@ -154,19 +153,6 @@ public final class EventStoreGenerator {
             w.println("        n += " + field(e) + ".size();");
         }
         w.println("        return n;");
-        w.println("    }");
-        w.println();
-
-        // runRetention
-        w.println("    /** Removes events older than cutoffMs from every typed store. */");
-        w.println("    public void runRetention(long cutoffMs) {");
-        for (EventTopicDiscovery.TopicEvent e : events) {
-            if (e.retentionTimestampField.isEmpty()) {
-                continue;
-            }
-            w.println("        " + field(e) + ".removeAll(Predicates.lessThan(\""
-                    + retentionAttribute(e) + "\", cutoffMs));");
-        }
         w.println("    }");
         w.println();
 
@@ -300,40 +286,6 @@ public final class EventStoreGenerator {
     }
 
     /**
-     * The Hazelcast attribute the retention sweep filters on, for one event type.
-     *
-     * Hazelcast resolves a predicate attribute by reflecting for a JavaBean
-     * getter, so the name must be the camelCase property (occurredAtMs ->
-     * getOccurredAtMs()), not the proto field name. Which field carries the
-     * event's age is declared per record by
-     * (spec.record).retention.timestamp_field — it is
-     * "timestamp_ms" on AgentEvent but "occurred_at_ms" on TaskActivity, so a
-     * single hard-coded name is wrong for some record type by construction.
-     * Emitting the wrong one is silent at build time and fails only at run time,
-     * inside the scheduled sweep, where a QueryException aborts the whole
-     * retention pass — including the maps whose name WAS right — and the store
-     * grows without bound.
-     *
-     * A stored record with no retention clause contributes no sweep line at all
-     * (see the runRetention emission), so this is only ever asked about a record
-     * that declared one.
-     *
-     * <p>It used to THROW for a record with no
-     * (spec.record).retention.timestamp_field, failing generation for the whole
-     * fleet. That gate outlived the thing it was checking: (spec.record).retention
-     * was retired on 2026-09-20 with the HOT/WARM/COLD residency model, so under
-     * tacplus's current annotation surface there is no timestamp_field for any
-     * record to declare and the gate would refuse every converted proto. The
-     * lifecycle it was standing in for is now the two residency clocks —
-     * {@link #idleSeconds} ages a row out of memory, and the daily checkpoint
-     * purges a flagged-deleted row past deleted_max_age_seconds — neither of
-     * which needs a business timestamp field to measure from.
-     */
-    private static String retentionAttribute(EventTopicDiscovery.TopicEvent e) {
-        return camel(e.retentionTimestampField);
-    }
-
-    /**
      * The int literal emitted for one record's idle clock.
      *
      * <p>Narrowed from the proto's int64 because that is the type Hazelcast's
@@ -353,12 +305,6 @@ public final class EventStoreGenerator {
                     + e.protoRelPath + ".");
         }
         return Long.toString(e.residencyIdleSeconds);
-    }
-
-    /** snake_case proto field -> lowerCamelCase property (occurred_at_ms -> occurredAtMs). */
-    private static String camel(String snake) {
-        String p = pascal(snake);
-        return Character.toLowerCase(p.charAt(0)) + p.substring(1);
     }
 
     /** snake_case proto field -> PascalCase getter stem (event_id -> EventId). */

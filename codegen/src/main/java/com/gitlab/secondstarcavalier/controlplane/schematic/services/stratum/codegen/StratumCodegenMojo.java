@@ -102,13 +102,6 @@ public class StratumCodegenMojo extends AbstractMojo {
             EventStoreGenerator.generate(out, events);
             getLog().info("Generated StratumEventStores.java");
 
-            // The warm disk tier's dataset descriptors. Only record types declaring
-            // (spec.record).residency = {window: RESIDENCY_WARM} get one; with none
-            // declared the list is empty and the tier holds nothing, but the wiring
-            // around it is still generated and compiled.
-            WarmStoreGenerator.generate(out, events);
-            getLog().info("Generated StratumWarmStores.java");
-
             // The hot tier's redo-log descriptors. Only record types carrying
             // (spec.store_epoch) get one — a per-node log with no epoch cannot be
             // unioned back across nodes at restore — and with none declared the

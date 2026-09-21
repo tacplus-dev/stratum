@@ -32,9 +32,14 @@ stratum provides the infrastructure for that persistence.
     flagged-deleted rows past their max age into a write-only tombstone log, dump
     every surviving row to `<dataRoot>/checkpoint/<ts>` committed by one atomic
     rename, then truncate the redo logs to that dump point. Cold start is that
-    checkpoint plus the redo tail, not a replay from offset zero. The old
-    `retention_days` sweep still runs alongside it and is not yet retired; see
-    `docs/DURABILITY.md` for the mechanism, the layout and what is not cut over.
+    checkpoint plus the redo tail, not a replay from offset zero.
+  - **Memory residency**: one clock per record type, run by Hazelcast as
+    per-entry max-idle from `(spec.record).residency.idle_seconds`. A row stays
+    resident while it is read or written and leaves memory once it has gone that
+    long with neither. This replaced the HOT/WARM/COLD residency classes, the
+    `retention_days` sweep and the node-local Lucene tier, all removed on
+    2026-09-20. See `docs/DURABILITY.md` for the mechanism, the layout, and the
+    known gap: idle eviction currently has no disk leg under it.
   - **Session aggregation** (`StratumQueryImpl.buildSessionSummaries`): folds
     AgentEvent records grouped by `session_id` into `SessionSummary`. Each
     summary tracks first/last timestamps, event count, max call depth,

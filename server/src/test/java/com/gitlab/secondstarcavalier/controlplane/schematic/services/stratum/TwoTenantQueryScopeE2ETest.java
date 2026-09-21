@@ -28,7 +28,6 @@ import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotWrites;
-import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.warm.WarmStore;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.grpcserver.Authorizer;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.servicemanager.Auth;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.token.TokenWrapper;
@@ -154,10 +153,9 @@ class TwoTenantQueryScopeE2ETest {
             }
         };
 
-        WarmStore warm = new WarmStore(Path.of("target", "warm-two-tenant-e2e-unused"), List.of());
         server = NettyServerBuilder.forPort(0)
                 .addService(ServerInterceptors.intercept(
-                        new RecordMap(new StratumRecordMaps(() -> stores, () -> warm, () -> true),
+                        new RecordMap(new StratumRecordMaps(() -> stores, () -> true),
                                 authorizer),
                         Authorizer.headerCaptureInterceptor()))
                 .build()

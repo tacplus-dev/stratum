@@ -8,7 +8,6 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collection;
 import java.util.Comparator;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -16,7 +15,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.BiPredicate;
 import java.util.function.BooleanSupplier;
 
 import org.slf4j.Logger;
@@ -37,11 +35,7 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.che
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.checkpoint.HazelcastRows;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.checkpoint.TombstoneLog;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumMapConfig;
-import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumEpochExtractor;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumEventTypeExtractor;
-import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.warm.WarmDataset;
-import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.warm.WarmIndex;
-import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.warm.WarmStore;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotDataset;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotRedoLogs;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotRestore;
@@ -54,41 +48,26 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
  * Data model: IMap<event_id, AgentEvent> named "events".
  *
  * Indexes (via ValueExtractor or Hazelcast native attribute reflection):
- *   - SORTED:  epoch (StratumEpochExtractor), timestampMs
+ *   - SORTED:  epoch, timestampMs
  *   - HASH:    spiffeId, sessionId, agentId, eventTypeValue (StratumEventTypeExtractor)
  *
- * Retention:
- * Warm tier:
- *   Record types declaring (spec.record).residency = {window: RESIDENCY_WARM}
- *   are ALSO written to a node-local Lucene index under the pod's volume, so a
- *   row evicted from the memory window is still complete and queryable. The disk
- *   write is off the ack path — see WarmStore — so ingest latency is unchanged.
- *   With no warm-typed record declared the tier holds nothing and touches no
- *   file, which is stratum's state today.
+ * Record residency:
+ *   One clock per record type, and Hazelcast runs it: per-entry max-idle set
+ *   from (spec.record).residency.idle_seconds (see StratumMapConfig). A row
+ *   stays resident while it is read or written and is evicted from memory once
+ *   it has gone idle_seconds with neither. Nothing here sweeps for it, and a
+ *   read never restamps (spec.store_epoch) or appends to the redo log.
  *
- *   A row whose store epoch has aged past the residency window is served by the
- *   disk leg alone — the memory leg's cut (WarmResidency) is applied per query, so
- *   that is true from the instant the boundary passes, not from the next sweep.
- *   WarmEviction then drops the row from the map to get the memory back; see
- *   {@link #runWarmEviction()}.
- *
- * Retention:
- *   Runs on cleanup_interval_seconds. Deletes entries older than
- *   (now - retentionDays * 86400000) from every typed store. Which field
- *   carries an event's age differs per record type (timestampMs on AgentEvent,
- *   occurredAtMs on TaskActivity), so the per-type predicate is emitted by the
- *   generator from each record's declared retention timestamp_field, not named
- *   here. Runs only on the oldest cluster member to avoid duplicate work
- *   across nodes.
+ *   This replaced the HOT/WARM/COLD residency classes, the separate
+ *   retention_days sweep and the node-local Lucene tier they partitioned
+ *   against, per the 2026-09-20 record lifecycle decision.
  *
  * Daily checkpoint:
  *   On the same cleanup_interval_seconds tick, and per pod rather than per
  *   cluster, {@link #runDailyCheckpoint()} runs the record-lifecycle transaction:
  *   purge flagged-deleted rows past their max age into the tombstone log, dump
  *   every surviving row to a new checkpoint, truncate the redo logs to it. It is
- *   also what makes cold start bounded — see {@link #loadCheckpoint()}. The
- *   retention sweep above is what it is meant to REPLACE and has not yet; see
- *   {@link #runCleanupCycle()} and docs/DURABILITY.md for why both still run.
+ *   also what makes cold start bounded — see {@link #loadCheckpoint()}.
  *
  * Thread safety: HazelcastInstance is thread-safe. AtomicLong stats are thread-safe.
  */
@@ -102,7 +81,6 @@ public class EventStore {
     // Agent-specific read path: reads the same Hazelcast map the generated
     // store writes for agentsensor.AgentEvent.
     private IMap<String, AgentEvent> events;
-    private WarmStore warm;
     private HotRedoLogs hotLogs;
     private HotWrites hotWrites;
     /**
@@ -118,7 +96,7 @@ public class EventStore {
      *
      * <p>This is a SECOND leg of the same gate, not a refinement of the first. The
      * redo barrier only covers record types that have a redo log; the types that
-     * do not are recovered by {@code ColdStartRebuilder} replaying the event log,
+     * do not are recovered by the event-log replay,
      * which runs asynchronously and long after the redo barrier clears. Opening
      * reads on the redo barrier alone answers queries for those types out of a
      * store that is still filling — empty or partial results, indistinguishable
@@ -133,7 +111,6 @@ public class EventStore {
      * rebuild that was never going to run.
      */
     private volatile boolean coldStartReplayDone;
-    private int retentionDays;
     private Checkpoint checkpoint;
     private DailyCheckpoint dailyCheckpoint;
     private long deletedMaxAgeSeconds;
@@ -157,8 +134,6 @@ public class EventStore {
     private final ScheduledExecutorService cleaner = Executors.newSingleThreadScheduledExecutor(
             r -> { Thread t = new Thread(r, "stratum-event-cleaner"); t.setDaemon(true); return t; });
 
-    private final AtomicLong lastCleanupMs      = new AtomicLong(0);
-    private final AtomicLong lastCleanupRemoved = new AtomicLong(0);
     private final AtomicLong lastCheckpointMs     = new AtomicLong(0);
     private final AtomicLong lastCheckpointPurged = new AtomicLong(0);
 
@@ -193,19 +168,11 @@ public class EventStore {
     /**
      * Initialises the Hazelcast member and the "events" IMap.
      *
-     * @param retentionDays       days to retain events
-     * @param cleanupIntervalSecs how often the retention job runs
-     * @param warmWindowSeconds   memory-residency window for warm-tiered records;
-     *                            rows older than it are served from disk. Shorter
-     *                            than retention, or nothing ever reaches the disk
-     *                            leg before retention deletes it.
+     * @param cleanupIntervalSecs how often the daily checkpoint runs
      * @param seedMembers         list of "host:port" addresses for TCP/IP join;
      *                            empty → multicast (dev only)
      */
-    public void init(int retentionDays, long cleanupIntervalSecs, long warmWindowSeconds,
-                     List<String> seedMembers) {
-        this.retentionDays = retentionDays;
-
+    public void init(long cleanupIntervalSecs, List<String> seedMembers) {
         int floorOverride = StratumMapConfig.configuredMinDurableCopies();
         int minDurableCopies = floorOverride > 0
                 ? floorOverride
@@ -240,32 +207,29 @@ public class EventStore {
         loadCheckpoint();
         restoreHotTier(hotDatasets, minDurableCopies);
 
-        try {
-            warm = new WarmStore(dataRoot(), StratumWarmStores.datasets(warmWindowSeconds));
-        } catch (IOException e) {
-            throw new IllegalStateException("warm tier could not open its directory under " + dataRoot(), e);
-        }
-        // Unconditional, before the first write: a cross-slice update interrupted
-        // between its two commits leaves a stale copy nothing else would notice.
-        // Same posture as ColdStartRebuilder — repair rather than trust.
-        warm.reconcile();
-
         this.deletedMaxAgeSeconds = configuredDeletedMaxAgeSeconds();
         this.dailyCheckpoint = new DailyCheckpoint(
                 new HazelcastRows(hz, StratumEventStores.mapNames()),
-                warm::purge,
+                // No second on-disk row index to purge from. The node-local Lucene
+                // tier was the warm model's disk leg and went with it; this pod's
+                // durable copy of a row is the checkpoint, and step 2 rewrites that
+                // from what survived step 1. A purged row is therefore absent from
+                // the next dump, and the redo tail that still named it is discarded
+                // by step 3's truncate.
+                DailyCheckpoint.DiskPurge.NONE,
                 new TombstoneLog(dataRoot()),
                 checkpoint,
                 hotLogs::truncateToCheckpoint);
 
+        // Per pod, not leader-gated: the transaction writes this pod's own volume
+        // and truncates this pod's own redo logs, so one pod running it for the
+        // cluster would leave every other pod with no baseline to start from.
         cleaner.scheduleWithFixedDelay(
-                this::runCleanupCycle,
+                this::runDailyCheckpoint,
                 cleanupIntervalSecs, cleanupIntervalSecs, TimeUnit.SECONDS);
 
-        log.info("EventStore initialised: retention_days={}, warm_window_seconds={},"
-                + " deleted_max_age_seconds={}, seed_members={}",
-                retentionDays, warmWindowSeconds, deletedMaxAgeSeconds,
-                seedMembers.isEmpty() ? "multicast" : seedMembers);
+        log.info("EventStore initialised: deleted_max_age_seconds={}, seed_members={}",
+                deletedMaxAgeSeconds, seedMembers.isEmpty() ? "multicast" : seedMembers);
     }
 
     // -----------------------------------------------------------------------
@@ -278,183 +242,7 @@ public class EventStore {
      * StratumEventStores, so this code names no vservice.
      */
     public boolean store(Message event) {
-        return ingest(warm, event, this::memoryHolds, () -> stores.store(event));
-    }
-
-    /**
-     * True when the memory leg already holds this key of this dataset.
-     *
-     * The dataset name IS the Hazelcast map name — one identifier names the type in
-     * both tiers (see {@link com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.warm.WarmDataset#name}) —
-     * so this asks the typed map the generated store writes, not a second copy of it.
-     */
-    private boolean memoryHolds(String datasetName, String key) {
-        return hz.getMap(datasetName).containsKey(key);
-    }
-
-    /**
-     * The warm ingest sequence: claim, memory put, disk enqueue.
-     *
-     * <p>The claim comes FIRST, before the memory put — not with the enqueue that
-     * follows it. From the memory put onwards memory's copy may be the newer one,
-     * and for a MUTABLE row whose previous copy has aged past the residency boundary
-     * that makes both legs match the key at once: memory because the update's epoch
-     * is back inside the window, disk because it still holds the pre-update copy and
-     * the key is not yet pending. Claiming first closes that window; claiming at the
-     * enqueue leaves it open for the width of these two calls.
-     *
-     * <p>The other order — enqueue then memory put — is strictly worse: it turns the
-     * duplicate into a LOST row whenever the asynchronous writer commits before the
-     * memory put lands.
-     *
-     * <p>The {@code finally} exists because a claim not released is worse than the
-     * duplicate it prevents: a permanently pending key is hidden from the disk leg
-     * for the life of the process. It covers the leg where {@code memoryPut} throws
-     * — a HotWrites quorum refusal, say — before the enqueue ever runs. The other
-     * leg, a record the warm validator rejects, is released inside
-     * {@link WarmStore#enqueue}, which is where that decision is made.
-     *
-     * <p>The claim is also what makes {@link #rejectsAppendOnlyDuplicate} sound under
-     * concurrency. That check reads two legs and then acts, and between the read and
-     * the act a second delivery of the same key can read them too — both see a key
-     * neither leg holds, both append a Lucene document, and for an append-only
-     * dataset nothing ever removes one of them. The claim closes that window without
-     * a second mechanism: {@link WarmStore#claim} is a compare-and-set, so exactly
-     * one of the two takes it, and the loser is the duplicate the check was looking
-     * for. Node-local is the right scope because the corruption is: the memory leg
-     * upserts by key and cannot double-count, while the Lucene index that can is this
-     * node's own, one full replica per instance.
-     *
-     * <p>{@code memoryPut} is a parameter rather than an inlined call so this
-     * sequence — the thing the correctness argument is about — is one testable unit
-     * instead of something a test has to re-spell to exercise.
-     */
-    static boolean ingest(WarmStore warm, Message event, BiPredicate<String, String> memoryHolds,
-                          BooleanSupplier memoryPut) {
-        if (rejectsAppendOnlyDuplicate(warm, event, memoryHolds)) {
-            return true;
-        }
-        boolean claimed = warm.claim(event);
-        if (!claimed && rejectsConcurrentAppendOnlyDelivery(warm, event)) {
-            return true;
-        }
-        boolean enqueued = false;
-        try {
-            boolean handled = memoryPut.getAsBoolean();
-            // AFTER the memory put, and without waiting for it: the ack is the
-            // in-memory replication, the disk commit follows asynchronously.
-            enqueued = warm.enqueue(event);
-            return handled;
-        } finally {
-            if (claimed && !enqueued) {
-                warm.release(event);
-            }
-        }
-    }
-
-    /**
-     * Refuses a write that would break an APPEND_ONLY dataset's unique-key contract.
-     *
-     * <p>The two legs disagree about what a duplicate key MEANS: the memory leg is an
-     * IMap keyed by the record's key, so a second write of an existing key upserts,
-     * while the disk leg appends a second document. Nothing notices until the first
-     * copy ages past the residency boundary — from then on the key is served by memory
-     * with the new copy and by disk with the old one, and the row count visibly jumps.
-     * Neither leg is wrong on its own; the record's own declaration is what says the
-     * key may not repeat, so this is the place to hold it.
-     *
-     * <p>Refused rather than reconciled: making memory hold multiple values per key,
-     * or making an append-only log update in place, are both changes to the tiers'
-     * write semantics for a case the declaration says cannot happen. Nothing in
-     * production emits a duplicate today, so a legitimate write sees no change — this
-     * only fires on the violation that previously corrupted the two legs silently.
-     *
-     * <p>Logged and dropped, not thrown — the same shape as the validator rejection in
-     * {@link WarmStore#enqueue}. This runs on the EventBus subscription thread, where
-     * throwing would retry the offending record forever.
-     *
-     * <p>BOTH legs are asked, and the disk leg is why: a key the memory leg does not
-     * hold is not thereby absent. The whole store is empty on a COLD BOOT, and a cold
-     * boot is precisely when {@code ColdStartRebuilder} replays the entire event log
-     * from offset 0 — while this node's warm volume survived the restart and still
-     * holds every one of those records. Checking memory alone, every replayed
-     * append-only record reads as fresh and is appended to the disk index a second
-     * time. Nothing repairs it afterwards either: {@link WarmIndex#reconcile} keeps
-     * one copy per KEY and so is a no-op for a type whose keys never repeat by
-     * declaration. The duplication is therefore permanent, and it surfaces as a
-     * doubled Get&lt;T&gt;Count the moment the rows age past the residency boundary.
-     * The same check closes the smaller window the memory leg always missed: a key
-     * whose only copy had been evicted from memory.
-     *
-     * <p>What that costs, stated: one Lucene term lookup across the dataset's slices on
-     * the ingest path of every append-only record whose key memory does not already
-     * hold — which in steady state is every one of them. The warm tier is sized for
-     * order 25k rows/year (see {@link WarmIndex}), so this is three orders of magnitude
-     * inside its headroom; on a hot record type it costs nothing at all, because
-     * {@code datasetFor} returns null before any of it runs.
-     *
-     * @return true when the record was refused — meaning handled, not stored.
-     */
-    private static boolean rejectsAppendOnlyDuplicate(WarmStore warm, Message event,
-                                                      BiPredicate<String, String> memoryHolds) {
-        WarmDataset dataset = warm.datasetFor(event);
-        if (dataset == null || !dataset.appendOnly) {
-            return false;
-        }
-        String key = dataset.key(event);
-        String leg = memoryHolds.test(dataset.name, key) ? "memory" : diskLegHolding(warm, dataset, key);
-        if (leg == null) {
-            return false;
-        }
-        log.warn("rejected duplicate key on append-only {}: {} is already stored on the {} leg."
-                + " The record type declares MUTABILITY_APPEND_ONLY, so its key may not repeat;"
-                + " storing it would leave the memory and disk legs permanently disagreeing"
-                + " about that key.", dataset.name, key, leg);
-        return true;
-    }
-
-    /**
-     * Refuses an append-only record whose key another in-flight delivery already claimed.
-     *
-     * <p>Reached only when {@link WarmStore#claim} returned false, which has two causes:
-     * no warm dataset holds the type at all — the ordinary hot-only record, and no
-     * refusal — or the key is already claimed. For an append-only dataset the second
-     * cause IS a duplicate: the claim is held from before a memory put until the disk
-     * commit that makes both legs agree, so a key claimed elsewhere is a key
-     * {@link #rejectsAppendOnlyDuplicate} would have caught had the other delivery been
-     * a moment further along.
-     *
-     * @return true when the record was refused — meaning handled, not stored.
-     */
-    private static boolean rejectsConcurrentAppendOnlyDelivery(WarmStore warm, Message event) {
-        WarmDataset dataset = warm.datasetFor(event);
-        if (dataset == null || !dataset.appendOnly) {
-            return false;
-        }
-        log.warn("rejected duplicate key on append-only {}: {} is already being stored by a"
-                + " concurrent delivery. The record type declares MUTABILITY_APPEND_ONLY, so its"
-                + " key may not repeat; storing it would append a second document the disk leg"
-                + " never removes.", dataset.name, dataset.key(event));
-        return true;
-    }
-
-    /**
-     * {@code "disk"} when this node's warm index already holds the key, else null.
-     *
-     * <p>A disk error resolves as "not held", i.e. the record is STORED. That direction
-     * is deliberate: an unreadable index makes the answer unknown, and on an unknown
-     * answer a duplicate row is recoverable — the reconcile and retention sweeps both
-     * still run over it — while a dropped record is not, because the refusal reads as
-     * handled and the subscription never redelivers it.
-     */
-    private static String diskLegHolding(WarmStore warm, WarmDataset dataset, String key) {
-        try {
-            return warm.isDurableOnDisk(dataset.name, key) ? "disk" : null;
-        } catch (IOException e) {
-            log.error("append-only duplicate check could not read the disk leg of {} for key {};"
-                    + " storing the record rather than dropping it", dataset.name, key, e);
-            return null;
-        }
+        return stores.store(event);
     }
 
     /**
@@ -525,7 +313,8 @@ public class EventStore {
     }
 
     /**
-     * Where the warm tier lives. The operator mounts the pod's per-replica volume
+     * This pod's own volume — the checkpoint, the redo logs and the tombstone
+     * log. The operator mounts the pod's per-replica volume
      * at /app/data; STRATUM_DATA_DIR overrides it for a local run, which is the
      * only case where /app/data does not exist.
      */
@@ -590,41 +379,15 @@ public class EventStore {
     public long eventCount()    { return stores.totalCount(); }
     public boolean isEmpty()    { return stores.totalCount() == 0; }
     public int  clusterSize()   { return hz.getCluster().getMembers().size(); }
-    public long lastCleanupMs() { return lastCleanupMs.get(); }
     public long lastCheckpointMs() { return lastCheckpointMs.get(); }
     public long lastCheckpointPurged() { return lastCheckpointPurged.get(); }
 
     /** The generated typed per-record hot stores — used by the RecordMap plane. */
     public StratumEventStores stores() { return stores; }
 
-    /** The warm disk tier — the RecordMap plane's second leg for warm-typed records. */
-    public WarmStore warm() { return warm; }
-
     // -----------------------------------------------------------------------
-    // Retention cleanup
+    // Daily checkpoint
     // -----------------------------------------------------------------------
-
-    /**
-     * The scheduled tick: the leader-only retention sweep, then this pod's own
-     * daily checkpoint.
-     *
-     * <p>Two sweeps on one timer, not one sweep. The checkpoint transaction is what
-     * the record-lifecycle decision replaces retention WITH, and it does not replace
-     * it yet: no fleet record type carries {@code (spec.deleted_flag)}, so the purge
-     * step selects nothing and removing retention today would simply let every store
-     * grow without bound. Retention therefore stays until the fleet annotation pass
-     * has run, and this line is the seam where it is deleted — see
-     * {@code docs/DURABILITY.md}.
-     *
-     * <p>The checkpoint is NOT leader-gated: retention mutates the cluster-wide maps
-     * once, while the checkpoint writes this pod's own volume and truncates this
-     * pod's own redo logs. One pod doing that for the cluster would leave every other
-     * pod with no baseline to start from.
-     */
-    private void runCleanupCycle() {
-        runRetentionCleanupIfLeader();
-        runDailyCheckpoint();
-    }
 
     /**
      * Runs this pod's purge -> dump -> truncate transaction.
@@ -701,56 +464,12 @@ public class EventStore {
         return value;
     }
 
-    private void runRetentionCleanupIfLeader() {
-        Iterator<com.hazelcast.cluster.Member> members = hz.getCluster().getMembers().iterator();
-        if (!members.hasNext()) return;
-        if (!members.next().equals(hz.getCluster().getLocalMember())) return;
-        runRetentionCleanup();
-        // Same schedule and the same one-sweeper gate, deliberately not the same
-        // pass: retention DELETES rows the service no longer keeps, eviction MOVES
-        // rows that are already on disk out of memory. Sharing a timer is all they
-        // share.
-        runWarmEviction();
-    }
-
-    /**
-     * Releases warm rows the disk leg already owns from the Hazelcast map.
-     *
-     * @return rows evicted, by dataset name
-     */
-    private Map<String, Long> runWarmEviction() {
-        return WarmEviction.sweep(hz, warm);
-    }
-
-    private void runRetentionCleanup() {
-        long cutoffMs = System.currentTimeMillis()
-                - (long) retentionDays * StratumEpochExtractor.MILLIS_PER_DAY;
-        log.info("retention cleanup: removing events older than {} (retention_days={})",
-                cutoffMs, retentionDays);
-        try {
-            long before  = stores.totalCount();
-            stores.runRetention(cutoffMs);
-            // The disk tier retires whole slices rather than rows, and it measures
-            // from the STORE EPOCH the slice is named for, not from each record's
-            // business timestamp. Same cutoff, different clock — stated because the
-            // two sweeps look interchangeable and are not.
-            warm.runRetention(cutoffMs);
-            long removed = before - stores.totalCount();
-            lastCleanupMs.set(System.currentTimeMillis());
-            lastCleanupRemoved.set(removed);
-            log.info("retention cleanup complete: removed {} entries", removed);
-        } catch (Exception e) {
-            log.error("retention cleanup failed", e);
-        }
-    }
-
     // -----------------------------------------------------------------------
     // Shutdown
     // -----------------------------------------------------------------------
 
     public void shutdown() {
         cleaner.shutdownNow();
-        if (warm != null) warm.close();
         if (hotLogs != null) hotLogs.close();
         if (hz != null) hz.shutdown();
     }
