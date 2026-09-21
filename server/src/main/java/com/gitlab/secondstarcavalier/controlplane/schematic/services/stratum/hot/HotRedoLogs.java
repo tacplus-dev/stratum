@@ -3,6 +3,7 @@ package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.ho
 
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -156,6 +157,28 @@ public final class HotRedoLogs implements AutoCloseable {
     /** This node's log for {@code mapName}. */
     public RedoLog log(String mapName) {
         return logs.get(mapName);
+    }
+
+    /**
+     * Truncates every log to the checkpoint just committed — step 3 of the daily
+     * transaction, and the only caller.
+     *
+     * <p>{@link RedoLog#roll} rebuilds the baseline from a caller-supplied snapshot
+     * and folds in whatever arrived while it ran. The snapshot passed here is EMPTY
+     * because the checkpoint file IS the baseline now: what has to survive is
+     * exactly the tail, the writes that landed after the dump, and that is what
+     * roll's fold leaves behind. Passing the dumped rows instead would write the
+     * whole store to disk a second time and make cold start replay it twice.
+     *
+     * <p>Called only after the dump's rename has succeeded. Before it, the previous
+     * checkpoint is still the one {@code current} names, and this tail is what makes
+     * that checkpoint a complete recovery set.
+     */
+    public void truncateToCheckpoint() {
+        for (Map.Entry<String, RedoLog> e : logs.entrySet()) {
+            e.getValue().roll(List.of());
+            log.info("hot redo log for {} truncated to the checkpoint", e.getKey());
+        }
     }
 
     /** Blocks until every queued append has been attempted. Tests and shutdown only. */

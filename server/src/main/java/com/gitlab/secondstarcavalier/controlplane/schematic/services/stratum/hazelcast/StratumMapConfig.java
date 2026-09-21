@@ -290,6 +290,22 @@ public final class StratumMapConfig {
         // partition that keeps accepting writes is how a store stops being atomic.
         mapCfg.setSplitBrainProtectionName(SPLIT_BRAIN_PROTECTION_NAME);
 
+        // The memory clock, per record type, from the record's own
+        // (spec.record).residency.idle_seconds. A row that has gone this long with
+        // neither a read nor a write is evicted from MEMORY; it stays on disk and
+        // the next touch reloads it, so this is cache maintenance and never data
+        // loss. Hazelcast runs the clock itself, per entry, and a get() resets it —
+        // which is the point: reads keep data warm without turning a read into a
+        // write, so nothing here restamps (spec.store_epoch) or appends to the redo
+        // log.
+        //
+        // Every record map gets a number: 0/unset on the annotation means "apply
+        // the platform default", never "never", so the generated lookup has already
+        // resolved it. A name with no record behind it — the restore ledger — gets
+        // 0, Hazelcast's "no max-idle": it holds the replay reports the hot-restore
+        // barrier counts, and a barrier whose ledger expires is not a barrier.
+        mapCfg.setMaxIdleSeconds(StratumEventStores.idleSeconds(name));
+
         if (!MAP_NAME.equals(name)) {
             return mapCfg;
         }

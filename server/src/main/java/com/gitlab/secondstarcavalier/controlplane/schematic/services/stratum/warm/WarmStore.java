@@ -142,6 +142,21 @@ public final class WarmStore implements AutoCloseable {
     }
 
     /**
+     * Removes one purged row from this node's disk index — the disk half of the
+     * daily checkpoint's purge step.
+     *
+     * <p>A record type with no warm dataset has no disk leg to purge from, so this
+     * is a no-op for it rather than an error: the checkpoint sweeps every record
+     * type, and only some of them are tiered to disk today.
+     */
+    public void purge(String datasetName, String key) throws IOException {
+        WarmIndex idx = indexes.get(datasetName);
+        if (idx != null) {
+            idx.purge(key);
+        }
+    }
+
+    /**
      * Repairs every mutable dataset before the first write.
      *
      * Unconditional and cheap, the way ColdStartRebuilder is: a cross-slice update

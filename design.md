@@ -26,8 +26,15 @@ stratum provides the infrastructure for that persistence.
 - **StratumQuery vservice** (hosted here, real implementation):
   - **Storage**: `EventStore` — a Hazelcast `IMap<event_id, AgentEvent>` with
     SORTED indexes on epoch/timestampMs and HASH indexes on spiffe_id,
-    sessionId, agentId, eventType. Retention cleanup deletes events older than
-    `retention_days` on a configurable interval.
+    sessionId, agentId, eventType.
+  - **Record lifecycle** (`DailyCheckpoint`): on the `cleanup_interval_seconds`
+    tick every pod runs one transaction over its own replica — purge
+    flagged-deleted rows past their max age into a write-only tombstone log, dump
+    every surviving row to `<dataRoot>/checkpoint/<ts>` committed by one atomic
+    rename, then truncate the redo logs to that dump point. Cold start is that
+    checkpoint plus the redo tail, not a replay from offset zero. The old
+    `retention_days` sweep still runs alongside it and is not yet retired; see
+    `docs/DURABILITY.md` for the mechanism, the layout and what is not cut over.
   - **Session aggregation** (`StratumQueryImpl.buildSessionSummaries`): folds
     AgentEvent records grouped by `session_id` into `SessionSummary`. Each
     summary tracks first/last timestamps, event count, max call depth,

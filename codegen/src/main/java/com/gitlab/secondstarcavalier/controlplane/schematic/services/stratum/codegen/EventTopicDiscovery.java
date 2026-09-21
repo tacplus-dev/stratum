@@ -102,6 +102,37 @@ public final class EventTopicDiscovery {
          */
         public final long residencyWindowSeconds;
         /**
+         * (spec.record).residency.idle_seconds — how long a row may go with NO
+         * read and NO write before Hazelcast evicts it from memory. Always a
+         * value: {@value EventTopicDiscovery#DEFAULT_RESIDENCY_IDLE_SECONDS}
+         * when the record declares none or declares 0.
+         *
+         * 0/unset means "apply the platform default", never "never" — that is
+         * tacplus's own rule (parser.DefaultResidencyIdleSeconds), and the
+         * default is applied here rather than left for a consumer to guess,
+         * exactly as {@link #minDurableCopies} defaults spec.proto's number.
+         * Under the one-clock lifecycle every record ages out of memory; a
+         * long-lived, config-shaped type just declares a long idle_seconds.
+         *
+         * The row is not lost when it is evicted: it lives on disk beneath and
+         * the next touch reloads it. This clock is MEMORY only — a read never
+         * restamps (spec.store_epoch) and never writes the event log.
+         */
+        public final long residencyIdleSeconds;
+        /**
+         * (spec.record).residency.deleted_max_age_seconds — how long a row
+         * carrying a set {@link #deletedFlagField} survives after the delete
+         * write before the sweep purges it. Always a value:
+         * {@value EventTopicDiscovery#DEFAULT_RESIDENCY_DELETED_MAX_AGE_SECONDS}
+         * when the record declares none or declares 0, on tacplus's same
+         * "0 means the platform default" rule.
+         *
+         * Measured from the delete write's (spec.store_epoch), which is why
+         * store_epoch keeps its meaning as the last WRITE and is not the
+         * residency clock.
+         */
+        public final long residencyDeletedMaxAgeSeconds;
+        /**
          * (spec.record).mutability — "MUTABILITY_APPEND_ONLY" when the record type
          * is written once, "" otherwise (i.e. CRUD, today's behaviour).
          *
@@ -173,7 +204,9 @@ public final class EventTopicDiscovery {
         public TopicEvent(String protoPackage, String eventType, String protoRelPath,
                           boolean isRecord, String recordKey, List<QueryField> queryFields,
                           String retentionTimestampField,
-                          String residency, long residencyWindowSeconds, String mutability,
+                          String residency, long residencyWindowSeconds,
+                          long residencyIdleSeconds, long residencyDeletedMaxAgeSeconds,
+                          String mutability,
                           String storeEpochField, String storeNamespaceField, int minDurableCopies,
                           String deletedFlagField,
                           String javaPackage, String outerClassName) {
@@ -186,6 +219,8 @@ public final class EventTopicDiscovery {
             this.retentionTimestampField = retentionTimestampField;
             this.residency = residency;
             this.residencyWindowSeconds = residencyWindowSeconds;
+            this.residencyIdleSeconds = residencyIdleSeconds;
+            this.residencyDeletedMaxAgeSeconds = residencyDeletedMaxAgeSeconds;
             this.mutability = mutability;
             this.storeEpochField = storeEpochField;
             this.storeNamespaceField = storeNamespaceField;
@@ -230,6 +265,31 @@ public final class EventTopicDiscovery {
 
     /** The residency preset that puts a record type on the warm disk tier. */
     public static final String RESIDENCY_WARM = "RESIDENCY_WARM";
+
+    /**
+     * The effective (spec.record).residency.idle_seconds for a record that
+     * declares none or declares 0 — one day with neither a read nor a write
+     * before the row leaves memory.
+     *
+     * This mirrors tacplus's parser.DefaultResidencyIdleSeconds
+     * (pkg/internal/common/parser/residency_validate.go), which is the platform
+     * authority on the number. It is restated here for the same reason
+     * {@link #DEFAULT_MIN_DURABLE_COPIES} and {@link #DEFAULT_RECORD_KEY} are:
+     * stratum's generator reads .proto TEXT, so it has to apply the same
+     * defaults tacplus applies or the two sides disagree about what an
+     * undeclared knob means.
+     */
+    public static final long DEFAULT_RESIDENCY_IDLE_SECONDS = 86400L;
+
+    /**
+     * The effective (spec.record).residency.deleted_max_age_seconds for a record
+     * that declares none or declares 0 — thirty days between the delete write
+     * and the sweep that makes the row gone.
+     *
+     * Mirrors tacplus's parser.DefaultResidencyDeletedMaxAgeSeconds, same source
+     * and same reason as {@link #DEFAULT_RESIDENCY_IDLE_SECONDS}.
+     */
+    public static final long DEFAULT_RESIDENCY_DELETED_MAX_AGE_SECONDS = 2592000L;
     /** The mutability preset that makes a record type write-once. */
     public static final String MUTABILITY_APPEND_ONLY = "MUTABILITY_APPEND_ONLY";
 
@@ -271,6 +331,17 @@ public final class EventTopicDiscovery {
             "residency:\\s*\\{[^}]*window:\\s*(RESIDENCY_\\w+)");
     private static final Pattern RESIDENCY_WINDOW_SECONDS = Pattern.compile(
             "residency:\\s*\\{[^}]*window_seconds:\\s*(\\d+)");
+    // The two lifecycle clocks on the same residency clause, e.g.
+    //   residency: {idle_seconds: 3600 deleted_max_age_seconds: 2592000}
+    //
+    // "(?<!\\w)" on idle_seconds keeps it off window_seconds and off any other
+    // *_seconds knob that ends in the same letters; deleted_max_age_seconds is
+    // already unambiguous. Both are read from inside the record option literal
+    // only, the same bound every other clause here is read under.
+    private static final Pattern RESIDENCY_IDLE_SECONDS = Pattern.compile(
+            "residency:\\s*\\{[^}]*(?<!\\w)idle_seconds:\\s*(\\d+)");
+    private static final Pattern RESIDENCY_DELETED_MAX_AGE_SECONDS = Pattern.compile(
+            "residency:\\s*\\{[^}]*(?<!\\w)deleted_max_age_seconds:\\s*(\\d+)");
     // The mutability clause, e.g.  mutability: MUTABILITY_APPEND_ONLY
     // It is a bare enum value on the record option, not a nested literal.
     private static final Pattern MUTABILITY = Pattern.compile(
@@ -417,6 +488,8 @@ public final class EventTopicDiscovery {
                     isRecord, recordKey, queryFields,
                     parseRetentionTimestampField(recordOption),
                     parseResidency(recordOption), parseResidencyWindowSeconds(recordOption),
+                    parseResidencyIdleSeconds(recordOption),
+                    parseResidencyDeletedMaxAgeSeconds(recordOption),
                     parseMutability(recordOption), parseStoreEpochField(eventBody),
                     parseStoreNamespaceField(eventBody), parseMinDurableCopies(eventBody),
                     parseDeletedFlagField(eventBody),
@@ -478,6 +551,39 @@ public final class EventTopicDiscovery {
         }
         Matcher m = RESIDENCY_WINDOW_SECONDS.matcher(recordOption);
         return m.find() ? Long.parseLong(m.group(1)) : 0;
+    }
+
+    /**
+     * The record's idle_seconds, defaulted to
+     * {@link #DEFAULT_RESIDENCY_IDLE_SECONDS} the way tacplus defaults it.
+     *
+     * The default is applied HERE, not at the consumer, because 0 is not a
+     * legal answer on this clock: tacplus documents 0/unset as "apply the
+     * platform default", so a consumer handed a 0 would have to re-know the
+     * default to make sense of it. That is the mistake
+     * {@link #parseMinDurableCopies} already avoids.
+     */
+    private static long parseResidencyIdleSeconds(String recordOption) {
+        if (recordOption.isEmpty()) {
+            return 0;
+        }
+        Matcher m = RESIDENCY_IDLE_SECONDS.matcher(recordOption);
+        long declared = m.find() ? Long.parseLong(m.group(1)) : 0;
+        return declared > 0 ? declared : DEFAULT_RESIDENCY_IDLE_SECONDS;
+    }
+
+    /**
+     * The record's deleted_max_age_seconds, defaulted to
+     * {@link #DEFAULT_RESIDENCY_DELETED_MAX_AGE_SECONDS} — same rule, same
+     * reason as {@link #parseResidencyIdleSeconds}.
+     */
+    private static long parseResidencyDeletedMaxAgeSeconds(String recordOption) {
+        if (recordOption.isEmpty()) {
+            return 0;
+        }
+        Matcher m = RESIDENCY_DELETED_MAX_AGE_SECONDS.matcher(recordOption);
+        long declared = m.find() ? Long.parseLong(m.group(1)) : 0;
+        return declared > 0 ? declared : DEFAULT_RESIDENCY_DELETED_MAX_AGE_SECONDS;
     }
 
     /**

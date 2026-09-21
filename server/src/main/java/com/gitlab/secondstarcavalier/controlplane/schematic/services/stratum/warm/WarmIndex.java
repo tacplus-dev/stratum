@@ -327,6 +327,38 @@ public final class WarmIndex implements Closeable {
         return null;
     }
 
+    /**
+     * Drops one key from every slice of this index — the disk half of the daily
+     * checkpoint's purge step.
+     *
+     * <p>Not {@code dropSlicesEndingBefore}'s job and not a variant of it: retention
+     * retires whole slices by age, while a purged row is one key whose slice is full
+     * of rows that must stay. It is also not {@code write}'s delete leg — that one
+     * removes a STALE copy a newer copy has replaced, and this one removes the row
+     * outright, with nothing left behind.
+     *
+     * <p>The loop terminates because each pass deletes the key from the slice it
+     * found it in and refreshes that slice's searcher, so the next pass cannot find
+     * the same slice again.
+     */
+    void purge(String key) throws IOException {
+        synchronized (writeLock) {
+            if (writer != null && currentSliceId != null) {
+                writer.deleteDocuments(new Term(KEY_FIELD, key));
+                writer.commit();
+                refresh(currentSliceId);
+            }
+            String stale;
+            while ((stale = sliceHolding(key, currentSliceId)) != null) {
+                deleteFromSealedSlice(stale, key);
+            }
+            // A purged row has no disk copy to wait for any more, so a claim left
+            // over from an in-flight write must not keep the read path pointing at
+            // memory for a key nothing holds.
+            pending.remove(key);
+        }
+    }
+
     /** Reopens a sealed slice just long enough to drop one key, then closes it again. */
     private void deleteFromSealedSlice(String sliceId, String key) throws IOException {
         Path sliceDir = root.resolve(sliceId);

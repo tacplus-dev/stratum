@@ -32,6 +32,10 @@ import com.hazelcast.query.Predicates;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor.AgentEvent;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor.SensorEventType;
 
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.checkpoint.Checkpoint;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.checkpoint.DailyCheckpoint;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.checkpoint.HazelcastRows;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.checkpoint.TombstoneLog;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumMapConfig;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumEpochExtractor;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumEventTypeExtractor;
@@ -77,6 +81,15 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
  *   here. Runs only on the oldest cluster member to avoid duplicate work
  *   across nodes.
  *
+ * Daily checkpoint:
+ *   On the same cleanup_interval_seconds tick, and per pod rather than per
+ *   cluster, {@link #runDailyCheckpoint()} runs the record-lifecycle transaction:
+ *   purge flagged-deleted rows past their max age into the tombstone log, dump
+ *   every surviving row to a new checkpoint, truncate the redo logs to it. It is
+ *   also what makes cold start bounded — see {@link #loadCheckpoint()}. The
+ *   retention sweep above is what it is meant to REPLACE and has not yet; see
+ *   {@link #runCleanupCycle()} and docs/DURABILITY.md for why both still run.
+ *
  * Thread safety: HazelcastInstance is thread-safe. AtomicLong stats are thread-safe.
  */
 public class EventStore {
@@ -121,6 +134,9 @@ public class EventStore {
      */
     private volatile boolean coldStartReplayDone;
     private int retentionDays;
+    private Checkpoint checkpoint;
+    private DailyCheckpoint dailyCheckpoint;
+    private long deletedMaxAgeSeconds;
 
     /**
      * How long a cold start waits for its peers' redo replay before giving up.
@@ -143,6 +159,32 @@ public class EventStore {
 
     private final AtomicLong lastCleanupMs      = new AtomicLong(0);
     private final AtomicLong lastCleanupRemoved = new AtomicLong(0);
+    private final AtomicLong lastCheckpointMs     = new AtomicLong(0);
+    private final AtomicLong lastCheckpointPurged = new AtomicLong(0);
+
+    /**
+     * The platform default for how long a flagged-deleted row survives after the
+     * delete write, in seconds — 30 days.
+     *
+     * <p>PLACEHOLDER, deliberately flat and deliberately not per-type. The decision
+     * this implements puts the real number on each record as
+     * {@code (spec.record).residency.deleted_max_age_seconds}, and that annotation
+     * is on tacplus's unmerged branch — there is no generated accessor to read it
+     * from, and writing one by hand would be exactly the generated surface the
+     * platform rules forbid. One value for the whole store is the honest stand-in:
+     * it is correct for every type the moment the fleet annotation pass gives every
+     * type the same number, and it is replaced by the per-type read when the
+     * annotation lands, at the one call site in {@link #runDailyCheckpoint}.
+     *
+     * <p>Not a {@code Config} field because {@code Config} is a tacplus-owned proto
+     * in another repository; {@code STRATUM_DELETED_MAX_AGE_SECONDS} overrides it,
+     * the same shape {@code STRATUM_MIN_DURABLE_COPIES} already uses for a knob that
+     * has no home in that proto.
+     */
+    static final long DEFAULT_DELETED_MAX_AGE_SECONDS = 30L * 24 * 60 * 60;
+
+    /** Env name for the {@link #DEFAULT_DELETED_MAX_AGE_SECONDS} override. */
+    static final String DELETED_MAX_AGE_ENV = "STRATUM_DELETED_MAX_AGE_SECONDS";
 
     // -----------------------------------------------------------------------
     // Init
@@ -188,6 +230,14 @@ public class EventStore {
         // quorum gate.
         List<HotDataset> hotDatasets = StratumHotStores.datasets();
         hotLogs = new HotRedoLogs(dataRoot(), hotDatasets, HOT_ARCHIVE_COUNT, Codec.NONE);
+
+        // BEFORE the redo replay, and that order is the cold start: the checkpoint
+        // is the baseline, the redo logs hold only the tail that landed after it
+        // (see HotRedoLogs.truncateToCheckpoint), and replaying the tail onto the
+        // baseline is what makes recovery proportional to the data rather than to
+        // the whole history.
+        checkpoint = new Checkpoint(dataRoot());
+        loadCheckpoint();
         restoreHotTier(hotDatasets, minDurableCopies);
 
         try {
@@ -200,12 +250,21 @@ public class EventStore {
         // Same posture as ColdStartRebuilder — repair rather than trust.
         warm.reconcile();
 
+        this.deletedMaxAgeSeconds = configuredDeletedMaxAgeSeconds();
+        this.dailyCheckpoint = new DailyCheckpoint(
+                new HazelcastRows(hz, StratumEventStores.mapNames()),
+                warm::purge,
+                new TombstoneLog(dataRoot()),
+                checkpoint,
+                hotLogs::truncateToCheckpoint);
+
         cleaner.scheduleWithFixedDelay(
-                this::runRetentionCleanupIfLeader,
+                this::runCleanupCycle,
                 cleanupIntervalSecs, cleanupIntervalSecs, TimeUnit.SECONDS);
 
-        log.info("EventStore initialised: retention_days={}, warm_window_seconds={}, seed_members={}",
-                retentionDays, warmWindowSeconds,
+        log.info("EventStore initialised: retention_days={}, warm_window_seconds={},"
+                + " deleted_max_age_seconds={}, seed_members={}",
+                retentionDays, warmWindowSeconds, deletedMaxAgeSeconds,
                 seedMembers.isEmpty() ? "multicast" : seedMembers);
     }
 
@@ -532,6 +591,8 @@ public class EventStore {
     public boolean isEmpty()    { return stores.totalCount() == 0; }
     public int  clusterSize()   { return hz.getCluster().getMembers().size(); }
     public long lastCleanupMs() { return lastCleanupMs.get(); }
+    public long lastCheckpointMs() { return lastCheckpointMs.get(); }
+    public long lastCheckpointPurged() { return lastCheckpointPurged.get(); }
 
     /** The generated typed per-record hot stores — used by the RecordMap plane. */
     public StratumEventStores stores() { return stores; }
@@ -542,6 +603,103 @@ public class EventStore {
     // -----------------------------------------------------------------------
     // Retention cleanup
     // -----------------------------------------------------------------------
+
+    /**
+     * The scheduled tick: the leader-only retention sweep, then this pod's own
+     * daily checkpoint.
+     *
+     * <p>Two sweeps on one timer, not one sweep. The checkpoint transaction is what
+     * the record-lifecycle decision replaces retention WITH, and it does not replace
+     * it yet: no fleet record type carries {@code (spec.deleted_flag)}, so the purge
+     * step selects nothing and removing retention today would simply let every store
+     * grow without bound. Retention therefore stays until the fleet annotation pass
+     * has run, and this line is the seam where it is deleted — see
+     * {@code docs/DURABILITY.md}.
+     *
+     * <p>The checkpoint is NOT leader-gated: retention mutates the cluster-wide maps
+     * once, while the checkpoint writes this pod's own volume and truncates this
+     * pod's own redo logs. One pod doing that for the cluster would leave every other
+     * pod with no baseline to start from.
+     */
+    private void runCleanupCycle() {
+        runRetentionCleanupIfLeader();
+        runDailyCheckpoint();
+    }
+
+    /**
+     * Runs this pod's purge -> dump -> truncate transaction.
+     *
+     * <p>A failure is logged and dropped rather than rethrown: the previous
+     * checkpoint plus the un-truncated redo logs are a complete recovery set, so the
+     * outcome of a failed run is "try again on the next tick", and throwing out of a
+     * {@code scheduleWithFixedDelay} task would instead cancel the schedule and mean
+     * no run ever again.
+     */
+    private void runDailyCheckpoint() {
+        try {
+            DailyCheckpoint.Result result =
+                    dailyCheckpoint.run(deletedMaxAgeSeconds * 1000L, System.currentTimeMillis());
+            lastCheckpointMs.set(System.currentTimeMillis());
+            lastCheckpointPurged.set(result.purged);
+        } catch (Exception e) {
+            log.error("daily checkpoint failed; the previous checkpoint and the un-truncated"
+                    + " redo logs remain a complete recovery set, retrying next cycle", e);
+        }
+    }
+
+    /**
+     * Loads this pod's newest complete checkpoint into the maps, on a cold boot only.
+     *
+     * <p>The gate is {@code ColdStartRebuilder.shouldReplay} — the same
+     * "is the data already here?" test the event-log replay uses, and the same
+     * answer: a member restarting alongside live peers gets its partitions back from
+     * them, and loading a stale local dump over that would be this pod overwriting
+     * the cluster's newer rows with its own older ones. {@code putIfAbsent} is the
+     * second half of that guard, for a peer that joins mid-load.
+     *
+     * <p>Loading is what makes the event-log replay unnecessary: the store is no
+     * longer empty cluster-wide once the checkpoint is in, so {@code StratumHandler}
+     * takes the skip-the-replay branch on its own. The full replay from offset zero
+     * is not removed, it is simply no longer reached by a pod that has a checkpoint —
+     * which is exactly what should still happen on a pod that does not.
+     */
+    private void loadCheckpoint() {
+        try {
+            long held = stores.totalCount();
+            if (!ColdStartRebuilder.shouldReplay(held)) {
+                log.info("checkpoint: not a cold boot ({} row(s) held cluster-wide) — the peers"
+                        + " hold the data, this pod's checkpoint is not loaded", held);
+                return;
+            }
+            List<com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.checkpoint.Checkpoint.Row>
+                    rows = checkpoint.load();
+            if (rows.isEmpty()) {
+                log.info("checkpoint: none on this volume — recovery falls back to the redo logs"
+                        + " and the event log");
+                return;
+            }
+            for (var row : rows) {
+                hz.<String, Message>getMap(row.mapName).putIfAbsent(row.key, row.value);
+            }
+            log.info("checkpoint: {} row(s) loaded from {}", rows.size(), checkpoint.current());
+        } catch (IOException e) {
+            throw new IllegalStateException("checkpoint at " + dataRoot()
+                    + " could not be read; refusing to start on a baseline that may be partial", e);
+        }
+    }
+
+    private static long configuredDeletedMaxAgeSeconds() {
+        String raw = System.getenv(DELETED_MAX_AGE_ENV);
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_DELETED_MAX_AGE_SECONDS;
+        }
+        long value = Long.parseLong(raw.trim());
+        if (value < 1) {
+            throw new IllegalArgumentException(
+                    DELETED_MAX_AGE_ENV + " must be at least 1, got " + value);
+        }
+        return value;
+    }
 
     private void runRetentionCleanupIfLeader() {
         Iterator<com.hazelcast.cluster.Member> members = hz.getCluster().getMembers().iterator();

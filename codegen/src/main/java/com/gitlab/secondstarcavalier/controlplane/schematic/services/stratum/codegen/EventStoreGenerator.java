@@ -161,6 +161,9 @@ public final class EventStoreGenerator {
         w.println("    /** Removes events older than cutoffMs from every typed store. */");
         w.println("    public void runRetention(long cutoffMs) {");
         for (EventTopicDiscovery.TopicEvent e : events) {
+            if (e.retentionTimestampField.isEmpty()) {
+                continue;
+            }
             w.println("        " + field(e) + ".removeAll(Predicates.lessThan(\""
                     + retentionAttribute(e) + "\", cutoffMs));");
         }
@@ -195,6 +198,35 @@ public final class EventStoreGenerator {
         w.println("        switch (mapName) {");
         for (EventTopicDiscovery.TopicEvent e : events) {
             w.println("            case \"" + mapName(e) + "\": return " + floorConst(e) + ";");
+        }
+        w.println("            default: return 0;");
+        w.println("        }");
+        w.println("    }");
+        w.println();
+
+        // idleSeconds(mapName) — the memory clock keyed by map name, for the same
+        // caller and the same reason as minDurableCopies above: StratumMapConfig
+        // builds one MapConfig per NAME and has no record type in hand.
+        //
+        // Every record answers with a number, because 0/unset on
+        // (spec.record).residency.idle_seconds means "apply the platform default"
+        // (EventTopicDiscovery.DEFAULT_RESIDENCY_IDLE_SECONDS, tacplus's
+        // parser.DefaultResidencyIdleSeconds), never "never". A name that is not a
+        // record map answers 0 — Hazelcast's own "no max-idle" — which is what the
+        // restore ledger needs: it is not a record, it has no lifecycle to age out,
+        // and evicting it would erase the replay reports the hot-restore barrier
+        // counts.
+        w.println("    /**");
+        w.println("     * The memory-residency idle clock for a map name, in SECONDS, or 0 for a");
+        w.println("     * name that is not a record map (Hazelcast's \"no max-idle\").");
+        w.println("     *");
+        w.println("     * A row untouched — neither read nor written — for this long is evicted");
+        w.println("     * from memory. It stays on disk and the next touch reloads it.");
+        w.println("     */");
+        w.println("    public static int idleSeconds(String mapName) {");
+        w.println("        switch (mapName) {");
+        for (EventTopicDiscovery.TopicEvent e : events) {
+            w.println("            case \"" + mapName(e) + "\": return " + idleConst(e) + ";");
         }
         w.println("            default: return 0;");
         w.println("        }");
@@ -282,18 +314,45 @@ public final class EventStoreGenerator {
      * retention pass — including the maps whose name WAS right — and the store
      * grows without bound.
      *
-     * A stored record with no retention policy has no field to measure age from
-     * and could never be swept, so it is rejected here rather than generated
-     * into a sweep that cannot work.
+     * A stored record with no retention clause contributes no sweep line at all
+     * (see the runRetention emission), so this is only ever asked about a record
+     * that declared one.
+     *
+     * <p>It used to THROW for a record with no
+     * (spec.record).retention.timestamp_field, failing generation for the whole
+     * fleet. That gate outlived the thing it was checking: (spec.record).retention
+     * was retired on 2026-09-20 with the HOT/WARM/COLD residency model, so under
+     * tacplus's current annotation surface there is no timestamp_field for any
+     * record to declare and the gate would refuse every converted proto. The
+     * lifecycle it was standing in for is now the two residency clocks —
+     * {@link #idleSeconds} ages a row out of memory, and the daily checkpoint
+     * purges a flagged-deleted row past deleted_max_age_seconds — neither of
+     * which needs a business timestamp field to measure from.
      */
     private static String retentionAttribute(EventTopicDiscovery.TopicEvent e) {
-        if (e.retentionTimestampField.isEmpty()) {
-            throw new IllegalStateException(mapName(e) + " is stored by stratum but declares no"
-                    + " (spec.record).retention.timestamp_field, so the retention sweep has no"
-                    + " field to measure event age from. Declare a retention policy on the"
-                    + " record's (spec.record) annotation in " + e.protoRelPath + ".");
-        }
         return camel(e.retentionTimestampField);
+    }
+
+    /**
+     * The int literal emitted for one record's idle clock.
+     *
+     * <p>Narrowed from the proto's int64 because that is the type Hazelcast's
+     * {@code MapConfig.setMaxIdleSeconds} takes, and the narrowing is checked
+     * rather than silent: a declared value past Integer.MAX_VALUE would wrap to a
+     * negative max-idle, which Hazelcast rejects at run time inside config
+     * building, long after the declaration that caused it. 68 years is not a
+     * residency window anyone means, so this fails generation and names the
+     * proto instead.
+     */
+    private static String idleConst(EventTopicDiscovery.TopicEvent e) {
+        if (e.residencyIdleSeconds > Integer.MAX_VALUE) {
+            throw new IllegalStateException(mapName(e) + " declares"
+                    + " (spec.record).residency.idle_seconds=" + e.residencyIdleSeconds
+                    + ", which does not fit the int Hazelcast's setMaxIdleSeconds takes."
+                    + " Declare a window under " + Integer.MAX_VALUE + " seconds in "
+                    + e.protoRelPath + ".");
+        }
+        return Long.toString(e.residencyIdleSeconds);
     }
 
     /** snake_case proto field -> lowerCamelCase property (occurred_at_ms -> occurredAtMs). */

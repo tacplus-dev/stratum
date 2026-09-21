@@ -224,4 +224,60 @@ class StratumMapConfigDurabilityTest {
     void theDefaultFloorIsTwo() {
         assertEquals(2, StratumMapConfig.DEFAULT_MIN_DURABLE_COPIES);
     }
+
+    /**
+     * Every record map carries the memory clock its record declares.
+     *
+     * <p>{@code setMaxIdleSeconds} was never called, so every record map took
+     * Hazelcast's default of 0 — no max-idle, nothing ever leaves memory. That is
+     * the one thing the record lifecycle says does not exist: a row untouched for
+     * {@code (spec.record).residency.idle_seconds} is evicted from memory and
+     * lives on disk, and the next touch reloads it. With the call absent the
+     * declaration was inert and the store grew until it was restarted.
+     *
+     * <p>The expectation comes from the GENERATED lookup rather than a number
+     * written here, for the same reason the backupCount assertions do: a record
+     * changing its declaration moves this assertion with it instead of leaving a
+     * map behind. What is pinned here is that the wiring exists and reaches every
+     * map — the codegen side (EventStoreResidencyTest) pins that a DECLARED
+     * non-default value is what the lookup answers with.
+     */
+    @Test
+    void everyRecordMapCarriesItsDeclaredIdleClock() {
+        Config cfg = StratumMapConfig.build(List.of(), 2);
+
+        for (String name : StratumEventStores.mapNames()) {
+            MapConfig map = cfg.getMapConfigs().get(name);
+            assertNotNull(map, name + " has no MapConfig");
+            int declared = StratumEventStores.idleSeconds(name);
+            assertTrue(declared > 0,
+                    name + " resolves to no max-idle at all; 0/unset on the annotation means"
+                            + " the platform default, never \"never\"");
+            assertEquals(declared, map.getMaxIdleSeconds(),
+                    name + " keeps Hazelcast's default max-idle, so its declared residency"
+                            + " clock never runs and the row never leaves memory");
+        }
+    }
+
+    /**
+     * The restore ledger has no max-idle.
+     *
+     * <p>It is not a record map and has no lifecycle to age out: it holds the
+     * replay reports {@code HotRestore.awaitClusterReplay} counts, and a barrier
+     * whose ledger expires out from under it is not a barrier. The generated
+     * lookup answers 0 for a name it does not know, which is Hazelcast's own
+     * "no max-idle" — so the ledger has to stay outside the lookup, the same way
+     * it stays outside the per-record durability raise.
+     */
+    @Test
+    void theRestoreLedgerHasNoMaxIdle() {
+        Config cfg = StratumMapConfig.build(List.of(), 2);
+
+        assertEquals(0, StratumEventStores.idleSeconds(HotRestore.LEDGER_MAP),
+                "the ledger is not a generated record map and must not be in the lookup");
+        MapConfig ledger = cfg.getMapConfigs().get(HotRestore.LEDGER_MAP);
+        assertNotNull(ledger, "the restore ledger has no MapConfig");
+        assertEquals(0, ledger.getMaxIdleSeconds(),
+                "the hot-restore barrier counts reports the ledger would have expired");
+    }
 }

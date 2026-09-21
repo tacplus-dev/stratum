@@ -1,0 +1,178 @@
+// Copyright (c) 2024 Second Star Cavalier, LLC.
+package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.checkpoint;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.google.protobuf.Message;
+import com.google.protobuf.Parser;
+
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.diskstore.FsUtil;
+
+/**
+ * The pod's full dump of every row of every record type, and the pointer that
+ * names the newest complete one.
+ *
+ * <h2>Layout</h2>
+ * <pre>
+ *   &lt;dataRoot&gt;/checkpoint/&lt;ts&gt;          one dump, NDJSON, one line per row
+ *   &lt;dataRoot&gt;/checkpoint/current       a text file holding one &lt;ts&gt;
+ * </pre>
+ *
+ * <p>{@code current} is a POINTER FILE, not a symlink. Both are updated by the
+ * same atomic rename ({@link FsUtil#atomicWrite}), so they are equally safe; a
+ * regular file is simply readable by anything that can read the directory,
+ * including an offline collector on a volume snapshot where a symlink's target
+ * may not have come along.
+ *
+ * <h2>Why tmp-then-rename is the whole atomicity story</h2>
+ * The dump is staged by {@link FsUtil#writeTemp} — a fresh sibling temp,
+ * fsync'd — and committed by {@link FsUtil#promote}, one atomic rename. A crash
+ * before the rename leaves a stray temp and the PREVIOUS checkpoint still
+ * pointed at; a crash between the rename and the pointer update leaves a complete
+ * dump nothing points at, and the previous checkpoint still pointed at. Neither
+ * is a partial checkpoint, which is what lets {@link DailyCheckpoint} treat the
+ * rename as the point after which the redo logs may be truncated.
+ *
+ * <p>The staging name is {@code <ts>.tmp.<pid>} rather than a bare {@code <ts>.tmp}
+ * because that is what {@code FsUtil} writes: the pid keeps two processes sharing
+ * a volume from colliding on the staging name, and the temp is in the same
+ * directory, so the commit rename stays on one filesystem and is therefore atomic.
+ *
+ * <h2>The line format</h2>
+ * One JSON object per line: the Hazelcast map name, the record key, the value's
+ * Java class and the value's protobuf bytes, base64. The class name is what makes
+ * the load leg possible without a per-type generated descriptor — every protobuf
+ * generated class exposes {@code getDefaultInstance()}, and its parser is the
+ * type's own, so the row comes back as the concrete type the maps and the query
+ * plane expect rather than as a DynamicMessage they could not serve.
+ */
+public final class Checkpoint {
+
+    /** Where checkpoints live under the pod's volume. */
+    public static final String CHECKPOINT_SUBDIR = "checkpoint";
+    /** The pointer file naming the newest complete checkpoint. */
+    public static final String CURRENT = "current";
+
+    /** One dumped row. */
+    public static final class Row {
+        /** The Hazelcast map name, which is the record type's name. */
+        public final String mapName;
+        public final String key;
+        public final Message value;
+
+        public Row(String mapName, String key, Message value) {
+            this.mapName = mapName;
+            this.key = key;
+            this.value = value;
+        }
+    }
+
+    private final Path dir;
+    /** Class name -> that type's parser. Resolved once; a dump holds one class many times. */
+    private final Map<String, Parser<? extends Message>> parsers = new ConcurrentHashMap<>();
+
+    public Checkpoint(Path dataRoot) {
+        this.dir = dataRoot.resolve(CHECKPOINT_SUBDIR);
+    }
+
+    /** The checkpoint directory. */
+    public Path dir() {
+        return dir;
+    }
+
+    /**
+     * Writes one checkpoint and repoints {@code current} at it.
+     *
+     * @param ts   the checkpoint's name — the sweep's own clock reading, so the
+     *             directory sorts oldest-first by name
+     * @param rows every row of every type that survived the purge step
+     * @return the committed checkpoint's path
+     */
+    public Path write(long ts, Iterable<Row> rows) {
+        StringBuilder buf = new StringBuilder();
+        for (Row row : rows) {
+            JsonObject line = new JsonObject();
+            line.addProperty("map", row.mapName);
+            line.addProperty("key", row.key);
+            line.addProperty("class", row.value.getClass().getName());
+            line.addProperty("proto", Base64.getEncoder().encodeToString(row.value.toByteArray()));
+            buf.append(line).append('\n');
+        }
+        Path target = dir.resolve(Long.toString(ts));
+        Path staged = FsUtil.writeTemp(target, buf.toString().getBytes(StandardCharsets.UTF_8), 0600);
+        FsUtil.promote(staged, target);
+        // Only now: a pointer written first would name a dump that does not exist
+        // yet, which is the one state the rename ordering exists to rule out.
+        FsUtil.atomicWrite(dir.resolve(CURRENT), target.getFileName().toString()
+                .getBytes(StandardCharsets.UTF_8), 0600);
+        return target;
+    }
+
+    /**
+     * The checkpoint {@code current} names, or null when this pod has never
+     * completed one — a first boot, or a boot after a volume was replaced.
+     */
+    public Path current() throws IOException {
+        Path pointer = dir.resolve(CURRENT);
+        if (!Files.exists(pointer)) {
+            return null;
+        }
+        String name = new String(Files.readAllBytes(pointer), StandardCharsets.UTF_8).trim();
+        if (name.isEmpty()) {
+            return null;
+        }
+        Path target = dir.resolve(name);
+        return Files.exists(target) ? target : null;
+    }
+
+    /**
+     * Every row of the checkpoint {@code current} names; empty when there is none.
+     *
+     * <p>A line whose class cannot be resolved or whose bytes do not parse FAILS
+     * the load rather than being skipped: a checkpoint is the baseline a cold start
+     * is built on, and quietly dropping rows out of it produces a store that is
+     * silently incomplete — the failure the whole cold-start gate exists to refuse.
+     */
+    public List<Row> load() throws IOException {
+        Path target = current();
+        if (target == null) {
+            return List.of();
+        }
+        List<Row> rows = new ArrayList<>();
+        for (String line : Files.readAllLines(target, StandardCharsets.UTF_8)) {
+            if (line.isBlank()) {
+                continue;
+            }
+            JsonObject obj = JsonParser.parseString(line).getAsJsonObject();
+            String className = obj.get("class").getAsString();
+            byte[] proto = Base64.getDecoder().decode(obj.get("proto").getAsString());
+            rows.add(new Row(obj.get("map").getAsString(), obj.get("key").getAsString(),
+                    parserFor(className).parseFrom(proto)));
+        }
+        return rows;
+    }
+
+    private Parser<? extends Message> parserFor(String className) {
+        return parsers.computeIfAbsent(className, cn -> {
+            try {
+                Message defaultInstance =
+                        (Message) Class.forName(cn).getMethod("getDefaultInstance").invoke(null);
+                return defaultInstance.getParserForType();
+            } catch (ReflectiveOperationException | ClassCastException e) {
+                throw new IllegalStateException("checkpoint holds rows of " + cn
+                        + ", which is not a protobuf message type on this build's classpath;"
+                        + " refusing to load a partial baseline", e);
+            }
+        });
+    }
+}
