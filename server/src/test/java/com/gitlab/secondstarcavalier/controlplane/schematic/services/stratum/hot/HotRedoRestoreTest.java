@@ -532,8 +532,15 @@ class HotRedoRestoreTest {
      * the UUID the cluster actually sees it by.
      */
     private static void peerReported(HazelcastInstance peer, int recordsRead) {
-        peer.<String, Integer>getMap(HotRestore.LEDGER_MAP)
-                .put(peer.getCluster().getLocalMember().getUuid().toString(), recordsRead);
+        String uuid = peer.getCluster().getLocalMember().getUuid().toString();
+        // With the in-flight mark awaitClusterReplay puts before its ledger write,
+        // for the same reason the UUID is real: a report without it is not a peer
+        // reporting from inside its own restore, it is a peer that has FINISHED one
+        // and is serving the maps — which the barrier counts as a contributor
+        // whatever number it filed (HotRestoreServingPeerContributorTest). These
+        // tests mean a peer that is here and recovering alongside this node.
+        peer.<String, Boolean>getMap(HotRestore.INFLIGHT_MAP).put(uuid, Boolean.TRUE);
+        peer.<String, Integer>getMap(HotRestore.LEDGER_MAP).put(uuid, recordsRead);
     }
 
     /**

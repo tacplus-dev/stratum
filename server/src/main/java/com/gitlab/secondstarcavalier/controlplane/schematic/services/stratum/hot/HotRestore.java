@@ -77,6 +77,39 @@ public final class HotRestore {
      */
     public static final String LEDGER_MAP = "stratum.hot.__restore_ledger";
 
+    /**
+     * The members that are INSIDE their own hot restore right now: member UUID ->
+     * TRUE, put on entry to {@link #awaitClusterReplay} and removed when that
+     * member's restore completes.
+     *
+     * <p>It exists because the ledger entry is a BOOT SNAPSHOT and the barrier was
+     * reading it as if it were a statement about the present. A member files its
+     * number once, at its own start, and never revises it; a peer that started
+     * hours ago therefore reports what its volume held hours ago, under whatever
+     * code it was running then. A restarting sibling was deciding its own
+     * durability against that.
+     *
+     * <p>What this map adds is the one fact the ledger cannot carry: whether the
+     * peer is STILL BUSY RECOVERING or has finished and is serving. A live member
+     * that has a ledger entry and is not in this map has already passed this
+     * barrier and is holding the record maps in memory — it IS a live durable copy
+     * for the purposes of the restart happening now, whatever number it filed at
+     * its own boot. See the contributor count below.
+     *
+     * <p>Absence is the serving state deliberately, not presence: a member running
+     * code that predates this map writes nothing to it and is therefore read as
+     * serving, which is exactly right for it — an already-running peer on an older
+     * image is precisely the case that cannot file a fresh report. A member that
+     * has NOT finished (including every member of a simultaneous restart) marks
+     * itself before filing its ledger entry, so it can never be mistaken for a
+     * serving one by a sibling that reads the two in either order.
+     *
+     * <p>Public and configured by name for the same reason {@link #LEDGER_MAP} is:
+     * it is read by the barrier, so a minority partition must not be able to keep
+     * its own private copy ({@code StratumMapConfig.build}).
+     */
+    public static final String INFLIGHT_MAP = "stratum.hot.__restore_inflight";
+
     private HotRestore() {}
 
     /** What one node's replay produced, for the caller to log and assert on. */
@@ -180,7 +213,10 @@ public final class HotRestore {
      *                         fewer contributors than this is LOUD, because the
      *                         recovered store is then thinner than the durability
      *                         the writes were acked under
-     * @return the number of instances that contributed a durable copy
+     * @return the number of instances that contributed a durable copy — the ones
+     *         that reported holding one at their own boot, plus the live peers that
+     *         have already completed this barrier and are serving the maps now
+     *         ({@link #INFLIGHT_MAP})
      * @throws IllegalStateException if the wait times out, or if the instances that
      *                               did contribute came in below {@code
      *                               minDurableCopies} — a recovery thinner than the
@@ -192,6 +228,17 @@ public final class HotRestore {
                                          long checkpointRecords, int minDurableCopies,
                                          Duration timeout) {
         IMap<String, Integer> ledger = hz.getMap(LEDGER_MAP);
+        IMap<String, Boolean> inflight = hz.getMap(INFLIGHT_MAP);
+        String self = hz.getCluster().getLocalMember().getUuid().toString();
+        // Marked BEFORE the ledger entry is filed, so the two are never observable
+        // in the order that would let a sibling read this member as serving while
+        // it is in fact still here. Removed only on the way out through the
+        // success path: a member that refuses below is exiting, and its entries —
+        // this one and its ledger report — stop counting when it leaves the
+        // cluster view, which liveReports already handles. Clearing it on the way
+        // out of a REFUSAL would be the one direction that is unsafe, because it
+        // would advertise a member that never finished as one that had.
+        inflight.put(self, Boolean.TRUE);
         // One number, because the check below asks one question of it: did this
         // member have a durable copy of its rows to bring back? The tail and the
         // baseline are the two halves of that copy and neither alone answers it.
@@ -199,8 +246,7 @@ public final class HotRestore {
         // negative and report a full volume as an empty one, which is the exact
         // misreading this parameter exists to stop.
         long durableRecords = (long) redoRecordsRead + checkpointRecords;
-        ledger.put(hz.getCluster().getLocalMember().getUuid().toString(),
-                (int) Math.min(durableRecords, Integer.MAX_VALUE));
+        ledger.put(self, (int) Math.min(durableRecords, Integer.MAX_VALUE));
 
         long deadlineMs = System.currentTimeMillis() + timeout.toMillis();
         int expected;
@@ -268,9 +314,40 @@ public final class HotRestore {
         // Counted over the same live-member-filtered reports the barrier broke on,
         // not over the raw map: a departed member's entry must not be able to talk
         // the store up to min_durable_copies either.
+        // A SECOND way to be a contributor, for the half of the problem the number
+        // above cannot express. The ledger entry is filed once, at that member's own
+        // boot, and never revised — so it describes a moment, not the present, and a
+        // peer that is up and serving right now can be carrying a number that is
+        // stale (its volume has been checkpointed since), or that was computed by an
+        // older image under the pre-9fa7ebc redo-tail-only rule. Both read as "this
+        // instance holds nothing" and both talk a healthy cluster below its floor.
+        //
+        // Observed 2026-09-21 as stratum-1 and stratum-2 crash-looping "1 of 2"
+        // against a serving stratum-0: stratum-0 was still on the pre-9fa7ebc image,
+        // had checkpointed since its own boot, and its permanent entry was therefore
+        // 0 while it was serving 468 rows. Nothing about that is recoverable by
+        // counting better — the number is simply from before.
+        //
+        // So a peer that has finished its own restore counts on the strength of
+        // having finished it. It passed this same barrier when it started, and it is
+        // holding the record maps in memory now; for the restart happening HERE it
+        // is a live durable copy, and requiring it to re-file a report every time a
+        // sibling restarts is asking it to prove again something it already proved.
+        //
+        // What keeps this from becoming "count everyone": a member that has NOT
+        // finished says so in INFLIGHT_MAP before it files anything, and every
+        // member of a simultaneous restart is in that state, so restarting pods
+        // cannot credit each other into a quorum none of them has. Only the local
+        // member is excluded by name — it is inside this call, so its own absence
+        // from the map would otherwise vouch for it.
+        Set<String> restoring = liveInflight(hz);
         int contributors = 0;
-        for (Integer durable : reports.values()) {
-            if (durable != null && durable > 0) {
+        for (Map.Entry<String, Integer> report : reports.entrySet()) {
+            String member = report.getKey();
+            Integer durable = report.getValue();
+            boolean holdsDurableCopy = durable != null && durable > 0;
+            boolean servingPeer = !member.equals(self) && !restoring.contains(member);
+            if (holdsDurableCopy || servingPeer) {
                 contributors++;
             }
         }
@@ -296,12 +373,17 @@ public final class HotRestore {
                     + " instances contributed a durable copy, below min_durable_copies " + minDurableCopies
                     + ". Every acked write was durable on " + minDurableCopies + " nodes, so the"
                     + " recovered store may be missing rows whose only surviving copies were on the"
-                    + " instances that held neither a redo log nor a checkpoint; refusing to serve a"
-                    + " silently incomplete hot store");
+                    + " instances that held neither a redo log nor a checkpoint and are not"
+                    + " already serving; refusing to serve a silently incomplete hot store");
         }
+        // Only now, and only here: this member has a complete store and is about to
+        // serve it, which is the whole of what a peer reads out of this map's
+        // absence.
+        inflight.delete(self);
         log.info("hot restore complete: {} of {} instances contributed a durable copy"
-                + " (this node: {} redo record(s) + {} checkpoint row(s))",
-                contributors, expected, redoRecordsRead, checkpointRecords);
+                + " ({} of them already serving; this node: {} redo record(s) + {} checkpoint row(s))",
+                contributors, expected, reports.size() - restoring.size(),
+                redoRecordsRead, checkpointRecords);
         return contributors;
     }
 
@@ -326,6 +408,35 @@ public final class HotRestore {
      *
      * <p>Filtering costs a cluster-view read per pass, which is a local field read.
      */
+    /**
+     * The members of the CURRENT cluster view that are inside their own restore,
+     * with every other entry deleted on the way past.
+     *
+     * <p>Same shape and same reasoning as {@link #liveReports}: the correctness is
+     * in the filter, and the delete is housekeeping against a map keyed by a UUID
+     * that changes on every restart. The filter matters more here than there,
+     * because a departed member's entry would be read as "that member is still
+     * recovering" and so would suppress a contributor rather than invent one — the
+     * safe direction, but a permanent one, since nothing else ever removes the
+     * entry of a member that exited inside its barrier.
+     */
+    private static Set<String> liveInflight(HazelcastInstance hz) {
+        Set<String> live = new HashSet<>();
+        for (Member m : hz.getCluster().getMembers()) {
+            live.add(m.getUuid().toString());
+        }
+        IMap<String, Boolean> inflight = hz.getMap(INFLIGHT_MAP);
+        Set<String> restoring = new HashSet<>();
+        for (Map.Entry<String, Boolean> e : inflight.entrySet()) {
+            if (!live.contains(e.getKey())) {
+                inflight.delete(e.getKey());
+            } else if (Boolean.TRUE.equals(e.getValue())) {
+                restoring.add(e.getKey());
+            }
+        }
+        return restoring;
+    }
+
     private static Map<String, Integer> liveReports(HazelcastInstance hz, IMap<String, Integer> ledger) {
         Set<String> live = new HashSet<>();
         for (Member m : hz.getCluster().getMembers()) {

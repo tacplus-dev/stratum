@@ -65,9 +65,20 @@ class HotRestoreDurabilityFloorTest {
         return a.getMap(HotRestore.LEDGER_MAP);
     }
 
-    /** Files a report for the OTHER live member, as that member's own replay would. */
+    /**
+     * Files a report for the OTHER live member, as that member's own replay would.
+     *
+     * <p>Including the in-flight mark {@code awaitClusterReplay} puts before it.
+     * Without that the peer is not a member reporting from inside its own restore
+     * at all — it is a member that finished one and is serving, which the barrier
+     * counts as a contributor whatever number it filed (see
+     * {@code HotRestoreServingPeerContributorTest}). These tests mean the former:
+     * a peer that is HERE AND RECOVERING and came back with an empty volume.
+     */
     private void peerReports(int redoRecordsRead) {
-        ledger().put(b.getCluster().getLocalMember().getUuid().toString(), redoRecordsRead);
+        String peer = b.getCluster().getLocalMember().getUuid().toString();
+        b.<String, Boolean>getMap(HotRestore.INFLIGHT_MAP).put(peer, Boolean.TRUE);
+        ledger().put(peer, redoRecordsRead);
     }
 
     /**

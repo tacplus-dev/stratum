@@ -254,3 +254,175 @@ is a second live argument for the fix in section 4, not a reason to consider the
 
 Fleet at the time of writing: 22/22 Running, `stratum-0/1/2` all 1/1. The bug is latent again and
 will resurface on the next restart that lands while exactly one peer holds a tail.
+
+---
+
+# Second bug, same barrier: a serving peer's ledger entry is a boot snapshot, so a mixed-version restart is refused
+
+**2026-09-21 ~12:50-13:00 MDT, live incident.** `stratum-1` and `stratum-2` both in
+`CrashLoopBackOff`; `stratum-0` up and serving alone (1/3, degraded HA, not an outage). This is a
+DIFFERENT bug from sections 1-7 above, in the same check, and `9fa7ebc` is what exposed it.
+
+## 9. What the cluster showed
+
+```
+$ kubectl get pods -n schematic -l app=stratum
+stratum-0   1/1   Running            12 (95m ago)   129m
+stratum-1   0/1   Error              5 (90s ago)    3m30s
+stratum-2   0/1   CrashLoopBackOff   4 (86s ago)    3m30s
+```
+
+Both peers exit identically:
+
+```
+java.lang.IllegalStateException: hot restore: only 1 of 2 instances contributed a durable copy,
+below min_durable_copies 2. ...
+	at ...hot.HotRestore.awaitClusterReplay(HotRestore.java:295)
+```
+
+**It is a mixed-version cluster, and that is confirmed, not inferred.** The three pods are not
+running the same image, despite the shared `:local` tag:
+
+```
+$ kubectl get pod stratum-0 stratum-1 -n schematic -o jsonpath='...containerStatuses...imageID'
+stratum-0  stratum@sha256:501b2eabcc0b418ee0a90ff58d92d5e146dc48ee978e70efb54372a2440a2769
+stratum-1  stratum@sha256:de1113c8242387eca9d1f2f02e5ad9c026c1d9760cc4ca9bff66bf44a6c18588
+```
+
+`501b2ea` is the pre-`9fa7ebc` image named in section 8. Its own log confirms the old code by the
+old wording and the old line number:
+
+```
+$ kubectl logs stratum-0 -n schematic | grep -i 'hot restore complete'
+17:17:51.736 HotRestore  HotRestore.java:272  hot restore complete: 0 of 3 instances contributed
+                                              a redo log
+17:17:51.692 EventStore  checkpoint: not a cold boot (468 row(s) held cluster-wide)
+```
+
+So: **stratum-0 filed a permanent ledger entry of 0 at 17:17:51Z** — redo tail only, because that
+is all its image knows how to count — and has been serving the cluster's 468 rows ever since.
+stratum-1 and stratum-2 boot on the fixed image, correctly count their own `checkpointRecords`
+(non-zero), and the barrier sums live entries: their own 1 + stratum-0's stale 0 = **1 of 2**,
+below the floor of 2. Refused, forever, on every retry.
+
+The trigger was a bulk roll: the StatefulSet is `updateStrategy: RollingUpdate` (generation 27),
+and the events show stratum-1 and stratum-2 recreated within seconds of each other, which is why
+neither could satisfy the barrier off the other either.
+
+## 10. Why this does not self-heal, and why `9fa7ebc` is not the thing to revert
+
+Nothing ever revises a ledger entry — that is established in section 2 and is unchanged. So
+stratum-0's 0 stands until stratum-0 itself restarts, and stratum-0 is the only serving replica:
+restarting it to clear the entry is the one action that converts a degraded cluster into an
+outage. The two crash-looping pods cannot rescue each other either, because each sees only its
+own fresh report plus the stale 0.
+
+`9fa7ebc` is correct and stays. It made the *reported number* accurate. What this incident shows
+is that an accurate number filed ONCE, AT BOOT, is still the wrong thing for the barrier to
+decide on — the check asks "who holds a durable copy right now?" and the ledger can only answer
+"who held one when they started, under whatever code they were running then". Reverting `9fa7ebc`
+would restore the section-1 bug without fixing this one.
+
+## 11. The fix: a peer that is already serving counts, whatever its number says
+
+New map `HotRestore.INFLIGHT_MAP` (`stratum.hot.__restore_inflight`), member UUID -> TRUE,
+**put on entry to `awaitClusterReplay`, before the ledger entry is filed, and deleted only on the
+success path**. A live member that has a ledger entry and is NOT in that map has passed this same
+barrier and is holding the record maps in memory; it is counted as a contributor regardless of
+what its `durableRecords` number says.
+
+Three properties, each load-bearing:
+
+- **Absence is the serving state, not presence.** A member on an image that predates this map
+  writes nothing to it and is therefore read as serving — which is exactly right for it, because
+  an already-running peer on an older image is precisely the member that cannot file a fresh
+  report. This is what makes the fix resolve the CURRENT incident rather than only future ones:
+  it works against a stratum-0 that is never redeployed.
+- **The mark precedes the ledger write**, so the two are never observable in the order that would
+  let a sibling read a member still at the barrier as a serving one.
+- **The mark is NOT cleared on the refusal path.** A member that refuses is exiting; its entries
+  stop counting when it leaves the cluster view, which `liveReports` already handles. Clearing it
+  on the way out of a refusal is the one direction that is unsafe — it would advertise a member
+  that never finished as one that had.
+
+`liveInflight` filters and prunes by the current cluster view exactly as `liveReports` does, for
+the same reason: a departed member's UUID must not decide anything. `StratumMapConfig` gives the
+new map the same `durableMap` backup count and split-brain protection as the ledger — it is read
+in the same breath as the ledger, so a minority partition that could keep a private copy of "who
+is still recovering" could talk itself up to the floor.
+
+**What this does NOT do.** It is not a staleness-versioning scheme, the ledger entry stays a boot
+snapshot, `min_durable_copies` semantics are untouched, the zero-contributor carve-out is
+untouched, and the `9fa7ebc` counting rule is untouched. Simultaneous restarts cannot credit each
+other, which is the case a naive "count every live member" would have broken.
+
+**One behavior change, named rather than hidden.** A cluster where the only serving peer is up
+but every restarting pod holds an empty volume now lands on 1 contributor and REFUSES, where
+before the fix all-zero reports landed on 0 and passed through the zero-contributor carve-out
+unverified. That is the carve-out swing section 8 flagged, now resolving in the strict direction.
+It is the correct direction (2-of-3 volumes genuinely wiped should not open reads silently), and
+it is covered by `twoPodsRestartingTogetherDoNotCreditEachOther`.
+
+## 12. Test
+
+`server/src/test/java/.../hot/HotRestoreServingPeerContributorTest.java`, two live Hazelcast
+members, because the production shape IS two — one serving peer, one pod restarting alone into
+it. The serving peer is put into that state by running the real `awaitClusterReplay` to
+completion, and the restarting pod is a real `shutdown()` plus a real new member with a fresh
+UUID, so nothing about the state under test is hand-written.
+
+- `aServingPeerWithAStaleLedgerEntryStillCountsTowardTheDurabilityFloor` — the production
+  scenario: the peer completes a healthy restore, its entry is then overwritten with the
+  redo-tail-only 0 a pre-`9fa7ebc` member files for a checkpointed volume, and the sibling
+  restarts alone. Must return 2 contributors and not throw.
+- `twoPodsRestartingTogetherDoNotCreditEachOther` — the paired negative: a peer inside its own
+  restore is not serving anything yet, so two pods restarting together onto empty volumes still
+  refuse at "only 1 of 2".
+
+```
+$ mvn -o -pl server -Dtacplus.skip=true -Dtest=HotRestoreServingPeerContributorTest test
+Tests run: 2, Failures: 0, Errors: 0, Skipped: 0 -- in ...HotRestoreServingPeerContributorTest
+```
+
+Re-run with the serving leg temporarily disabled (`boolean servingPeer = false;`) — it reproduces
+the live stack, so it is not passing vacuously:
+
+```
+Tests run: 2, Failures: 0, Errors: 1
+aServingPeerWithAStaleLedgerEntryStillCountsTowardTheDurabilityFloor -- ERROR!
+java.lang.IllegalStateException: hot restore: only 1 of 2 instances contributed a durable copy,
+below min_durable_copies 2. ...
+```
+
+(the leg was restored immediately afterwards; `grep` confirms
+`boolean servingPeer = !member.equals(self) && !restoring.contains(member);`)
+
+**Two existing tests needed their peer fixture made faithful, and the reason is the fix's own
+semantics.** `HotRedoRestoreTest.peerReported` and `HotRestoreDurabilityFloorTest.peerReports`
+each wrote a peer's ledger entry directly, without that peer ever entering `awaitClusterReplay` —
+so under the new rule the peer they described was not "a member reporting from inside its own
+restore" but "a member that finished one and is serving", which is a contributor by design. Both
+helpers already document themselves as filing "as that member's own replay would", and that
+replay marks in-flight before it writes the ledger; adding the mark is what makes the fixture
+match the sentence. The assertions themselves are untouched — the floor still refuses at one
+contributor, and `aRecoveryBelowTheDurabilityFloorRefusesToOpenTheStore` and
+`aNodeWithNoRedoLogStillContributesNothing` still fail if the serving leg is applied to a peer
+that has not finished.
+
+Restore-, checkpoint- and durability-adjacent suite, all green:
+
+```
+$ mvn -o -pl server -Dtacplus.skip=true -Dtest='HotRedoRestoreTest,HotRestoreDurabilityFloorTest,
+    HotRestoreLedgerTest,HotRestoreCheckpointContributorTest,HotRestoreServingPeerContributorTest,
+    HotQuorumGateTest,HotRedoBackupTimingTest,HotWritesPerMapDurabilityTest,
+    StratumMapConfigDurabilityTest,DailyCheckpointTest,CheckpointColdStartTest,
+    ColdStartReadGateTest,StartupHealthGateTest' test
+Tests run: 65, Failures: 0, Errors: 0, Skipped: 0
+```
+
+Full server suite (`mvn -o -pl server -Dtacplus.skip=true test`): 116 tests, the only failures
+being `PullAgentEventE2ETest` (12 errors) and `HotAgentEventE2ETest` (1 failure, 1 error) — every
+one `PERMISSION_DENIED: the record query plane reads rows owned by a namespace and the caller
+presented no verified namespace claim`, the same two classes with the same counts recorded as
+pre-existing in section 5 and in `2026-09-12-recovery-below-floor-followup.md`. Nothing on the
+restore path.

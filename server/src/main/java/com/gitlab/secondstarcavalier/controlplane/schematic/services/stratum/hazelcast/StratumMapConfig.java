@@ -179,12 +179,19 @@ public final class StratumMapConfig {
         // protection while the ledger it reads is the one thing a partition can
         // still write.
         cfg.addMapConfig(durableMap(HotRestore.LEDGER_MAP, minDurableCopies));
+        // The in-flight marks the barrier reads alongside the ledger, and they are
+        // read in the same breath as it, so they carry the same protection for the
+        // same reason: a minority partition that could keep its own copy of "who is
+        // still recovering" could talk itself up to the floor on peers the majority
+        // never saw finish.
+        cfg.addMapConfig(durableMap(HotRestore.INFLIGHT_MAP, minDurableCopies));
 
-        log.info("stratum hot maps {} + the restore ledger {}: deployment min_durable_copies={},"
+        log.info("stratum hot maps {} + the restore ledger {} + the in-flight marks {}:"
+                + " deployment min_durable_copies={},"
                 + " backupCount={} unless a record declares more (logged above),"
                 + " asyncBackupCount=0, split-brain minimumClusterSize={}",
-                StratumEventStores.mapNames(), HotRestore.LEDGER_MAP, minDurableCopies,
-                minDurableCopies - 1, minDurableCopies);
+                StratumEventStores.mapNames(), HotRestore.LEDGER_MAP, HotRestore.INFLIGHT_MAP,
+                minDurableCopies, minDurableCopies - 1, minDurableCopies);
 
         return cfg;
     }
