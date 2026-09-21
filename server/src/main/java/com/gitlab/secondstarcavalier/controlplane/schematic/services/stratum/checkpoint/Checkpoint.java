@@ -10,6 +10,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Stream;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -133,6 +134,40 @@ public final class Checkpoint {
         }
         Path target = dir.resolve(name);
         return Files.exists(target) ? target : null;
+    }
+
+    /**
+     * How many rows the checkpoint {@code current} names holds; 0 when this pod has
+     * never completed one.
+     *
+     * <p>This is the size of THIS POD'S DURABLE BASELINE, and it is what
+     * {@code EventStore.restoreHotTier} reports to the hot-restore ledger alongside
+     * the redo records it read. A pod whose redo log is empty because
+     * {@link DailyCheckpoint} truncated it to the dump point has lost nothing — the
+     * rows moved from the tail into the file this counts — and counting only the
+     * tail would report that pod as holding nothing durable at all.
+     *
+     * <p>Counts lines rather than parsing them, deliberately: the caller only needs
+     * to know whether this volume holds a durable copy, and it asks on EVERY boot,
+     * including the ones where {@code loadCheckpoint} skips the dump because the
+     * peers already hold the data. Parsing a dump that is not going to be loaded
+     * would make every rolling restart pay the cold-start cost to answer a
+     * yes/no question.
+     *
+     * <p>Trusting the line count without parsing is sound for exactly the reason
+     * {@link #write} is atomic: {@code current} is only ever repointed after the
+     * dump's commit rename, so a checkpoint it names is a complete dump by
+     * construction. A dump whose line CONTENT is unreadable still fails
+     * {@link #load}, which is the path where the bytes are the answer.
+     */
+    public long rowCount() throws IOException {
+        Path target = current();
+        if (target == null) {
+            return 0;
+        }
+        try (Stream<String> lines = Files.lines(target, StandardCharsets.UTF_8)) {
+            return lines.filter(line -> !line.isBlank()).count();
+        }
     }
 
     /**

@@ -82,6 +82,13 @@ Cold start is **the checkpoint plus the redo tail**, not a replay from offset ze
   that has a checkpoint, because the store is no longer empty by the time
   `StratumHandler` asks. A pod with no checkpoint — a first boot, a replaced volume
   — still replays, which is what should happen.
+- What each pod reports to the restore ledger is **its checkpoint's row count plus
+  the redo records it read**, not the redo records alone. The durability floor in
+  `HotRestore.awaitClusterReplay` counts a pod as a contributor when that number is
+  non-zero, so a pod sitting just after its own truncate still counts: its rows
+  moved from the tail into the dump, and reading it as an empty volume refused
+  restarts that had lost nothing
+  (`decisions/2026-09-21-stratum0-checkpoint-quorum-crashloop.md`).
 
 Recovery therefore costs the size of the data plus one cycle of writes, not the
 size of the history. **A purged row can never come back**: it is absent from the
@@ -169,6 +176,10 @@ when the `stratum` consumer group's offsets have already advanced past the histo
   real generated type's `(spec.store_epoch)`.
 - `HotRedoRestoreTest`, `HotRestoreLedgerTest` — the redo leg and the cross-node
   restore barrier. `ColdStartRebuilderTest` — the event-log replay decision.
+- `HotRestoreDurabilityFloorTest` — a recovery under the floor refuses rather than
+  logs; `HotRestoreCheckpointContributorTest` — a peer whose log is empty because
+  its checkpoint just truncated it still counts toward that floor, and a peer with
+  neither a tail nor a dump still does not.
 - `StratumMapConfigDurabilityTest.everyRecordMapCarriesItsDeclaredIdleClock` — every
   record map is configured with its declared clock; `IdleResidencyEvictionTest` —
   that the clock actually evicts, and that a read resets it without writing.

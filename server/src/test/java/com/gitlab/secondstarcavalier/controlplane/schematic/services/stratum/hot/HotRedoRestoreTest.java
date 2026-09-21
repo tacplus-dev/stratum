@@ -398,7 +398,7 @@ class HotRedoRestoreTest {
     @Test
     void hotReadsWaitForEveryReachableInstance(@TempDir Path dir) throws Exception {
         hz = member("stratum-barrier-test");
-        int contributors = HotRestore.awaitClusterReplay(hz, 7, 1, java.time.Duration.ofSeconds(5));
+        int contributors = HotRestore.awaitClusterReplay(hz, 7, 0, 1, java.time.Duration.ofSeconds(5));
         assertEquals(1, contributors);
     }
 
@@ -420,7 +420,7 @@ class HotRedoRestoreTest {
         hz = member("stratum-barrier-stagger-test");
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
-                () -> HotRestore.awaitClusterReplay(hz, 5, 2, java.time.Duration.ofSeconds(2)),
+                () -> HotRestore.awaitClusterReplay(hz, 5, 0, 2, java.time.Duration.ofSeconds(2)),
                 "the first pod up passed a two-instance barrier by itself");
         assertTrue(e.getMessage().contains("only 1 of 2 expected instances"), e.getMessage());
     }
@@ -434,7 +434,7 @@ class HotRedoRestoreTest {
         twoMemberCluster("stratum-barrier-peer-test");
         peerReported(peer, 5);
 
-        assertEquals(2, HotRestore.awaitClusterReplay(hz, 5, 2, java.time.Duration.ofSeconds(5)),
+        assertEquals(2, HotRestore.awaitClusterReplay(hz, 5, 0, 2, java.time.Duration.ofSeconds(5)),
                 "both instances read a log, so both contributed one");
     }
 
@@ -447,7 +447,7 @@ class HotRedoRestoreTest {
     void anEmptyReplayIsNotCountedAsAContribution(@TempDir Path dir) throws Exception {
         twoMemberCluster("stratum-barrier-empty-test");
         peerReported(peer, 0);
-        assertEquals(0, HotRestore.awaitClusterReplay(hz, 0, 2, java.time.Duration.ofSeconds(5)));
+        assertEquals(0, HotRestore.awaitClusterReplay(hz, 0, 0, 2, java.time.Duration.ofSeconds(5)));
     }
 
     /**
@@ -485,7 +485,7 @@ class HotRedoRestoreTest {
         assertEquals(2, afterRestart.read, "the log was present and read in full");
         assertTrue(afterRestart.diverged.isEmpty());
 
-        assertEquals(1, HotRestore.awaitClusterReplay(hz, afterRestart.read, 1, java.time.Duration.ofSeconds(5)),
+        assertEquals(1, HotRestore.awaitClusterReplay(hz, afterRestart.read, 0, 1, java.time.Duration.ofSeconds(5)),
                 "a node whose whole log replayed as SKIPPED had a redo log; reporting applied"
                         + " records instead would raise the durability alarm on every healthy"
                         + " rolling restart");
@@ -509,7 +509,7 @@ class HotRedoRestoreTest {
         assertEquals(0, result.read, "there was no log to read");
 
         peerReported(peer, 0);
-        assertEquals(0, HotRestore.awaitClusterReplay(hz, result.read, 2, java.time.Duration.ofSeconds(5)),
+        assertEquals(0, HotRestore.awaitClusterReplay(hz, result.read, 0, 2, java.time.Duration.ofSeconds(5)),
                 "an absent log is still zero contribution, and below the floor that stays LOUD");
     }
 

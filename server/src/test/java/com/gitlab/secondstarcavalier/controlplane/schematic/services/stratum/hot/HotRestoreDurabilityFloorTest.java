@@ -80,7 +80,7 @@ class HotRestoreDurabilityFloorTest {
         peerReports(0);
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
-                () -> HotRestore.awaitClusterReplay(a, 12, 2, Duration.ofSeconds(5)),
+                () -> HotRestore.awaitClusterReplay(a, 12, 0, 2, Duration.ofSeconds(5)),
                 "one contributor against min_durable_copies=2 must not open the hot store");
 
         assertTrue(e.getMessage().contains("only 1 of 2"),
@@ -97,7 +97,7 @@ class HotRestoreDurabilityFloorTest {
     void aRecoveryAtTheDurabilityFloorOpensTheStore() {
         peerReports(40);
 
-        int contributors = HotRestore.awaitClusterReplay(a, 12, 2, Duration.ofSeconds(5));
+        int contributors = HotRestore.awaitClusterReplay(a, 12, 0, 2, Duration.ofSeconds(5));
 
         assertEquals(2, contributors, "both live members contributed a redo log");
     }
@@ -113,7 +113,7 @@ class HotRestoreDurabilityFloorTest {
     void noContributorsAnywhereIsAnEmptyStoreNotAnUnderDurableOne() {
         peerReports(0);
 
-        int contributors = HotRestore.awaitClusterReplay(a, 0, 2, Duration.ofSeconds(5));
+        int contributors = HotRestore.awaitClusterReplay(a, 0, 0, 2, Duration.ofSeconds(5));
 
         assertEquals(0, contributors, "neither live member had a redo log");
     }

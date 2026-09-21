@@ -274,10 +274,37 @@ public class EventStore {
         // restart the peers still own the partitions, so this node's rows come back
         // already at their own-or-newer epoch and every record replays as SKIPPED.
         // Reporting applied records would make a healthy node look like it had no log.
-        HotRestore.awaitClusterReplay(hz, read, minDurableCopies, RESTORE_TIMEOUT);
+        //
+        // The checkpoint's row count goes with it, and it is read here rather than
+        // taken from loadCheckpoint because loadCheckpoint SKIPS the dump whenever
+        // the peers already hold the data — which is every rolling restart, i.e.
+        // exactly the boots where the barrier is decided. What the ledger needs is
+        // not "what did this pod load" but "what does this volume hold durably", and
+        // after a DailyCheckpoint cycle that is the dump, not the emptied redo tail.
+        HotRestore.awaitClusterReplay(hz, read, checkpointRows(), minDurableCopies, RESTORE_TIMEOUT);
         redoReplayDone = true;
         log.info("hot tier restored: {} record(s) read from this node's redo logs, {} applied",
                 read, applied);
+    }
+
+    /**
+     * The size of this pod's committed checkpoint, for the hot-restore ledger.
+     *
+     * <p>An unreadable checkpoint directory fails the start rather than counting as
+     * zero. Zero is the report of a volume that holds nothing durable, and it is the
+     * one report that can talk the barrier below min_durable_copies; a pod that
+     * cannot tell whether it has a baseline must not file that claim about itself.
+     * Same posture as {@link #loadCheckpoint}, which refuses to start on a baseline
+     * it cannot read.
+     */
+    private long checkpointRows() {
+        try {
+            return checkpoint.rowCount();
+        } catch (IOException e) {
+            throw new IllegalStateException("checkpoint at " + dataRoot() + " could not be counted;"
+                    + " refusing to report this volume's durability to the restore ledger"
+                    + " without knowing whether it holds a baseline", e);
+        }
     }
 
     /**

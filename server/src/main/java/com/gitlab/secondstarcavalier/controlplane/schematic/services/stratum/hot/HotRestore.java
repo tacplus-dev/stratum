@@ -64,7 +64,8 @@ public final class HotRestore {
     private static final Logger log = LoggerFactory.getLogger(HotRestore.class);
 
     /**
-     * The cluster-visible replay ledger: member UUID -> records replayed.
+     * The cluster-visible replay ledger: member UUID -> records this member holds
+     * durably, which is its replayed redo tail PLUS its committed checkpoint.
      *
      * <p>Public because it is a map the Hazelcast config has to configure by name:
      * it carries the same backup count and the same split-brain protection as the
@@ -163,13 +164,23 @@ public final class HotRestore {
      *                         had a log, and on a rolling restart that is the
      *                         normal case; counting applied records only would
      *                         raise the alarm below on every healthy restart.
+     * @param checkpointRecords rows in this node's committed checkpoint
+     *                         ({@code Checkpoint.rowCount}), counted whether or not
+     *                         the dump was loaded this boot. This node's durable
+     *                         copy is the checkpoint PLUS the redo tail since it
+     *                         (DURABILITY.md: "the checkpoint file IS the durable
+     *                         copy"), and {@code DailyCheckpoint} moves rows from the
+     *                         tail into the file every cycle — so an empty redo log
+     *                         on a volume holding a checkpoint means "nothing new
+     *                         since the dump", not "nothing". Counting the tail alone
+     *                         reported every just-checkpointed pod as holding nothing.
      * @param minDurableCopies the declared floor. It bounds the wait as well as the
      *                         alarm: it is how many instances there are SUPPOSED to
      *                         be, so the barrier cannot be satisfied by fewer, and
      *                         fewer contributors than this is LOUD, because the
      *                         recovered store is then thinner than the durability
      *                         the writes were acked under
-     * @return the number of instances that contributed a log
+     * @return the number of instances that contributed a durable copy
      * @throws IllegalStateException if the wait times out, or if the instances that
      *                               did contribute came in below {@code
      *                               minDurableCopies} — a recovery thinner than the
@@ -178,9 +189,18 @@ public final class HotRestore {
      *                               see the comment at the check.
      */
     public static int awaitClusterReplay(HazelcastInstance hz, int redoRecordsRead,
-                                         int minDurableCopies, Duration timeout) {
+                                         long checkpointRecords, int minDurableCopies,
+                                         Duration timeout) {
         IMap<String, Integer> ledger = hz.getMap(LEDGER_MAP);
-        ledger.put(hz.getCluster().getLocalMember().getUuid().toString(), redoRecordsRead);
+        // One number, because the check below asks one question of it: did this
+        // member have a durable copy of its rows to bring back? The tail and the
+        // baseline are the two halves of that copy and neither alone answers it.
+        // Saturated rather than wrapped: an overflowed sum could come out zero or
+        // negative and report a full volume as an empty one, which is the exact
+        // misreading this parameter exists to stop.
+        long durableRecords = (long) redoRecordsRead + checkpointRecords;
+        ledger.put(hz.getCluster().getLocalMember().getUuid().toString(),
+                (int) Math.min(durableRecords, Integer.MAX_VALUE));
 
         long deadlineMs = System.currentTimeMillis() + timeout.toMillis();
         int expected;
@@ -229,18 +249,28 @@ public final class HotRestore {
             }
         }
 
-        // A contributor is an instance that HAD a readable, non-empty redo log —
-        // not one that had rows to apply. A node whose every record was already
-        // present at its own-or-newer epoch (the rolling-restart case) contributed
-        // its log in full; a node with no log, or an empty one, read nothing and
-        // contributed nothing.
+        // A contributor is an instance that HAD A DURABLE COPY of its rows — not one
+        // that had rows to apply, and not one that happened to have a non-empty redo
+        // log. A node whose every record was already present at its own-or-newer
+        // epoch (the rolling-restart case) contributed its log in full; a node whose
+        // log is empty because DailyCheckpoint truncated it to the dump point
+        // contributed its checkpoint; a node with neither — a first boot, a replaced
+        // or lost volume — is the one that contributed nothing.
+        //
+        // Counting redo rows alone conflated the middle case with the last one, and
+        // that is a scheduled fault, not a rare one: every pod truncates its log to
+        // empty on every checkpoint cycle, so a pod restarting while its peers sit
+        // just after their own checkpoints would find them reported as empty volumes
+        // and refuse below. Observed 2026-09-21 as stratum-0 crash-looping against a
+        // healthy 2-of-3 cluster; see
+        // decisions/2026-09-21-stratum0-checkpoint-quorum-crashloop.md.
         //
         // Counted over the same live-member-filtered reports the barrier broke on,
         // not over the raw map: a departed member's entry must not be able to talk
         // the store up to min_durable_copies either.
         int contributors = 0;
-        for (Integer recordsRead : reports.values()) {
-            if (recordsRead != null && recordsRead > 0) {
+        for (Integer durable : reports.values()) {
+            if (durable != null && durable > 0) {
                 contributors++;
             }
         }
@@ -253,8 +283,8 @@ public final class HotRestore {
         // incomplete hot store rather than serve it loudly.
         //
         // ZERO contributors is the one case that is not this failure. It means no
-        // live instance had a redo log at all — a first deployment, or a total loss
-        // of every volume. Neither is a partial recovery there is anything to refuse:
+        // live instance had a redo log OR a checkpoint — a first deployment, or a
+        // total loss of every volume. Neither is a partial recovery there is anything to refuse:
         // nothing was replayed thinly, nothing was replayed at all, and the hot tier
         // is empty rather than under-durable. That case is already covered by the
         // OTHER leg of the read gate — hotReadable() also requires the event-log
@@ -263,13 +293,15 @@ public final class HotRestore {
         // first-ever bring-up, which is not a durability failure to fail closed on.
         if (contributors > 0 && contributors < minDurableCopies) {
             throw new IllegalStateException("hot restore: only " + contributors + " of " + expected
-                    + " instances contributed a redo log, below min_durable_copies " + minDurableCopies
+                    + " instances contributed a durable copy, below min_durable_copies " + minDurableCopies
                     + ". Every acked write was durable on " + minDurableCopies + " nodes, so the"
                     + " recovered store may be missing rows whose only surviving copies were on the"
-                    + " instances that contributed nothing; refusing to serve a silently incomplete"
-                    + " hot store");
+                    + " instances that held neither a redo log nor a checkpoint; refusing to serve a"
+                    + " silently incomplete hot store");
         }
-        log.info("hot restore complete: {} of {} instances contributed a redo log", contributors, expected);
+        log.info("hot restore complete: {} of {} instances contributed a durable copy"
+                + " (this node: {} redo record(s) + {} checkpoint row(s))",
+                contributors, expected, redoRecordsRead, checkpointRecords);
         return contributors;
     }
 

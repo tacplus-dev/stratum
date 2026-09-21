@@ -67,7 +67,7 @@ class HotRestoreLedgerTest {
         assertEquals(2, ledger().size(), "precondition: two departed members' entries are in the ledger");
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
-                () -> HotRestore.awaitClusterReplay(hz, 12, 3, Duration.ofMillis(300)),
+                () -> HotRestore.awaitClusterReplay(hz, 12, 0, 3, Duration.ofMillis(300)),
                 "two dead entries plus this node's fresh one must not clear a barrier of 3");
 
         assertTrue(e.getMessage().contains("only 1 of 3"),
@@ -83,7 +83,7 @@ class HotRestoreLedgerTest {
     void aLiveMembersOwnReportStillClearsTheBarrier() {
         ledger().put(UUID.randomUUID().toString(), 40);
 
-        int contributors = HotRestore.awaitClusterReplay(hz, 12, 1, Duration.ofSeconds(5));
+        int contributors = HotRestore.awaitClusterReplay(hz, 12, 0, 1, Duration.ofSeconds(5));
 
         assertEquals(1, contributors, "only the one live member contributed a log");
         assertEquals(1, ledger().size(), "the departed member's entry must have been pruned");
@@ -99,7 +99,7 @@ class HotRestoreLedgerTest {
     void staleEntriesDoNotCountAsDurabilityContributors() {
         ledger().put(UUID.randomUUID().toString(), 40);
 
-        int contributors = HotRestore.awaitClusterReplay(hz, 0, 1, Duration.ofSeconds(5));
+        int contributors = HotRestore.awaitClusterReplay(hz, 0, 0, 1, Duration.ofSeconds(5));
 
         assertEquals(0, contributors,
                 "a node that read nothing contributed nothing; the dead entry's 40 records are not its own");
