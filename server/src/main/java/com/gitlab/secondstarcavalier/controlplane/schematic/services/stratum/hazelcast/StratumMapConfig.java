@@ -304,7 +304,17 @@ public final class StratumMapConfig {
         // resolved it. A name with no record behind it — the restore ledger — gets
         // 0, Hazelcast's "no max-idle": it holds the replay reports the hot-restore
         // barrier counts, and a barrier whose ledger expires is not a barrier.
-        mapCfg.setMaxIdleSeconds(StratumEventStores.idleSeconds(name));
+        //
+        // HOTFIX 2026-09-21 (Jody): the clock is NOT wired until the disk leg exists.
+        // The "stays on disk, next touch reloads it" half above was never built —
+        // there is no MapLoader/MapStore behind any record map — and DailyCheckpoint
+        // dumps from live memory then truncates the redo log, so an idle-evicted row
+        // was gone for good at the next checkpoint (decisions/
+        // stratum-idle-eviction-durability-gap-2026-09-20.md). Until a read-through
+        // leg exists, every record map keeps Hazelcast's 0 = no max-idle; the
+        // declared idle_seconds is still generated and still looked up, it just has
+        // no consumer. Restore the line below when the leg lands:
+        //   mapCfg.setMaxIdleSeconds(StratumEventStores.idleSeconds(name));
 
         if (!MAP_NAME.equals(name)) {
             return mapCfg;

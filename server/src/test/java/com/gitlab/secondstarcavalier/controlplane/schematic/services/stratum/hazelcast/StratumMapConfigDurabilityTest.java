@@ -253,9 +253,14 @@ class StratumMapConfigDurabilityTest {
             assertTrue(declared > 0,
                     name + " resolves to no max-idle at all; 0/unset on the annotation means"
                             + " the platform default, never \"never\"");
-            assertEquals(declared, map.getMaxIdleSeconds(),
-                    name + " keeps Hazelcast's default max-idle, so its declared residency"
-                            + " clock never runs and the row never leaves memory");
+            // HOTFIX 2026-09-21: the declared clock is deliberately NOT applied until a
+            // read-through disk leg exists under the record maps — with none, idle
+            // eviction plus the checkpoint's redo truncation was permanent data loss
+            // (decisions/stratum-idle-eviction-durability-gap-2026-09-20.md). Flip this
+            // back to assertEquals(declared, ...) with the StratumMapConfig line.
+            assertEquals(0, map.getMaxIdleSeconds(),
+                    name + " has a max-idle applied while no disk leg exists to reload an"
+                            + " evicted row from; that is data loss, not cache maintenance");
         }
     }
 
