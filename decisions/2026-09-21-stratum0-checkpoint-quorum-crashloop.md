@@ -426,3 +426,116 @@ one `PERMISSION_DENIED: the record query plane reads rows owned by a namespace a
 presented no verified namespace claim`, the same two classes with the same counts recorded as
 pre-existing in section 5 and in `2026-09-12-recovery-below-floor-followup.md`. Nothing on the
 restore path.
+
+## 13. Deployed — by the roll that was already in flight, not by the staged rollout
+
+**2026-09-21 19:04-19:09Z (13:04-13:09 MDT).** The fix is live on all three pods and the incident
+is cleared: `stratum-0/1/2` are `1/1 Running`, 0 restarts, fleet 22/22. **But it was not deployed
+the way section 11's plan intended, and the difference is worth recording**, because the thing
+that deployed it was the same `RollingUpdate` mechanism section 9 names as the incident's trigger.
+
+### What actually happened
+
+The previous session's backgrounded `build-fleet.sh` run had not died with it. It finished mid-way
+through this session's own build and pushed to the **mutable `:local` tag** the StatefulSet
+already points at:
+
+```
+$ gcloud artifacts docker images list .../schematic/stratum --include-tags --sort-by=~updateTime
+sha256:3f9ef2c831d00824e1603dedaf9784fb9bc47dd3d351c612a868e6d9a3ca4f19  local   2026-09-21T13:04:43
+sha256:de1113c8242387eca9d1f2f02e5ad9c026c1d9760cc4ca9bff66bf44a6c18588          2026-09-21T12:28:02 -> 13:04:43
+```
+
+`de1113c8` — the image stratum-1/stratum-2 were crash-looping on — **lost the `local` tag at
+13:04:43** to `3f9ef2c8`. The StatefulSet was still mid-`RollingUpdate` (generation 29) with
+`imagePullPolicy: Always`, stalled because the two pods it had already recreated could not go
+Ready. So the roll simply resumed against the newly-tagged image, in reverse-ordinal order:
+
+| time (UTC) | pod | what its log says |
+|---|---|---|
+| 19:04:53 | stratum-1 | `hot restore complete: 2 of 2 instances contributed a durable copy (1 of them already serving; this node: 0 redo record(s) + 468 checkpoint row(s))` |
+| 19:05:01 | stratum-2 | `hot restore complete: 3 of 3 ... (2 of them already serving; this node: 0 redo record(s) + 468 checkpoint row(s))` |
+| 19:05:35 | stratum-0 | `hot restore complete: 3 of 3 ... (2 of them already serving; this node: 100 redo record(s) + 468 checkpoint row(s))` |
+
+stratum-1's line is section 12's `aServingPeerWithAStaleLedgerEntryStillCountsTowardTheDurability
+Floor` reproduced in production: one pod restarting alone into one serving peer, cleared at **2 of
+2 because 1 was already serving** — the in-flight-map leg, carrying the boot that the stale
+ledger entry had been refusing. The fix did the thing it was written to do.
+
+**stratum-0 was rolled too**, at 19:05:2xZ — the plan (§11, and this session's brief) was to leave
+it untouched on the old image, and that is not what happened. The controller reached it as the
+last ordinal once its siblings went Ready. Benign in outcome: it came back in 33s having counted
+its 2 serving peers, and the cluster has been uniform on one image since. But it was not a choice
+anyone made, and had the fix been wrong it would have taken the last serving replica with it.
+
+### The image this session built, and why it is not the one running
+
+Built from HEAD `396d952` (clean tree) on the fleet's real path, stratum only, under an
+**immutable tag** rather than `:local`, so that what was deployed would be nameable:
+
+```
+$ cd platform/services/stratum && git log --oneline -1
+396d952 hot restore: count a peer that is already serving as a contributor
+
+$ mvn -o -pl server -Dtacplus.skip=true -Dtest=HotRestoreServingPeerContributorTest test
+Tests run: 2, Failures: 0, Errors: 0, Skipped: 0
+
+$ REGISTRY=us-central1-docker.pkg.dev/jody1-328023/cavalier TAG=396d952 \
+    ./scripts/build-fleet.sh stratum
+  OK   artifact
+  OK   image us-central1-docker.pkg.dev/.../schematic/stratum:396d952
+  OK   pushed
+```
+
+It pushed at 13:06:48 as `sha256:1b7ef987ea67586e12b905c0b04df0bc7270cb2955348b826e892ea6985ac860`
+— two minutes after the roll had already completed. Rather than force a second, redundant restart
+of a healthy 3/3 cluster to swap a functionally identical image, the running one was **verified**
+instead, by extracting `/app/stratum.jar` from both and comparing the compiled classes the fix
+touches:
+
+```
+hazelcast/StratumMapConfig: MATCH (76928ee46edc5d0124b6fa5bc35eb0ba7a6dac08)
+hot/HotRestore:             MATCH (9247f08802af786850eef923da1da9b6dabb049e)
+checkpoint/Checkpoint:      MATCH (2f65da6da9db9375bcd507ce0bbb5f3635595886)
+```
+
+Byte-identical. The deployed `3f9ef2c8` and this session's `1b7ef98` are the same code; they
+differ only in image metadata from being built minutes apart. `:396d952` is left in the registry
+as an immutable, reproducible name for what is running — `:local` no longer identifies it, having
+already been repointed twice today.
+
+### Before / after
+
+```
+19:03Z (before)                          19:08Z (after)
+stratum-0  1/1 Running  12 restarts      stratum-0  1/1 Running  0 restarts  (image 3f9ef2c8)
+stratum-1  0/1 CrashLoopBackOff  8       stratum-1  1/1 Running  0 restarts  (image 3f9ef2c8)
+stratum-2  0/1 CrashLoopBackOff  8       stratum-2  1/1 Running  0 restarts  (image 3f9ef2c8)
+fleet: 20/22 Running                     fleet: 22/22 Running
+```
+
+All three previously on split images (`501b2ea` / `de1113c8`); all three now on `3f9ef2c8`. The
+mixed-version condition that section 9 diagnosed no longer exists.
+
+### Steps deliberately NOT taken
+
+- **`updateStrategy` was left at `RollingUpdate`.** The plan was to switch it to `OnDelete` first,
+  so the staged one-at-a-time rollout could not turn into a bulk roll. By the time the cluster was
+  looked at, there was no rollout left to protect — and flipping it then would have been an
+  unrequested, lasting change to how every future stratum deploy behaves, made against a cluster
+  that had just gone healthy. It is a real open question, not an oversight; see below.
+- **No pod was deleted.** Steps 5 and 6 of the plan (`kubectl delete pod stratum-1`, then
+  `stratum-2`) were moot — both were already Running on the fixed image. Nothing in this session
+  mutated the live cluster; every `kubectl` call made against it was a read.
+
+### Open question for the maintainer
+
+**Should `stratum`'s `updateStrategy` be changed from `RollingUpdate` to `OnDelete`, and should
+the StatefulSet stop pointing at the mutable `:local` tag?** Today's incident needed both halves
+to happen: a bulk roll recreated two pods at once (§9), and a `:local` push silently redefined
+what "the current image" meant — twice, once causing the incident and once resolving it. A
+`docker push` from a laptop should probably not be able to restart a production StatefulSet with
+no one asking for a deploy. Against that, `RollingUpdate` + `:local` is the whole fleet's
+convention, and `OnDelete` on stratum alone leaves a trap for the next operator who pushes
+`:local` and waits for a roll that never comes. This is a fleet-wide deployment-policy call, not
+a stratum one, and it was not made here.
