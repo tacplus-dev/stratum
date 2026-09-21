@@ -222,3 +222,35 @@ form was deliberately not added: it would let a future caller silently re-create
   2026-09-20 lifecycle decision; this change now reads those dumps' line counts on every boot,
   which is one extra file read per pod per start. Named here so it is not a surprise, not
   proposed as a problem.
+
+## 8. Not deployed — build blocked; incident self-cleared via the zero-contributor carve-out
+
+**2026-09-21 ~11:30 MDT.** No image was built, pushed or deployed. `scotty/backend/build.sh
+stratum` cannot run on this host: its preflight fails the 45GB free-disk gate (10GB available,
+98% full volume), and `docker builder prune -f` — the fix the script itself prescribes — reclaims
+space *inside* Docker Desktop's VM disk while returning **zero** bytes to macOS (10.1GB free
+before and after). No docker pruning can move that number. Escalated to `looper/schematic/
+inbox.md` as a question with three options; nothing was overridden. The commit under test is
+`9fa7ebc`; the hot-restore suite re-ran green here (23/23, `HotRestoreCheckpointContributorTest`
+2/2) with `-Dtacplus.skip=true` against the module's pre-built classes.
+
+**The live symptom cleared on its own at 17:17:49Z, and how it cleared matters more than that it
+did.** `stratum-0` (restart #12, still the old image
+`sha256:501b2eabcc0b418ee0a90ff58d92d5e146dc48ee978e70efb54372a2440a2769`) booted successfully
+and logged:
+
+```
+HotRestore.java:272  hot restore complete: 0 of 3 instances contributed a redo log
+```
+
+Not a recovered quorum — the **zero-contributor carve-out**. Section 1's "only 1 of 3" became
+"0 of 3" because the last peer still holding a live redo tail checkpointed and truncated it too,
+so every member now reports nothing and the first-boot/total-volume-loss escape hatch let the pod
+through without any durability check at all. Effect here is benign (it joined a live 3-member
+Hazelcast cluster whose partitions already hold the data, rather than restoring from nothing), but
+the guard is now demonstrated to swing between both failure directions on the same unchanged
+cluster: refusing a healthy boot at 1 contributor, then waving one through unverified at 0. That
+is a second live argument for the fix in section 4, not a reason to consider the incident closed.
+
+Fleet at the time of writing: 22/22 Running, `stratum-0/1/2` all 1/1. The bug is latent again and
+will resurface on the next restart that lands while exactly one peer holds a tail.
