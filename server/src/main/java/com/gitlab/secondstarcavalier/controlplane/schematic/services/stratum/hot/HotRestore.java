@@ -73,7 +73,14 @@ public final class HotRestore {
      * Hazelcast's defaults is the same split-brain hole the record maps had — a
      * minority partition would file and read its own reports locally, and the
      * barrier that exists to refuse an incomplete recovery would be decided off a
-     * ledger the majority never saw.
+     * ledger the majority never saw. It carries MORE replication than they do, and
+     * why is on {@code StratumMapConfig.coordinationMap}.
+     *
+     * <p>The entry is still filed once per boot and never revised. What changed on
+     * 2026-09-22 is that it is no longer filed once and then unwritable: a member
+     * that finds its own entry gone puts it back ({@link #refileReport}), because
+     * the barrier needs a report from every live member and a serving member has no
+     * other occasion to file one.
      */
     public static final String LEDGER_MAP = "stratum.hot.__restore_ledger";
 
@@ -239,14 +246,7 @@ public final class HotRestore {
         // out of a REFUSAL would be the one direction that is unsafe, because it
         // would advertise a member that never finished as one that had.
         inflight.put(self, Boolean.TRUE);
-        // One number, because the check below asks one question of it: did this
-        // member have a durable copy of its rows to bring back? The tail and the
-        // baseline are the two halves of that copy and neither alone answers it.
-        // Saturated rather than wrapped: an overflowed sum could come out zero or
-        // negative and report a full volume as an empty one, which is the exact
-        // misreading this parameter exists to stop.
-        long durableRecords = (long) redoRecordsRead + checkpointRecords;
-        ledger.put(self, (int) Math.min(durableRecords, Integer.MAX_VALUE));
+        ledger.put(self, durableRecordCount(redoRecordsRead, checkpointRecords));
 
         long deadlineMs = System.currentTimeMillis() + timeout.toMillis();
         int expected;
@@ -385,6 +385,65 @@ public final class HotRestore {
                 contributors, expected, reports.size() - restoring.size(),
                 redoRecordsRead, checkpointRecords);
         return contributors;
+    }
+
+    /**
+     * The one number a member files about itself, because the contributor check
+     * asks one question of it: did this member have a durable copy of its rows to
+     * bring back? The redo tail and the checkpoint baseline are the two halves of
+     * that copy and neither alone answers it.
+     *
+     * <p>Saturated rather than wrapped: an overflowed sum could come out zero or
+     * negative and report a full volume as an empty one, which is the exact
+     * misreading the count exists to stop.
+     */
+    public static int durableRecordCount(int redoRecordsRead, long checkpointRecords) {
+        return (int) Math.min((long) redoRecordsRead + checkpointRecords, Integer.MAX_VALUE);
+    }
+
+    /**
+     * Puts this member's ledger report back if it is missing, for a member that has
+     * already passed the barrier and is serving.
+     *
+     * <p>The entry is written once, at boot, and until now nothing could ever write
+     * it again — so anything that removed it removed it for good, and the barrier,
+     * which needs a report from every live member, became unsatisfiable for as long
+     * as this member kept serving. Every other pod's restart then timed out on
+     * "only N of N+1 expected instances reported" and no number of restarts could
+     * help, because the missing report belonged to the one member that was not
+     * restarting. That is the 2026-09-22 crash-loop.
+     *
+     * <p>Two things remove it. Member death takes it with the partition replicas it
+     * lived on, which {@code StratumMapConfig.coordinationMap} now prevents by
+     * replicating this map to every member. {@link #liveReports} removes it too,
+     * pruning any entry whose member is absent from the pruner's cluster view — and
+     * a view that is momentarily missing a member which is in fact alive turns
+     * housekeeping into a permanent wedge. This repair is what makes the second one
+     * survivable, and it is the reason to repair rather than to stop pruning: the
+     * ledger is keyed by a UUID minted on every restart, so a map that is never
+     * pruned grows by one dead entry per pod per restart for the life of the
+     * cluster.
+     *
+     * <p>{@code putIfAbsent}, never {@code put}: this REPLACES NOTHING. The entry is
+     * a boot snapshot by design — {@code 396d952} settled that a serving peer counts
+     * on the strength of the barrier it already passed, not on its number being
+     * current — and a repair that revised the number would be re-deciding that.
+     *
+     * @param durableRecords what this member filed at its boot
+     *                       ({@link #durableRecordCount}), not a fresh count
+     * @return true if a missing entry was put back
+     */
+    public static boolean refileReport(HazelcastInstance hz, int durableRecords) {
+        String self = hz.getCluster().getLocalMember().getUuid().toString();
+        IMap<String, Integer> ledger = hz.getMap(LEDGER_MAP);
+        if (ledger.putIfAbsent(self, durableRecords) != null) {
+            return false;
+        }
+        log.warn("hot restore: this member's ledger report was missing and has been re-filed"
+                + " ({} durable record(s) at boot). Until it was, every peer restart would have"
+                + " timed out waiting for a report from a member that is serving and cannot"
+                + " restart itself to file one.", durableRecords);
+        return true;
     }
 
     /**

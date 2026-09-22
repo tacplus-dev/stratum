@@ -121,6 +121,13 @@ public class EventStore {
      * rebuild that was never going to run.
      */
     private volatile boolean coldStartReplayDone;
+    /**
+     * What this pod filed in the hot-restore ledger at its boot, so
+     * {@link #repairRestoreReport} can put exactly that back and never a revision
+     * of it. Zero until the barrier has been passed, which is also when the repair
+     * first becomes meaningful.
+     */
+    private volatile int bootDurableRecords;
     private Checkpoint checkpoint;
     private DailyCheckpoint dailyCheckpoint;
     private RecordDisk recordDisk;
@@ -138,6 +145,18 @@ public class EventStore {
      * {@code FORMATION_TIMEOUT}.
      */
     static final java.time.Duration RESTORE_TIMEOUT = java.time.Duration.ofMinutes(5);
+
+    /**
+     * How often a serving pod checks that its hot-restore ledger report is still
+     * there, and puts it back if it is not ({@link #repairRestoreReport}).
+     *
+     * <p>Well inside {@link #RESTORE_TIMEOUT}, deliberately: a restarting peer waits
+     * that long for a report from every live member, so a report that comes back
+     * within a fraction of it costs that peer a slower start and nothing else. The
+     * alternative — a report that never comes back — cost the 2026-09-22 incident
+     * every restart of every other pod, permanently.
+     */
+    private static final long REPORT_REPAIR_SECONDS = 30;
 
     /** Archives retained per hot redo log, matching the diskstore proto default. */
     private static final int HOT_ARCHIVE_COUNT = 3;
@@ -250,6 +269,13 @@ public class EventStore {
                 this::runDailyCheckpoint,
                 cleanupIntervalSecs, cleanupIntervalSecs, TimeUnit.SECONDS);
 
+        // On the cleaner rather than on a thread of its own: it is the same kind of
+        // work — keeping what this pod publishes about its own volume true — and a
+        // putIfAbsent every 30s does not need one.
+        cleaner.scheduleWithFixedDelay(
+                this::repairRestoreReport,
+                REPORT_REPAIR_SECONDS, REPORT_REPAIR_SECONDS, TimeUnit.SECONDS);
+
         log.info("EventStore initialised: deleted_max_age_seconds={}, seed_members={}",
                 deletedMaxAgeSeconds, seedMembers.isEmpty() ? "multicast" : seedMembers);
     }
@@ -303,7 +329,14 @@ public class EventStore {
         // exactly the boots where the barrier is decided. What the ledger needs is
         // not "what did this pod load" but "what does this volume hold durably", and
         // after a DailyCheckpoint cycle that is the dump, not the emptied redo tail.
-        HotRestore.awaitClusterReplay(hz, read, checkpointRows(), minDurableCopies, RESTORE_TIMEOUT);
+        long checkpointRows = checkpointRows();
+        HotRestore.awaitClusterReplay(hz, read, checkpointRows, minDurableCopies, RESTORE_TIMEOUT);
+        // The SAME number, kept so it can be put back unchanged if the entry is ever
+        // lost — read once above rather than twice, because a repair that filed a
+        // different number from the report would be revising it. The barrier needs a
+        // report from every live member and a member that is serving has no other
+        // occasion to file one; see repairRestoreReport.
+        bootDurableRecords = HotRestore.durableRecordCount(read, checkpointRows);
         redoReplayDone = true;
         log.info("hot tier restored: {} record(s) read from this node's redo logs, {} applied",
                 read, applied);
@@ -456,6 +489,30 @@ public class EventStore {
         } catch (Exception e) {
             log.error("daily checkpoint failed; the previous checkpoint and the un-truncated"
                     + " redo logs remain a complete recovery set, retrying next cycle", e);
+        }
+    }
+
+    /**
+     * Puts this pod's hot-restore ledger report back if it has gone missing.
+     *
+     * <p>Only after the barrier: before it, this pod has filed nothing to repair and
+     * {@link #bootDurableRecords} is not yet the number it filed. Putting a 0 there
+     * early would be this pod claiming an empty volume in the one place the barrier
+     * reads to decide whether the cluster is under its durability floor.
+     *
+     * <p>Swallowing the failure is right here where it is right for the checkpoint:
+     * a repair that could not run is a repair that runs next cycle, and throwing out
+     * of a scheduled task on a single-threaded executor would stop the daily
+     * checkpoint with it.
+     */
+    private void repairRestoreReport() {
+        if (!redoReplayDone) {
+            return;
+        }
+        try {
+            HotRestore.refileReport(hz, bootDurableRecords);
+        } catch (Exception e) {
+            log.warn("could not check this pod's hot-restore ledger report, retrying next cycle", e);
         }
     }
 

@@ -180,20 +180,21 @@ public final class StratumMapConfig {
         // barrier is protection against an incomplete recovery; it cannot be
         // protection while the ledger it reads is the one thing a partition can
         // still write.
-        cfg.addMapConfig(durableMap(HotRestore.LEDGER_MAP, minDurableCopies));
+        cfg.addMapConfig(coordinationMap(HotRestore.LEDGER_MAP, minDurableCopies));
         // The in-flight marks the barrier reads alongside the ledger, and they are
         // read in the same breath as it, so they carry the same protection for the
         // same reason: a minority partition that could keep its own copy of "who is
         // still recovering" could talk itself up to the floor on peers the majority
         // never saw finish.
-        cfg.addMapConfig(durableMap(HotRestore.INFLIGHT_MAP, minDurableCopies));
+        cfg.addMapConfig(coordinationMap(HotRestore.INFLIGHT_MAP, minDurableCopies));
 
-        log.info("stratum hot maps {} + the restore ledger {} + the in-flight marks {}:"
-                + " deployment min_durable_copies={},"
-                + " backupCount={} unless a record declares more (logged above),"
-                + " asyncBackupCount=0, split-brain minimumClusterSize={}",
-                StratumEventStores.mapNames(), HotRestore.LEDGER_MAP, HotRestore.INFLIGHT_MAP,
-                minDurableCopies, minDurableCopies - 1, minDurableCopies);
+        log.info("stratum hot maps {}: deployment min_durable_copies={},"
+                + " backupCount={} unless a record declares more (logged above), asyncBackupCount=0,"
+                + " split-brain minimumClusterSize={}. The restore ledger {} and the in-flight marks"
+                + " {} carry the same protection at backupCount={} — see coordinationMap.",
+                StratumEventStores.mapNames(), minDurableCopies, minDurableCopies - 1,
+                minDurableCopies, HotRestore.LEDGER_MAP, HotRestore.INFLIGHT_MAP,
+                MapConfig.MAX_BACKUP_COUNT);
 
         return cfg;
     }
@@ -273,6 +274,44 @@ public final class StratumMapConfig {
                 throw new IllegalStateException("stratum: interrupted while awaiting cluster formation", e);
             }
         }
+    }
+
+    /**
+     * One of the two maps the hot-restore barrier is decided on, at the record maps'
+     * protection but replicated to EVERY member instead of to {@code
+     * min_durable_copies - 1} of them.
+     *
+     * <p>The record maps' backup count is a DURABILITY statement: a write is acked
+     * once that many members hold it. These two hold no records. What they hold is
+     * the coordination state that says which members have recovered — and the event
+     * they have to survive is precisely the one the record maps' number is chosen
+     * against, SEVERAL MEMBERS DYING AT ONCE. At one backup on three members, each
+     * entry lives on two of the three, so losing two members at the same instant
+     * destroys outright every entry whose owner and backup were both among them —
+     * measured at 112 of 300 keys, a third, in {@code
+     * HotRestoreLostReportDeadlockTest}.
+     *
+     * <p>A destroyed ledger entry does not come back on its own. A member files its
+     * report once, at its own boot ({@link HotRestore#LEDGER_MAP}), so a SERVING
+     * peer whose entry is destroyed is invisible to {@code
+     * HotRestore.awaitClusterReplay} for as long as it keeps serving, and every
+     * restart of every other pod then times out against a barrier that can never be
+     * satisfied. That is the 2026-09-22 crash-loop; see
+     * decisions/2026-09-22-stratum-mutual-restart-deadlock.md. Losing an in-flight
+     * mark is the worse direction of the same fault: a member still inside its
+     * restore reads as one that has finished.
+     *
+     * <p>Full replication is affordable here and nowhere else: these maps hold ONE
+     * ENTRY PER MEMBER, written twice per boot, against record maps holding the
+     * store. {@code MAX_BACKUP_COUNT} is Hazelcast's ceiling of 6 and is a maximum,
+     * not a requirement — a cluster of three places two backups — so no cluster size
+     * this deployment can reach leaves a coordination entry on fewer members than
+     * are alive to hold it.
+     */
+    private static MapConfig coordinationMap(String name, int minDurableCopies) {
+        MapConfig mapCfg = durableMap(name, minDurableCopies);
+        mapCfg.setBackupCount(MapConfig.MAX_BACKUP_COUNT);
+        return mapCfg;
     }
 
     /**

@@ -69,12 +69,16 @@ class StratumMapConfigDurabilityTest {
      * configured backupCount below what the record asks for.
      */
     @Test
-    void theSingleNodeFloorKeepsNoBackupOnTheLedger() {
+    void theSingleNodeFloorDoesNotLowerARecordMapBelowItsOwnDeclaration() {
         Config cfg = StratumMapConfig.build(List.of(), 1);
 
+        // The ledger does not track the floor in either direction any more; it is
+        // replicated to every member whatever the floor says. A deliberately
+        // single-instance deployment pays nothing for that — Hazelcast places a
+        // backup only where there is a member to place it on.
         MapConfig ledger = cfg.getMapConfigs().get(HotRestore.LEDGER_MAP);
         assertNotNull(ledger);
-        assertEquals(0, ledger.getBackupCount());
+        assertEquals(MapConfig.MAX_BACKUP_COUNT, ledger.getBackupCount());
 
         MapConfig map = hotMap(cfg);
         assertEquals(Math.max(1, StratumEventStores.minDurableCopies(StratumMapConfig.MAP_NAME)) - 1,
@@ -128,27 +132,39 @@ class StratumMapConfigDurabilityTest {
     }
 
     /**
-     * The restore ledger is a map like any other, and carries the same settings.
+     * The two maps the barrier is decided on carry the record maps' split-brain
+     * protection, and MORE replication than the record maps have.
      *
-     * <p>It was outside the loop above — the record maps' own omission, one map
-     * later. It is the map {@code HotRestore.awaitClusterReplay} decides the
-     * hot-restore barrier on, so on Hazelcast's defaults a minority partition files
-     * and counts its own replay reports locally and opens hot reads over a store the
-     * majority never agreed was recovered. A barrier against incomplete recovery
-     * cannot be a barrier while the ledger it reads is the one map a partition can
-     * still write.
+     * <p>The protection is why they stopped taking Hazelcast's defaults: they were
+     * outside the loop above — the record maps' own omission, one map later — and on
+     * the defaults a minority partition files and counts its own replay reports
+     * locally and opens hot reads over a store the majority never agreed was
+     * recovered. A barrier against incomplete recovery cannot be a barrier while the
+     * ledger it reads is the one map a partition can still write.
+     *
+     * <p>The replication is the 2026-09-22 fix. These maps are not records and their
+     * backup count is not a durability statement; it is how many members have to die
+     * at once to destroy the barrier's own knowledge of who has recovered. At the
+     * record maps' number that was two of three, and a destroyed report is never
+     * re-filed by the serving member it belonged to — see
+     * {@code HotRestoreLostReportDeadlockTest} and
+     * decisions/2026-09-22-stratum-mutual-restart-deadlock.md.
      */
     @Test
-    void theRestoreLedgerIsProtectedLikeTheRecordMaps() {
+    void theBarriersOwnMapsAreProtectedAndFullyReplicated() {
         Config cfg = StratumMapConfig.build(List.of(), 3);
 
-        MapConfig ledger = cfg.getMapConfigs().get(HotRestore.LEDGER_MAP);
-        assertNotNull(ledger, "the restore ledger has no MapConfig, so it takes Hazelcast's defaults");
-        assertEquals(2, ledger.getBackupCount(), "the ledger is not at the declared floor");
-        assertEquals(0, ledger.getAsyncBackupCount(),
-                "the ledger counts an async backup towards the floor");
-        assertEquals(StratumMapConfig.SPLIT_BRAIN_PROTECTION_NAME, ledger.getSplitBrainProtectionName(),
-                "a minority partition can file and count its own replay reports");
+        for (String name : List.of(HotRestore.LEDGER_MAP, HotRestore.INFLIGHT_MAP)) {
+            MapConfig map = cfg.getMapConfigs().get(name);
+            assertNotNull(map, name + " has no MapConfig, so it takes Hazelcast's defaults");
+            assertEquals(MapConfig.MAX_BACKUP_COUNT, map.getBackupCount(),
+                    name + " is replicated to fewer members than are alive to hold it, so the"
+                            + " members whose loss the barrier exists to survive can destroy it");
+            assertEquals(0, map.getAsyncBackupCount(),
+                    name + " counts an async backup, which is not held when the write returns");
+            assertEquals(StratumMapConfig.SPLIT_BRAIN_PROTECTION_NAME, map.getSplitBrainProtectionName(),
+                    "a minority partition can file and count its own replay reports in " + name);
+        }
     }
 
     /**
@@ -202,23 +218,26 @@ class StratumMapConfigDurabilityTest {
     }
 
     /**
-     * The restore ledger stays on the plain deployment floor.
+     * The restore ledger is outside the per-record durability raise.
      *
      * <p>It is not a record map: it has no {@code (spec.min_durable_copies)} declaration
      * and nothing in the generated lookup, so the per-record raise must not reach it.
-     * Driven at a floor of 1, where every record map IS raised — if the ledger were
-     * inside the raise it would show the records' 2 rather than the deployment's 1.
+     * Its backup count is decided on its own grounds instead — it is the barrier's
+     * knowledge of who has recovered, not a durability statement about rows — and
+     * {@code theBarriersOwnMapsAreProtectedAndFullyReplicated} is where that is
+     * asserted. What is asserted here is only that no record's number is what decides
+     * it.
      */
     @Test
-    void theRestoreLedgerAlwaysUsesThePlainDeploymentFloor() {
+    void theRestoreLedgerIsOutsideThePerRecordRaise() {
         Config cfg = StratumMapConfig.build(List.of(), 1);
 
         assertEquals(0, StratumEventStores.minDurableCopies(HotRestore.LEDGER_MAP),
                 "the ledger is not a generated record map and must not be in the lookup");
         MapConfig ledger = cfg.getMapConfigs().get(HotRestore.LEDGER_MAP);
         assertNotNull(ledger, "the restore ledger has no MapConfig");
-        assertEquals(0, ledger.getBackupCount(),
-                "the ledger took a record's per-record floor, which it does not have");
+        assertEquals(MapConfig.MAX_BACKUP_COUNT, ledger.getBackupCount(),
+                "the ledger took a number from a record, which decides nothing about it");
     }
 
     /** The documented default, so an undeclared record is not shipped unprotected. */
