@@ -9,8 +9,8 @@ map this document used to describe. A record stratum holds is recoverable from:
    with a declared `min_durable_copies` floor and split-brain protection. A write
    is acked only once that many distinct instances hold it; a below-quorum write
    throws rather than storing locally (`HotWrites`).
-2. **This pod's own volume.** A checkpoint plus a redo log, per pod, under
-   `<dataRoot>` — the subject of the rest of this document.
+2. **This pod's own volume.** A checkpoint, a redo log and a per-type record
+   index, per pod, under `<dataRoot>` — the subject of the rest of this document.
 3. **The event log.** Records are event-sourced: they are written only by republish
    on the record's bus, and the record plane is read-only. A pod with no volume and
    no peers rebuilds from offset zero (`ColdStartRebuilder`).
@@ -27,12 +27,22 @@ and one pod doing it for the cluster would leave every other pod with no baselin
 
 1. **Purge.** Every row whose `(spec.deleted_flag)` field is true and whose delete
    `(spec.store_epoch)` is older than the deleted-max-age is appended to the pod's
-   tombstone log and then removed from memory.
+   tombstone log and then removed from memory **and from this pod's record
+   index**. Removing it from memory alone would leave the index's copy for step 2
+   to dump straight back into the next checkpoint — tombstoned and resurrected,
+   every day, forever.
    The tombstone line is written **before** the removal: a crash between the two
    leaves a line for a row that is still present, which the next sweep writes again
    and which is harmless, while the other order can lose the row with no trace.
 2. **Dump.** Every row that survived step 1 is written to
-   `<dataRoot>/checkpoint/<ts>`, staged as a fsync'd sibling temp and committed by
+   `<dataRoot>/checkpoint/<ts>`. The rows are the **union of this pod's record
+   indexes and its resident memory** (`DurableRows`), never memory alone: a row
+   evicted on its idle clock is off-heap, and a dump taken from memory would omit
+   it and then have step 3 truncate the redo entries that still named it — the
+   failure that hotfixed the idle clock off on 2026-09-21. Disk alone is not the
+   answer either, because the index write is queued off the ack path, so a row
+   written moments before the sweep is in memory and not yet indexed. The dump is
+   staged as a fsync'd sibling temp and committed by
    one atomic rename (`FsUtil.writeTemp` + `FsUtil.promote`). `current`, a pointer
    file naming that checkpoint, is then rewritten by the same atomic-rename
    primitive.
@@ -54,6 +64,7 @@ and seen again on retry is simply purged again.
 <dataRoot>/checkpoint/<ts>              one dump, NDJSON, one line per row
 <dataRoot>/checkpoint/current           a text file holding one <ts>
 <dataRoot>/hot/…/<map>.log              this pod's redo log, the tail since <ts>
+<dataRoot>/records/<pkg>.<Type>/        this pod's Lucene index for one record type
 <dataRoot>/tombstones/<yyyy-MM-dd>.jsonl   every row this pod has purged, UTC days
 ```
 
@@ -121,24 +132,61 @@ This replaced, on 2026-09-20:
   retired `residency: {window: RESIDENCY_WARM}` preset and generated an empty
   dataset list once no proto declared it.
 
-### Known gap: idle eviction has no disk leg under it
+### The disk leg under the clock
 
-The decision specifies that an idle-evicted row "lives on disk (Lucene) only" and
-that "the next touch reloads it". **That leg does not exist.** The Lucene tier that
-was removed was the warm model's, keyed on the retired preset and empty; the
-per-type leg the decision calls for ("every type gets the Lucene leg") has not been
-built, and there is no Hazelcast `MapLoader` behind any record map.
+Eviction is a **cache miss, not a deletion**, because every record map has a
+read-through leg beneath it:
 
-Consequences, all of which predate the removal — they arrived with max-idle itself:
+- **One Lucene index per record type**, on this pod's volume, under
+  `<dataRoot>/records/<pkg>.<Type>/` (`disk/RecordIndex`). Keyed by the record key,
+  holding the record's concrete Java class name and its protobuf bytes — the same
+  line shape the checkpoint uses, and for the same reason: the class name is what
+  lets a row come back as the type the maps and the query plane expect without a
+  per-type generated descriptor.
+- **Every write lands there as well as in memory.** The index write rides
+  `RedoAppendProcessor`, the same entry processor that queues the redo append, so
+  it runs on the partition owner AND on its synchronous backup and each pod's index
+  holds that pod's own replica. It is queued to one node-local thread and is **not**
+  on the ack path, exactly like the redo append.
+- **A memory miss loads from it.** Each record map carries a Hazelcast `MapLoader`
+  (`disk/RecordDiskLoader`), wired in `StratumMapConfig.durableMap` in the same
+  branch that applies the max-idle clock, so a map cannot get the clock without the
+  leg. `loadAllKeys()` answers null: this is read-through only, and preloading the
+  index would both start from the wrong file and undo eviction every time a map is
+  opened.
+- **A dead row is not loadable.** A flagged-deleted row past its deleted-max-age
+  answers null even while the index still holds it, because the decision is explicit
+  that such a row is never loaded into Hazelcast again; it is on disk only because
+  the next sweep has not reached it.
 
-- An idle-evicted row is **gone**, not tiered. The next touch reads nothing.
-- The daily checkpoint dumps `HazelcastRows.entries`, i.e. what is resident. A row
-  evicted before the dump is absent from it, and step 3 then truncates the redo tail
-  that still named it — so the loss becomes durable at the next checkpoint.
+This is **not** the warm tier returning. `WarmStore`/`WarmIndex` were the WARM/HOT
+model's disk half — monthly slices, per-slice searchers, epoch intervals so a query
+could prune legs, and an indexed Lucene field per `(spec.query_field)` so disk could
+evaluate predicates. None of that is here: there are no tiers to partition against
+and no disk-side query plane. This is a key/value store that happens to be Lucene.
 
-Until the per-type disk leg and its read-through loader exist, `idle_seconds` is a
-**data-retention bound, not a cache-residency bound**. See
-`looper/schematic/workers/stratum-warm-cutover-questions.md`.
+The redo log is **still** the crash-recovery record and is not replaced by this. It
+is ordered, append-only and epoch-stamped, and `HotRestore` merges on that epoch;
+the index is an unordered latest-value store per key. Neither can stand in for the
+other.
+
+### Open: `List`/`Watch` do not see an evicted row
+
+The read-through leg answers a **point read**. It does not, and with Hazelcast
+cannot, extend to a scan: the generated query plane (`StratumRecordMaps`) iterates
+`IMap.values()`, and `values()` — like `size()` — runs over the resident entries
+only. So with the clock live:
+
+- a `Get` by key returns an idle-evicted row (the loader fires);
+- `List`/`Watch` do not return it, and `Count` does not count it, until something
+  `Get`s it back into memory.
+
+For `Count` that is the decision's own rule ("a dashboard counting a dataset" must
+not keep it hot). For `List`/`Watch` it is a real behaviour change at
+`idle_seconds`, and closing it would mean giving the generated scan a second,
+disk-side leg — structurally the two-leg scan that was deleted with the warm model.
+Raised for decision in `looper/schematic/inbox.md` (2026-09-22); not blocking, and
+stated here rather than left to be discovered.
 
 ### Cold start keeps its event-log fallback
 
@@ -172,6 +220,13 @@ when the `stratum` consumer group's offsets have already advanced past the histo
 - `CheckpointColdStartTest` — a cold start that loads `checkpoint/current` and
   replays only the tail, and a purged row that nothing left on the volume can bring
   back.
+- `disk/IdleEvictionDurabilityTest` — the three properties the leg exists for,
+  each against a control that is the pre-leg wiring: an idle-evicted row is still
+  readable, it still appears in the next checkpoint dump, and it survives a cold
+  start built on that dump.
+- `StratumMapConfigDurabilityTest.everyRecordMapCarriesItsDeclaredIdleClock` — every
+  record map carries its declared clock AND the loader behind it, asserted together
+  so neither can be applied without the other.
 - `RecordAnnotationsTest` — the markers resolved off the descriptor, including a
   real generated type's `(spec.store_epoch)`.
 - `HotRedoRestoreTest`, `HotRestoreLedgerTest` — the redo leg and the cross-node

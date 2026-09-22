@@ -10,6 +10,7 @@ import com.hazelcast.config.IndexConfig;
 import com.hazelcast.config.IndexType;
 import com.hazelcast.config.InMemoryFormat;
 import com.hazelcast.config.MapConfig;
+import com.hazelcast.config.MapStoreConfig;
 import com.hazelcast.config.NetworkConfig;
 import com.hazelcast.config.SplitBrainProtectionConfig;
 import com.hazelcast.core.HazelcastInstance;
@@ -18,6 +19,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.StratumEventStores;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.disk.RecordDiskLoader;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotRestore;
 
 /**
@@ -312,16 +314,43 @@ public final class StratumMapConfig {
         // 0, Hazelcast's "no max-idle": it holds the replay reports the hot-restore
         // barrier counts, and a barrier whose ledger expires is not a barrier.
         //
-        // HOTFIX 2026-09-21 (Jody): the clock is NOT wired until the disk leg exists.
-        // The "stays on disk, next touch reloads it" half above was never built —
-        // there is no MapLoader/MapStore behind any record map — and DailyCheckpoint
-        // dumps from live memory then truncates the redo log, so an idle-evicted row
-        // was gone for good at the next checkpoint (decisions/
-        // stratum-idle-eviction-durability-gap-2026-09-20.md). Until a read-through
-        // leg exists, every record map keeps Hazelcast's 0 = no max-idle; the
-        // declared idle_seconds is still generated and still looked up, it just has
-        // no consumer. Restore the line below when the leg lands:
-        //   mapCfg.setMaxIdleSeconds(StratumEventStores.idleSeconds(name));
+        // The clock was hotfixed off on 2026-09-21 because the "stays on disk, next
+        // touch reloads it" half did not exist: with no read-through leg, an
+        // idle-evicted row was absent from the next DailyCheckpoint dump and its
+        // redo entries were truncated by the same transaction, so eviction was
+        // permanent loss (decisions/stratum-idle-eviction-durability-gap-2026-09-20.md).
+        // The leg now exists, and the two are wired together HERE, in one place and
+        // under one condition, so they cannot drift apart again: a map gets the
+        // clock exactly when it also gets the loader that can answer for what the
+        // clock evicts.
+        int idleSeconds = StratumEventStores.idleSeconds(name);
+        if (idleSeconds > 0) {
+            mapCfg.setMaxIdleSeconds(idleSeconds);
+
+            // The read-through leg. Hazelcast calls the loader on a get() that
+            // misses in memory and on nothing else that matters here — a size() or
+            // a values() scan runs over the resident entries only — which is
+            // exactly the decision's "what counts as a read" rule, so Count and a
+            // predicate that returns no row pull nothing off disk.
+            //
+            // The loader carries the map NAME rather than an index handle: this
+            // config is built before the Hazelcast instance and before the pod's
+            // volume is opened, and in tests that open neither. It resolves
+            // RecordDisk's node-local registry per call, and answers null when
+            // there is none — the pre-disk-leg behaviour, which is safe because a
+            // JVM with no leg open is a JVM whose maps also carry no clock in any
+            // configuration this method can produce.
+            //
+            // MapLoader, never MapStore: the write leg rides RedoAppendProcessor
+            // onto the partition owner AND its synchronous backup so each node's
+            // index holds that node's own replica. Hazelcast would write from the
+            // owner alone and leave the backup's volume empty.
+            MapStoreConfig store = new MapStoreConfig();
+            store.setEnabled(true);
+            store.setImplementation(new RecordDiskLoader(name));
+            store.setInitialLoadMode(MapStoreConfig.InitialLoadMode.LAZY);
+            mapCfg.setMapStoreConfig(store);
+        }
 
         if (!MAP_NAME.equals(name)) {
             return mapCfg;

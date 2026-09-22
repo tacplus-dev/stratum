@@ -29,17 +29,34 @@ stratum provides the infrastructure for that persistence.
     sessionId, agentId, eventType.
   - **Record lifecycle** (`DailyCheckpoint`): on the `cleanup_interval_seconds`
     tick every pod runs one transaction over its own replica — purge
-    flagged-deleted rows past their max age into a write-only tombstone log, dump
-    every surviving row to `<dataRoot>/checkpoint/<ts>` committed by one atomic
-    rename, then truncate the redo logs to that dump point. Cold start is that
-    checkpoint plus the redo tail, not a replay from offset zero.
+    flagged-deleted rows past their max age into a write-only tombstone log (and
+    out of the record index, not memory alone), dump every surviving row to
+    `<dataRoot>/checkpoint/<ts>` committed by one atomic rename, then truncate the
+    redo logs to that dump point. The dump reads the **union of this pod's record
+    indexes and its resident memory** (`DurableRows`), so a row that is off-heap on
+    its idle clock is still in the checkpoint that step 3 truncates the redo log
+    behind. Cold start is that checkpoint plus the redo tail, not a replay from
+    offset zero.
   - **Memory residency**: one clock per record type, run by Hazelcast as
     per-entry max-idle from `(spec.record).residency.idle_seconds`. A row stays
     resident while it is read or written and leaves memory once it has gone that
     long with neither. This replaced the HOT/WARM/COLD residency classes, the
     `retention_days` sweep and the node-local Lucene tier, all removed on
-    2026-09-20. See `docs/DURABILITY.md` for the mechanism, the layout, and the
-    known gap: idle eviction currently has no disk leg under it.
+    2026-09-20.
+  - **The disk leg** (`disk/RecordDisk`, `disk/RecordIndex`,
+    `disk/RecordDiskLoader`): one Lucene index per record type under
+    `<dataRoot>/records/<pkg>.<Type>/`, keyed by the record key and holding the
+    serialized record. Every write lands there as well as in memory, riding the
+    same entry processor that queues the redo append so each pod's index holds
+    that pod's own replica; a memory miss loads back through a Hazelcast
+    `MapLoader` wired in the same branch of `StratumMapConfig.durableMap` that
+    applies the clock, so a map cannot carry the clock without the leg. This is
+    what makes idle eviction a cache miss rather than a deletion, and it is what
+    the clock was hotfixed off for lacking on 2026-09-21. It is NOT the warm tier
+    returning: no slices, no epoch pruning, no disk-side query plane. One
+    consequence is open and documented — a point `Get` reloads an evicted row,
+    but `List`/`Watch`/`Count` scan resident entries only and so do not see it.
+    See `docs/DURABILITY.md` for the mechanism and the layout.
   - **Session aggregation** (`StratumQueryImpl.buildSessionSummaries`): folds
     AgentEvent records grouped by `session_id` into `SessionSummary`. Each
     summary tracks first/last timestamps, event count, max call depth,

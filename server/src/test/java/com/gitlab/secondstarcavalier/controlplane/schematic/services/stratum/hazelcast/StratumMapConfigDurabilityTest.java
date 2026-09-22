@@ -8,10 +8,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.List;
 
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.StratumEventStores;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.disk.RecordDiskLoader;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotRestore;
 
 import com.hazelcast.config.Config;
 import com.hazelcast.config.MapConfig;
+import com.hazelcast.config.MapStoreConfig;
 import com.hazelcast.config.SplitBrainProtectionConfig;
 
 import org.junit.jupiter.api.Test;
@@ -241,6 +243,9 @@ class StratumMapConfigDurabilityTest {
      * map behind. What is pinned here is that the wiring exists and reaches every
      * map — the codegen side (EventStoreResidencyTest) pins that a DECLARED
      * non-default value is what the lookup answers with.
+     *
+     * <p>It also pins that the clock and the read-through leg are applied
+     * together. See the comment in the body for why that is one test and not two.
      */
     @Test
     void everyRecordMapCarriesItsDeclaredIdleClock() {
@@ -253,14 +258,29 @@ class StratumMapConfigDurabilityTest {
             assertTrue(declared > 0,
                     name + " resolves to no max-idle at all; 0/unset on the annotation means"
                             + " the platform default, never \"never\"");
-            // HOTFIX 2026-09-21: the declared clock is deliberately NOT applied until a
-            // read-through disk leg exists under the record maps — with none, idle
-            // eviction plus the checkpoint's redo truncation was permanent data loss
-            // (decisions/stratum-idle-eviction-durability-gap-2026-09-20.md). Flip this
-            // back to assertEquals(declared, ...) with the StratumMapConfig line.
-            assertEquals(0, map.getMaxIdleSeconds(),
-                    name + " has a max-idle applied while no disk leg exists to reload an"
-                            + " evicted row from; that is data loss, not cache maintenance");
+            assertEquals(declared, map.getMaxIdleSeconds(),
+                    name + " does not carry the memory clock its record declares; the"
+                            + " declaration is then inert and the map grows until the pod"
+                            + " is restarted");
+
+            // And the clock never travels alone. It was hotfixed off on 2026-09-21
+            // precisely because it did: with no read-through leg an evicted row was
+            // absent from the next checkpoint dump and its redo entries were
+            // truncated behind it, so eviction was permanent loss
+            // (decisions/stratum-idle-eviction-durability-gap-2026-09-20.md). A map
+            // that carries the clock and no loader is that state exactly, so the
+            // two are asserted together rather than in two tests that could pass
+            // one at a time.
+            MapStoreConfig store = map.getMapStoreConfig();
+            assertNotNull(store, name + " carries a max-idle clock and no map store config");
+            assertTrue(store.isEnabled(),
+                    name + " has a disabled map store config, so nothing reloads what the"
+                            + " idle clock evicts");
+            assertTrue(store.getImplementation() instanceof RecordDiskLoader,
+                    name + " is not backed by the on-disk record leg; an evicted row has"
+                            + " nowhere to come back from");
+            assertEquals(name, ((RecordDiskLoader) store.getImplementation()).mapName(),
+                    "the loader behind " + name + " answers for another record type");
         }
     }
 

@@ -4,8 +4,10 @@ package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.ho
 import java.io.Serializable;
 import java.util.Map;
 
+import com.google.protobuf.Message;
 import com.hazelcast.map.EntryProcessor;
 
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.disk.RecordDisk;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.diskstore.RedoLog;
 
 /**
@@ -37,6 +39,19 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
  * {@link HotRedoLogs} for the ordering that buys and the window it opens, and
  * {@code HotRedoAckLatencyTest} for the assertion that a stalled writer does not
  * stall the write.
+ *
+ * <h2>Two disk legs, one ride</h2>
+ * The record's on-disk index ({@link RecordDisk}) is written from the same bodies,
+ * for the same reason and on the same terms: queued to a node-local single thread,
+ * off the ack path, on the owner and on the backup alike. The two legs are not
+ * duplicates of each other. The redo log is the ORDERED crash-recovery record —
+ * append-only, epoch-stamped, merged by {@code HotRestore} — and it is truncated
+ * to the dump point by every daily checkpoint. The record index is a per-key
+ * LATEST-VALUE store that survives that truncation, and it exists so that a row
+ * Hazelcast evicted on its idle clock is still readable and still turns up in the
+ * next checkpoint dump. Neither can stand in for the other: recovery cannot be
+ * built on an unordered store, and an idle-evicted row cannot be answered for out
+ * of a log that was emptied yesterday.
  */
 public final class RedoAppendProcessor<V> implements EntryProcessor<String, V, Boolean>, Serializable {
 
@@ -67,6 +82,14 @@ public final class RedoAppendProcessor<V> implements EntryProcessor<String, V, B
         // so the in-memory mutation above is all the write waits on. A node with no
         // log for this type queues nothing and says so — the in-memory copy still
         // lands, the durability leg simply does not exist there.
+        // The record index, on this same node, queued the same way. Every record
+        // type has one — unlike the redo log, which only types carrying
+        // (spec.store_epoch) get — because the idle clock is on every record map
+        // and a map whose evicted rows have nowhere to come back from is the gap
+        // this leg was built to close.
+        if (value instanceof Message) {
+            RecordDisk.writeAsync(mapName, entry.getKey(), (Message) value);
+        }
         return HotRedoLogs.appendAsync(mapName,
                 new RedoLog.Record(entry.getKey(), false, Long.toString(epoch), payload));
     }

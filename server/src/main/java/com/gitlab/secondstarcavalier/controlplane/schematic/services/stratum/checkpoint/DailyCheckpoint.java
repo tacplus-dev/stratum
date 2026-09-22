@@ -26,7 +26,10 @@ import com.google.protobuf.Message;
  *       {@code deleted_max_age_seconds} is appended to the pod's tombstone log and
  *       then removed from memory and from this node's disk index.</li>
  *   <li><b>Dump.</b> Every row that survived is written to a new checkpoint,
- *       committed by one atomic rename.</li>
+ *       committed by one atomic rename. The rows come from the union of this
+ *       node's on-disk indexes and its resident memory, never from memory alone:
+ *       a row evicted on its idle clock is off-heap and would otherwise be absent
+ *       from the dump that step 3 then truncates the redo log behind.</li>
  *   <li><b>Truncate.</b> Only once that rename has succeeded, the redo logs are
  *       truncated to the dump point.</li>
  * </ol>
@@ -45,7 +48,7 @@ import com.google.protobuf.Message;
  *
  * <h2>Why the memory tier arrives through an interface</h2>
  * {@link Rows} is the three operations this transaction performs on the memory
- * tier and nothing else. Production passes {@link HazelcastRows}; a test passes a
+ * tier and nothing else. Production passes {@link DurableRows}; a test passes a
  * plain map, which is what lets the purge step be exercised over a record type
  * carrying {@code (spec.deleted_flag)} — a marker no fleet type declares yet,
  * because the annotation is on tacplus's unmerged branch. Without the seam the
@@ -75,10 +78,19 @@ public final class DailyCheckpoint {
     /** Removes a purged key from this node's on-disk index for that type. */
     public interface DiskPurge {
         /**
-         * No second on-disk row index to purge from — this pod's durable copy of a
-         * row is the checkpoint, and step 2 rewrites it from what survived step 1.
-         * The node-local Lucene index this once addressed was the warm tier's disk
-         * leg and was removed with it on 2026-09-20.
+         * Purges nothing. For a deployment that opened no on-disk record leg, and
+         * for the tests that run the transaction over plain maps.
+         *
+         * <p>This was production's wiring between 2026-09-20 and the disk leg
+         * landing, on the reasoning that a pod's only durable copy of a row was the
+         * checkpoint and step 2 rewrote that from what survived step 1. That
+         * reasoning no longer holds: {@code RecordDisk} keeps a Lucene index per
+         * record type, it is where an idle-evicted row lives, and step 2 now dumps
+         * the union of it and memory. A purge that removed the row from memory
+         * alone would leave the index's copy to be dumped straight back into the
+         * next checkpoint — i.e. the row would be tombstoned and then resurrected,
+         * every day, forever. So production passes a real purge and this stays for
+         * the case it names.
          */
         DiskPurge NONE = (mapName, key) -> { };
 

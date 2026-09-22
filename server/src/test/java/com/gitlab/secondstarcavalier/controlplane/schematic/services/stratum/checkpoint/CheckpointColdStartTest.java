@@ -115,7 +115,7 @@ class CheckpointColdStartTest {
         logs.awaitAppends(5_000);
         assertEquals(3, RedoLog.dedupFile(logs.log(MAP).activePath()).size());
 
-        new DailyCheckpoint(new HazelcastRows(hz, List.of(MAP)),
+        new DailyCheckpoint(new DurableRows(hz, null, List.of(MAP)),
                 (m, k) -> { },
                 new TombstoneLog(dataRoot),
                 new Checkpoint(dataRoot),
@@ -168,7 +168,7 @@ class CheckpointColdStartTest {
         // Removed by the memory tier the way the purge step removes a row, then
         // checkpointed: the dump holds nothing and the tail is discarded.
         map.remove("evt-1");
-        new DailyCheckpoint(new HazelcastRows(hz, List.of(MAP)),
+        new DailyCheckpoint(new DurableRows(hz, null, List.of(MAP)),
                 (m, k) -> { },
                 new TombstoneLog(dataRoot),
                 new Checkpoint(dataRoot),

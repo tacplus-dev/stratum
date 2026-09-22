@@ -32,8 +32,9 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
 
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.checkpoint.Checkpoint;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.checkpoint.DailyCheckpoint;
-import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.checkpoint.HazelcastRows;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.checkpoint.DurableRows;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.checkpoint.TombstoneLog;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.disk.RecordDisk;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumMapConfig;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumEventTypeExtractor;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotDataset;
@@ -58,9 +59,18 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
  *   it has gone idle_seconds with neither. Nothing here sweeps for it, and a
  *   read never restamps (spec.store_epoch) or appends to the redo log.
  *
+ *   Underneath the clock is the read-through leg that makes eviction a cache
+ *   miss rather than a deletion: one Lucene index per record type on this pod's
+ *   volume ({@link RecordDisk}), written from the same entry processor that
+ *   queues the redo append, and read back by the maps' MapLoader on a memory
+ *   miss. The two are wired together in StratumMapConfig.durableMap so a map
+ *   cannot get the clock without the leg.
+ *
  *   This replaced the HOT/WARM/COLD residency classes, the separate
  *   retention_days sweep and the node-local Lucene tier they partitioned
- *   against, per the 2026-09-20 record lifecycle decision.
+ *   against, per the 2026-09-20 record lifecycle decision. The index here is
+ *   NOT that tier returning: it has no slices, no epoch pruning and no
+ *   disk-side query plane, because there are no tiers to partition against.
  *
  * Daily checkpoint:
  *   On the same cleanup_interval_seconds tick, and per pod rather than per
@@ -113,6 +123,7 @@ public class EventStore {
     private volatile boolean coldStartReplayDone;
     private Checkpoint checkpoint;
     private DailyCheckpoint dailyCheckpoint;
+    private RecordDisk recordDisk;
     private long deletedMaxAgeSeconds;
 
     /**
@@ -177,6 +188,16 @@ public class EventStore {
         int minDurableCopies = floorOverride > 0
                 ? floorOverride
                 : StratumMapConfig.DEFAULT_MIN_DURABLE_COPIES;
+
+        // The on-disk record leg comes up BEFORE the Hazelcast member, because the
+        // member's record maps carry a read-through loader that resolves this
+        // node-local registry, and the first map proxy is opened a few lines below.
+        // A loader with no leg behind it answers null, which is not wrong but is
+        // the pre-leg store, and the window would be exactly the boot.
+        this.deletedMaxAgeSeconds = configuredDeletedMaxAgeSeconds();
+        recordDisk = new RecordDisk(dataRoot(), StratumEventStores.mapNames(),
+                () -> deletedMaxAgeSeconds * 1000L);
+
         hz = Hazelcast.newHazelcastInstance(StratumMapConfig.build(seedMembers, minDurableCopies));
 
         // Before ANY hot map is touched. newHazelcastInstance returns when this
@@ -207,16 +228,17 @@ public class EventStore {
         loadCheckpoint();
         restoreHotTier(hotDatasets, minDurableCopies);
 
-        this.deletedMaxAgeSeconds = configuredDeletedMaxAgeSeconds();
         this.dailyCheckpoint = new DailyCheckpoint(
-                new HazelcastRows(hz, StratumEventStores.mapNames()),
-                // No second on-disk row index to purge from. The node-local Lucene
-                // tier was the warm model's disk leg and went with it; this pod's
-                // durable copy of a row is the checkpoint, and step 2 rewrites that
-                // from what survived step 1. A purged row is therefore absent from
-                // the next dump, and the redo tail that still named it is discarded
-                // by step 3's truncate.
-                DailyCheckpoint.DiskPurge.NONE,
+                // The union of this node's disk indexes and its resident memory.
+                // Memory alone is what made idle eviction destructive: an off-heap
+                // row was absent from the dump and its redo entries were truncated
+                // behind it. See DurableRows for why disk alone is not the answer
+                // either.
+                new DurableRows(hz, recordDisk, StratumEventStores.mapNames()),
+                // And the same leg is what a purge has to remove from. Removing the
+                // row from memory alone would leave the index's copy for step 2's
+                // dump to write straight back into the next checkpoint.
+                recordDisk::purge,
                 new TombstoneLog(dataRoot()),
                 checkpoint,
                 hotLogs::truncateToCheckpoint);
@@ -340,8 +362,8 @@ public class EventStore {
     }
 
     /**
-     * This pod's own volume — the checkpoint, the redo logs and the tombstone
-     * log. The operator mounts the pod's per-replica volume
+     * This pod's own volume — the checkpoint, the redo logs, the record indexes
+     * and the tombstone log. The operator mounts the pod's per-replica volume
      * at /app/data; STRATUM_DATA_DIR overrides it for a local run, which is the
      * only case where /app/data does not exist.
      */
@@ -499,6 +521,9 @@ public class EventStore {
         cleaner.shutdownNow();
         if (hotLogs != null) hotLogs.close();
         if (hz != null) hz.shutdown();
+        // After the member, so nothing can still be queueing writes into an index
+        // that is closing. The queue is drained by close() rather than dropped.
+        if (recordDisk != null) recordDisk.close();
     }
 
     // -----------------------------------------------------------------------
