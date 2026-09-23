@@ -378,7 +378,7 @@ public final class RecordMapImplGenerator {
 
             // create<T>Query — register the filter under a fresh handle.
             w.println();
-            w.println("    @Override");
+            overrideUnlessPrivate(w, e);
             w.println("    public " + msgs + ".QueryHandle " + lower("Create" + t + "Query")
                     + "(Caller caller, " + msgs + ".Open" + t + "QueryRequest req) throws ProtoException {");
             w.println("        String ns = callerNamespace(caller);");
@@ -389,7 +389,7 @@ public final class RecordMapImplGenerator {
 
             // get<T>Count
             w.println();
-            w.println("    @Override");
+            overrideUnlessPrivate(w, e);
             w.println("    public " + msgs + ".RecordCount " + lower("Get" + t + "Count")
                     + "(Caller caller, " + msgs + ".QueryHandle req) throws ProtoException {");
             w.println(bindFilter);
@@ -404,7 +404,7 @@ public final class RecordMapImplGenerator {
 
             // get<T>Sample — seeded random sample of matching records.
             w.println();
-            w.println("    @Override");
+            overrideUnlessPrivate(w, e);
             w.println("    public " + msgs + ".Sample" + t + "Response " + lower("Get" + t + "Sample")
                     + "(Caller caller, " + msgs + ".Sample" + t + "Request req) throws ProtoException {");
             w.println(bindFilter);
@@ -422,7 +422,7 @@ public final class RecordMapImplGenerator {
 
             // list<T> — typed PAGE of matching records, sorted by record key.
             w.println();
-            w.println("    @Override");
+            overrideUnlessPrivate(w, e);
             w.println("    public CollectionRuntime.Page<" + fqn + "> " + lower("List" + t)
                     + "(Caller caller, " + msgs + ".Pull" + t + "Request req, CollectionRuntime.PageParams page) throws ProtoException {");
             w.println(bindFilter);
@@ -437,7 +437,7 @@ public final class RecordMapImplGenerator {
 
             // delete<T>Query — drop the handle.
             w.println();
-            w.println("    @Override");
+            overrideUnlessPrivate(w, e);
             w.println("    public " + msgs + ".QueryStats " + lower("Delete" + t + "Query")
                     + "(Caller caller, " + msgs + ".QueryHandle req) throws ProtoException {");
             w.println("        requireQuery(caller, req.getQueryId());");
@@ -450,7 +450,7 @@ public final class RecordMapImplGenerator {
             // Filterable record types only.
             if (hasFilter) {
                 w.println();
-                w.println("    @Override");
+                overrideUnlessPrivate(w, e);
                 w.println("    public " + msgs + ".QueryStats " + lower("Update" + t + "Query")
                         + "(Caller caller, " + msgs + ".Refine" + t + "Request req) throws ProtoException {");
                 w.println(gate);
@@ -477,7 +477,7 @@ public final class RecordMapImplGenerator {
             if (hasFilter) {
                 // watch<T> — snapshot of matching records + live change stream.
                 w.println();
-                w.println("    @Override");
+                overrideUnlessPrivate(w, e);
                 w.println("    public " + COLLECTION_RUNTIME + ".WatchSource<" + fqn + ", " + msgs + "." + t + "WatchChange> " + lower("Watch" + t)
                         + "(Caller caller, " + msgs + ".QueryHandle req) throws ProtoException {");
                 w.println(bindFilter);
@@ -494,7 +494,7 @@ public final class RecordMapImplGenerator {
 
                 // subscribe<T>Count — live count on each matching add/evict.
                 w.println();
-                w.println("    @Override");
+                overrideUnlessPrivate(w, e);
                 w.println("    public void " + lower("Subscribe" + t + "Count")
                         + "(Caller caller, " + msgs + ".QueryHandle req, StreamObserver<" + msgs + ".RecordCount> responseObserver) throws ProtoException {");
                 w.println(bindFilter);
@@ -575,5 +575,18 @@ public final class RecordMapImplGenerator {
     /** Lowercase the first character (RPC name -> Java method name). */
     private static String lower(String s) {
         return Character.toLowerCase(s.charAt(0)) + s.substring(1);
+    }
+    /**
+     * {@code @Override} for a record's s2s query methods — unless the record is
+     * (spec.record).private, in which case tacplus emitted no S2S RecordMap RPCs
+     * for it (record_map.go skips private types: a peer read has no caller
+     * principal to pin the owner against) and there is nothing to override. The
+     * methods are still emitted, un-annotated, because the C2S plane's impl is a
+     * delegation shim onto them and the C2S plane DOES exist for a private type.
+     */
+    private static void overrideUnlessPrivate(PrintWriter w, EventTopicDiscovery.TopicEvent e) {
+        if (!e.isPrivate) {
+            w.println("    @Override");
+        }
     }
 }

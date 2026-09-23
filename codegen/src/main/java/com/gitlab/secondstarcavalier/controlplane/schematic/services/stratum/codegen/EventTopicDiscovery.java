@@ -168,6 +168,16 @@ public final class EventTopicDiscovery {
          * pre-marker plane rather than a wrong one, exactly as tacplus does.
          */
         public final String deletedFlagField;
+        /**
+         * (spec.record).private — true when the record belongs to exactly one
+         * principal and every read pins owner == caller. tacplus emits NO S2S
+         * RecordMap RPCs for such a type (record_map.go skips it: a peer calls
+         * with its own service identity and the owner pin has no caller
+         * principal to bind to), so the generated s2s impl methods for it must
+         * not be declared as overrides of an interface that does not carry them.
+         * The C2S plane is untouched and still delegates to those methods.
+         */
+        public final boolean isPrivate;
         /** Java package from option java_package, e.g. "...model.types.vservices.agentsensor". */
         public final String javaPackage;
         /** Java outer class name from option java_outer_classname, e.g. "Agentsensor". */
@@ -178,7 +188,7 @@ public final class EventTopicDiscovery {
                           long residencyIdleSeconds, long residencyDeletedMaxAgeSeconds,
                           String mutability,
                           String storeEpochField, String storeNamespaceField, int minDurableCopies,
-                          String deletedFlagField,
+                          String deletedFlagField, boolean isPrivate,
                           String javaPackage, String outerClassName) {
             this.protoPackage = protoPackage;
             this.eventType = eventType;
@@ -193,6 +203,7 @@ public final class EventTopicDiscovery {
             this.storeNamespaceField = storeNamespaceField;
             this.minDurableCopies = minDurableCopies;
             this.deletedFlagField = deletedFlagField;
+            this.isPrivate = isPrivate;
             this.javaPackage = javaPackage;
             this.outerClassName = outerClassName;
         }
@@ -437,7 +448,7 @@ public final class EventTopicDiscovery {
                     parseResidencyDeletedMaxAgeSeconds(recordOption),
                     parseMutability(recordOption), parseStoreEpochField(eventBody),
                     parseStoreNamespaceField(eventBody), parseMinDurableCopies(eventBody),
-                    parseDeletedFlagField(eventBody),
+                    parseDeletedFlagField(eventBody), parsePrivate(recordOption),
                     javaPackage, outerClassName));
         }
     }
@@ -569,6 +580,14 @@ public final class EventTopicDiscovery {
      * makes "retention lives on the delivery declaration" enforceable rather than
      * merely documented.
      */
+    // Matched only against recordOptionBlock's brace-balanced text.
+    private static final Pattern RECORD_PRIVATE = Pattern.compile("\\bprivate\\s*:\\s*true\\b");
+
+    /** True when the (spec.record) literal declares {@code private: true}. */
+    static boolean parsePrivate(String recordOption) {
+        return RECORD_PRIVATE.matcher(recordOption).find();
+    }
+
     private static String recordOptionBlock(String eventBody) {
         Matcher start = RECORD_OPTION_START.matcher(eventBody);
         if (!start.find()) {
