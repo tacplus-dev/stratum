@@ -84,6 +84,53 @@ public final class StratumMapConfig {
      */
     public static final int DEFAULT_MIN_DURABLE_COPIES = 2;
 
+    /**
+     * Synchronous in-memory replicas per record map, beyond the primary.
+     *
+     * <p>ONE, and independent of {@code min_durable_copies} since the member roles
+     * landed. Until then it was {@code min_durable_copies - 1}, because the durable
+     * copies WERE the partition replicas: the redo append rode the replication onto
+     * the owner and its backups, so the only way to get two logs was to configure
+     * two replicas. Writers now append every write cluster-wide regardless of which
+     * member owns the partition ({@code HotWrites}), so durability is the writer
+     * count and this number is what it always read as and never was — how much
+     * MEMORY redundancy a partition carries, i.e. how many members may die at once
+     * without the cluster having to reload rows from disk.
+     *
+     * <p>The two have to be separate for search members to exist at all. A search
+     * member holds partitions and no volume, so a partition whose primary and backup
+     * both landed on search members holds no durable copy; tying durability to the
+     * replica count would make that write undurable, and raising the replica count
+     * until it could not happen would put the cost of durability on every member
+     * added for query throughput.
+     */
+    public static final int DEFAULT_BACKUP_COUNT = 1;
+
+    /** Env name for the {@link #DEFAULT_BACKUP_COUNT} override. */
+    public static final String BACKUP_COUNT_ENV = "STRATUM_BACKUP_COUNT";
+
+    /**
+     * How many synchronous backups each record map carries, from
+     * {@code STRATUM_BACKUP_COUNT} or {@link #DEFAULT_BACKUP_COUNT}.
+     *
+     * <p>Zero is legal and means "no memory redundancy": every partition lives on
+     * one member, and a member's death costs the cluster a reload from a writer's
+     * disk rather than a row. It is not a durability statement in either direction,
+     * which is the whole point of the split.
+     */
+    public static int configuredBackupCount() {
+        String raw = System.getenv(BACKUP_COUNT_ENV);
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_BACKUP_COUNT;
+        }
+        int value = Integer.parseInt(raw.trim());
+        if (value < 0 || value > MapConfig.MAX_BACKUP_COUNT) {
+            throw new IllegalArgumentException(BACKUP_COUNT_ENV + " must be between 0 and "
+                    + MapConfig.MAX_BACKUP_COUNT + ", got " + value);
+        }
+        return value;
+    }
+
     public static final String CLUSTER_NAME = "stratum-events";
 
     private StratumMapConfig() {}
@@ -115,9 +162,31 @@ public final class StratumMapConfig {
      *                         is acked
      */
     public static Config build(List<String> seedMembers, int minDurableCopies) {
+        return build(seedMembers, minDurableCopies, configuredBackupCount(), StratumRole.configured());
+    }
+
+    /**
+     * Builds the Hazelcast Config with an explicit durability floor, memory
+     * redundancy and member role.
+     *
+     * @param minDurableCopies distinct WRITER members that must hold a value before
+     *                         a write is acked
+     * @param backupCount      synchronous in-memory replicas per record map, beyond
+     *                         the primary — memory redundancy, not durability
+     * @param role             what this member is for; see {@link StratumRole}
+     */
+    public static Config build(List<String> seedMembers, int minDurableCopies,
+                               int backupCount, StratumRole role) {
         Config cfg = new Config();
         cfg.setClusterName(CLUSTER_NAME);
         cfg.setInstanceName("stratum-events-" + UUID.randomUUID().toString().substring(0, 8));
+
+        // The role, published to the cluster. Every durability decision in stratum
+        // is counted over the writers in the view — the write gate, the split-brain
+        // minimum, the formation wait and the restore barrier — so each member has
+        // to be able to read every other member's role, and a member attribute is
+        // the one thing that travels with the member itself.
+        cfg.getMemberAttributeConfig().setAttribute(StratumRole.ATTRIBUTE, role.name());
 
         // Network: TCP/IP join from explicit seed members, or multicast for local dev.
         //
@@ -152,24 +221,42 @@ public final class StratumMapConfig {
         // copies" claim was true of one map out of four.
         //
         // The protection config is one shared, named object; each map references it.
+        //
+        // The minimum is counted over WRITERS rather than over members
+        // ({@link WriterCountProtection}), because with search members in the view
+        // the member count stopped answering the question. One writer and five
+        // search members satisfy "six members are here" while holding one durable
+        // copy, and a minority partition of that shape would go on accepting writes
+        // at the cluster level — the hole the protection exists to close, reopened
+        // by the members added for query throughput.
+        // The number is set as well as the function. The function is what Hazelcast
+        // actually applies; minimumClusterSize would otherwise sit at its own default
+        // of 2 and read as the floor to anyone inspecting the config, which is the
+        // kind of number that is right by accident until the floor moves.
         SplitBrainProtectionConfig protection = new SplitBrainProtectionConfig(
                 SPLIT_BRAIN_PROTECTION_NAME, true, minDurableCopies);
+        protection.setFunctionImplementation(new WriterCountProtection(minDurableCopies));
         cfg.addSplitBrainProtectionConfig(protection);
-        // The deployment number is a FLOOR, not the answer. Each record declares its
-        // own (spec.min_durable_copies), the write gate enforces that declared value
-        // per record (HotWrites.effectiveFloor), and until now the map's backupCount
-        // was derived from the deployment number alone — so a record declaring 3
-        // against a deployment default of 2 got one backup, could reach only 2
-        // durable copies, and had EVERY write rejected permanently on a healthy
-        // cluster. max() keeps the deployment number as the floor it is and lets a
-        // record that asks for more get more.
+        // One backup count for every record map, and a record's own
+        // (spec.min_durable_copies) no longer raises it.
+        //
+        // It used to: the durable copies were the partition replicas, so a record
+        // declaring 3 against a deployment floor of 2 needed a third replica or its
+        // every write was refused. Durability is now the writer count — a writer
+        // appends every write cluster-wide, whichever member owns the partition — so
+        // a record that declares more asks for more WRITERS, not for more replicas of
+        // its partitions, and the write gate still enforces its declared number
+        // (HotWrites.effectiveFloor) against exactly that population. Raising the
+        // replica count for it would buy memory redundancy the record never asked
+        // for and no durability at all.
         for (String name : StratumEventStores.mapNames()) {
-            int floor = Math.max(minDurableCopies, StratumEventStores.minDurableCopies(name));
-            if (floor > minDurableCopies) {
+            int declared = StratumEventStores.minDurableCopies(name);
+            if (declared > minDurableCopies) {
                 log.info("{} declares min_durable_copies={}, above the deployment floor of {}:"
-                        + " backupCount={}", name, floor, minDurableCopies, floor - 1);
+                        + " its writes need that many WRITER members; backupCount stays {}",
+                        name, declared, minDurableCopies, backupCount);
             }
-            cfg.addMapConfig(durableMap(name, floor));
+            cfg.addMapConfig(durableMap(name, backupCount, role));
         }
         // The restore ledger is a MAP too, and it was outside the list above — the
         // same omission the record maps had before this loop existed, with the same
@@ -180,19 +267,20 @@ public final class StratumMapConfig {
         // barrier is protection against an incomplete recovery; it cannot be
         // protection while the ledger it reads is the one thing a partition can
         // still write.
-        cfg.addMapConfig(coordinationMap(HotRestore.LEDGER_MAP, minDurableCopies));
+        cfg.addMapConfig(coordinationMap(HotRestore.LEDGER_MAP, role));
         // The in-flight marks the barrier reads alongside the ledger, and they are
         // read in the same breath as it, so they carry the same protection for the
         // same reason: a minority partition that could keep its own copy of "who is
         // still recovering" could talk itself up to the floor on peers the majority
         // never saw finish.
-        cfg.addMapConfig(coordinationMap(HotRestore.INFLIGHT_MAP, minDurableCopies));
+        cfg.addMapConfig(coordinationMap(HotRestore.INFLIGHT_MAP, role));
 
-        log.info("stratum hot maps {}: deployment min_durable_copies={},"
-                + " backupCount={} unless a record declares more (logged above), asyncBackupCount=0,"
-                + " split-brain minimumClusterSize={}. The restore ledger {} and the in-flight marks"
-                + " {} carry the same protection at backupCount={} — see coordinationMap.",
-                StratumEventStores.mapNames(), minDurableCopies, minDurableCopies - 1,
+        log.info("stratum member role={}; hot maps {}: deployment min_durable_copies={} counted over"
+                + " WRITER members, backupCount={} (memory redundancy, independent of durability),"
+                + " asyncBackupCount=0, split-brain minimum {} writers. The restore ledger {} and the"
+                + " in-flight marks {} carry the same protection at backupCount={} — see"
+                + " coordinationMap.",
+                role, StratumEventStores.mapNames(), minDurableCopies, backupCount,
                 minDurableCopies, HotRestore.LEDGER_MAP, HotRestore.INFLIGHT_MAP,
                 MapConfig.MAX_BACKUP_COUNT);
 
@@ -221,51 +309,61 @@ public final class StratumMapConfig {
     public static final Duration FORMATION_TIMEOUT = Duration.ofMinutes(2);
 
     /**
-     * Blocks until the cluster holds {@code minDurableCopies} members, which is the
-     * precondition for touching any map built by {@link #durableMap}.
+     * Blocks until the cluster holds {@code minDurableCopies} WRITER members, which
+     * is the precondition for touching any map built by {@link #durableMap}.
      *
      * <p>{@link com.hazelcast.core.Hazelcast#newHazelcastInstance} returns as soon
      * as THIS member is up, not when the cluster is assembled, and the pods of a
      * StatefulSet do not start together — so the first pod up is a cluster of one.
-     * Every hot map carries {@link #SPLIT_BRAIN_PROTECTION_NAME} with a
-     * minimumClusterSize of the same floor, and Hazelcast enforces that on proxy
-     * CREATION, not only on writes: {@code hz.getMap(name)} from a cluster of one
-     * throws {@code SplitBrainProtectionException} before a single record is read.
-     * The floor is a statement about the assembled cluster, so the assembly is
-     * waited for rather than the exception being caught — catching it would only
-     * move the same incomplete-cluster start one line later.
+     * Every hot map carries {@link #SPLIT_BRAIN_PROTECTION_NAME} with a minimum of
+     * the same floor, and Hazelcast enforces that on proxy CREATION, not only on
+     * writes: {@code hz.getMap(name)} below the floor throws
+     * {@code SplitBrainProtectionException} before a single record is read. The
+     * floor is a statement about the assembled cluster, so the assembly is waited
+     * for rather than the exception being caught — catching it would only move the
+     * same incomplete-cluster start one line later.
+     *
+     * <p>WRITERS, because that is the population the protection counts
+     * ({@link WriterCountProtection}) and the population the restore barrier is
+     * decided on. A search member waits for the same thing and for the same reason:
+     * its maps carry the same protection, so it cannot open one until the writers
+     * are there either, and it has nothing to serve before them in any case.
      *
      * <p>Waiting is bounded and then fatal on purpose. With the floor unmet this
      * member genuinely cannot serve: it may not take a write, and the redo barrier
      * it would go on to run ({@code HotRestore.awaitClusterReplay}) cannot be
-     * satisfied by fewer members either. A deployment that really runs one instance
+     * satisfied by fewer writers either. A deployment that really runs one instance
      * declares {@code STRATUM_MIN_DURABLE_COPIES=1} and never waits here.
      *
      * @throws IllegalStateException if the floor is not reached within {@code timeout}
      */
     public static void awaitProtectedClusterSize(HazelcastInstance hz, int minDurableCopies,
                                                  Duration timeout) {
-        int size = hz.getCluster().getMembers().size();
-        if (size >= minDurableCopies) {
+        int writers = StratumRole.writerCount(hz);
+        if (writers >= minDurableCopies) {
             return;
         }
-        log.info("waiting for the cluster to reach min_durable_copies={} before opening the hot maps"
-                + " (currently {} member(s)); every hot map's split-brain protection refuses a"
-                + " proxy below the floor", minDurableCopies, size);
+        log.info("waiting for the cluster to reach min_durable_copies={} WRITER members before"
+                + " opening the hot maps (currently {} writer(s) of {} member(s)); every hot map's"
+                + " split-brain protection refuses a proxy below the floor",
+                minDurableCopies, writers, hz.getCluster().getMembers().size());
 
         long deadlineMs = System.currentTimeMillis() + timeout.toMillis();
         while (true) {
-            size = hz.getCluster().getMembers().size();
-            if (size >= minDurableCopies) {
-                log.info("cluster reached {} member(s) — opening the hot maps", size);
+            writers = StratumRole.writerCount(hz);
+            if (writers >= minDurableCopies) {
+                log.info("cluster reached {} writer(s) of {} member(s) — opening the hot maps",
+                        writers, hz.getCluster().getMembers().size());
                 return;
             }
             if (System.currentTimeMillis() >= deadlineMs) {
-                throw new IllegalStateException("stratum: cluster reached only " + size + " of the "
-                        + minDurableCopies + " members min_durable_copies declares, within " + timeout
-                        + "; every hot map refuses to open below that floor, so this member cannot"
-                        + " serve. Set STRATUM_MIN_DURABLE_COPIES=1 for a deliberately"
-                        + " single-instance deployment.");
+                throw new IllegalStateException("stratum: cluster reached only " + writers + " of the "
+                        + minDurableCopies + " WRITER members min_durable_copies declares, within "
+                        + timeout + " (cluster size " + hz.getCluster().getMembers().size()
+                        + "); every hot map refuses to open below that floor, so this member cannot"
+                        + " serve. Search members do not count — scale stratum_nodes, not"
+                        + " stratum_search_nodes. Set STRATUM_MIN_DURABLE_COPIES=1 for a"
+                        + " deliberately single-instance deployment.");
             }
             try {
                 Thread.sleep(100);
@@ -308,29 +406,36 @@ public final class StratumMapConfig {
      * this deployment can reach leaves a coordination entry on fewer members than
      * are alive to hold it.
      */
-    private static MapConfig coordinationMap(String name, int minDurableCopies) {
-        MapConfig mapCfg = durableMap(name, minDurableCopies);
-        mapCfg.setBackupCount(MapConfig.MAX_BACKUP_COUNT);
+    private static MapConfig coordinationMap(String name, StratumRole role) {
+        MapConfig mapCfg = durableMap(name, MapConfig.MAX_BACKUP_COUNT, role);
         return mapCfg;
     }
 
     /**
-     * One typed record map, at its effective durability floor — the deployment floor
-     * raised, for a record map, by anything the record itself declares.
+     * One typed record map, at the deployment's memory redundancy and this member's
+     * role.
      *
      * <p>Named per map rather than declared once as a wildcard: Hazelcast resolves a
      * map to the most specific config, so a wildcard entry alongside the named
      * MAP_NAME entry below would leave MAP_NAME reading only its own — the exact
      * split that produced this bug. Naming every map keeps one code path.
+     *
+     * @param backupCount synchronous in-memory replicas beyond the primary. The same
+     *                    number on every member: Hazelcast reads a partition's backup
+     *                    count from the owner's config, and two members disagreeing
+     *                    about it would place different numbers of replicas depending
+     *                    on where a key landed.
+     * @param role        this member's role. It changes only the DISK legs below, and
+     *                    they are the whole of what a search member does not have.
      */
-    private static MapConfig durableMap(String name, int effectiveMinDurableCopies) {
+    private static MapConfig durableMap(String name, int backupCount, StratumRole role) {
         MapConfig mapCfg = new MapConfig(name);
 
         // SYNCHRONOUS backups only. The put must not complete until every replica
-        // that counts towards the floor holds the value; an async backup is not
-        // held when the write returns, so counting one would mean acking a
-        // durability that does not exist yet.
-        mapCfg.setBackupCount(effectiveMinDurableCopies - 1);
+        // holds the value; an async backup is not held when the write returns, so a
+        // member's death inside that window would cost the cluster a row it believed
+        // it had two copies of in memory.
+        mapCfg.setBackupCount(backupCount);
         mapCfg.setAsyncBackupCount(0);
 
         // Below the floor the members are not there to replicate to, so the write
@@ -362,7 +467,18 @@ public final class StratumMapConfig {
         // under one condition, so they cannot drift apart again: a map gets the
         // clock exactly when it also gets the loader that can answer for what the
         // clock evicts.
-        int idleSeconds = StratumEventStores.idleSeconds(name);
+        //
+        // On a SEARCH member neither half exists, and that is why the clock does not
+        // either. A search member has no volume, so there is no index for the loader
+        // to answer from — and the rule above is exactly that a map gets the clock
+        // only when it also gets the leg that can answer for what the clock evicts.
+        // Giving a search member the clock alone would make eviction a DELETION on
+        // every partition it owned: the row would be off-heap with nothing behind it,
+        // the loader would answer null, and a Get would report a durable row as
+        // absent. So a search member holds its partitions resident for as long as it
+        // is a member, which is what "partitions in memory only" means and what its
+        // memory request is sized for.
+        int idleSeconds = role.isWriter() ? StratumEventStores.idleSeconds(name) : 0;
         if (idleSeconds > 0) {
             mapCfg.setMaxIdleSeconds(idleSeconds);
 
@@ -380,10 +496,10 @@ public final class StratumMapConfig {
             // JVM with no leg open is a JVM whose maps also carry no clock in any
             // configuration this method can produce.
             //
-            // MapLoader, never MapStore: the write leg rides RedoAppendProcessor
-            // onto the partition owner AND its synchronous backup so each node's
-            // index holds that node's own replica. Hazelcast would write from the
-            // owner alone and leave the backup's volume empty.
+            // MapLoader, never MapStore: the write leg rides RecordPersistTask out
+            // to every writer member, so each writer's index holds the whole store.
+            // Hazelcast would write from the partition owner alone — and the owner
+            // may be a search member with no volume to write to.
             MapStoreConfig store = new MapStoreConfig();
             store.setEnabled(true);
             store.setImplementation(new RecordDiskLoader(name));

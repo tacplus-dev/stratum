@@ -2,7 +2,9 @@
 package com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -37,58 +39,78 @@ class StratumMapConfigDurabilityTest {
     }
 
     @Test
-    void backupsAreSynchronousAndSizedToTheFloor() {
+    void backupsAreSynchronousAndAtTheConfiguredMemoryRedundancy() {
         MapConfig map = hotMap(StratumMapConfig.build(List.of(), 2));
 
-        assertEquals(1, map.getBackupCount(), "min_durable_copies=2 means the owner plus one backup");
+        assertEquals(StratumMapConfig.DEFAULT_BACKUP_COUNT, map.getBackupCount(),
+                "backupCount is memory redundancy and comes from STRATUM_BACKUP_COUNT, not from"
+                        + " min_durable_copies");
         assertEquals(0, map.getAsyncBackupCount(),
-                "an async backup is not held when the write returns, so counting one would ack"
-                        + " a durability that does not exist yet");
-    }
-
-    @Test
-    void aHigherFloorRaisesTheBackupCount() {
-        MapConfig map = hotMap(StratumMapConfig.build(List.of(), 3));
-        assertEquals(2, map.getBackupCount());
-        assertEquals(0, map.getAsyncBackupCount());
+                "an async backup is not held when the write returns, so a member's death inside"
+                        + " that window would cost a row the cluster believed it had twice");
     }
 
     /**
-     * A single-node deployment keeps no backup on anything that has no record of its own
-     * to answer to — which, since the per-record floor landed, is the restore ledger.
+     * The decoupling, asserted as the thing it is: the durability floor moves and the
+     * memory redundancy does not.
      *
-     * <p>This used to assert 0 on the hot map too, because backupCount came from the
-     * deployment number alone and {@code STRATUM_MIN_DURABLE_COPIES} is documented as an
-     * OVERRIDE, not a minimum. Now a record map takes
-     * {@code max(deployment, declared)}, so a record declaring 2 keeps one backup even at
-     * a declared floor of 1. That is deliberate and harmless: on a one-member cluster
-     * Hazelcast has nowhere to place the backup and simply does not,
-     * {@code HotWrites.durableCopies()} is {@code min(members=1, backups+1=2) = 1}, and
-     * {@code HotWrites.effectiveFloor} is the override 1 — so the laptop still writes.
-     * The override still governs the WRITE GATE; it no longer lowers a record map's
-     * configured backupCount below what the record asks for.
+     * <p>It used to be {@code floor - 1}, because the durable copies WERE the partition
+     * replicas — the redo append rode the replication onto the owner and its
+     * synchronous backups. A writer now appends every write cluster-wide whichever
+     * member owns the partition, so durability is the writer count and this number
+     * answers a different question. Tying them together is also what made search
+     * members impossible: a partition whose replicas all landed on volume-less members
+     * would have been acked with no durable copy at all.
      */
     @Test
-    void theSingleNodeFloorDoesNotLowerARecordMapBelowItsOwnDeclaration() {
+    void aHigherFloorDoesNotRaiseTheBackupCount() {
+        for (int floor : new int[] {1, 2, 3}) {
+            MapConfig map = hotMap(StratumMapConfig.build(List.of(), floor));
+            assertEquals(StratumMapConfig.DEFAULT_BACKUP_COUNT, map.getBackupCount(),
+                    "min_durable_copies=" + floor + " moved the memory redundancy");
+            assertEquals(0, map.getAsyncBackupCount());
+        }
+    }
+
+    /** The documented default memory redundancy, so the split is a stated number. */
+    @Test
+    void theDefaultBackupCountIsOne() {
+        assertEquals(1, StratumMapConfig.DEFAULT_BACKUP_COUNT);
+    }
+
+    /**
+     * A single-node deployment keeps the same memory redundancy as any other, and pays
+     * nothing for it: Hazelcast places a backup only where there is a member to place
+     * it on. The override governs the WRITE GATE
+     * ({@code HotWrites.effectiveFloor}), which is what lets a laptop write at all.
+     */
+    @Test
+    void theSingleNodeFloorLeavesTheMemoryRedundancyAlone() {
         Config cfg = StratumMapConfig.build(List.of(), 1);
 
-        // The ledger does not track the floor in either direction any more; it is
-        // replicated to every member whatever the floor says. A deliberately
-        // single-instance deployment pays nothing for that — Hazelcast places a
-        // backup only where there is a member to place it on.
         MapConfig ledger = cfg.getMapConfigs().get(HotRestore.LEDGER_MAP);
         assertNotNull(ledger);
         assertEquals(MapConfig.MAX_BACKUP_COUNT, ledger.getBackupCount());
 
-        MapConfig map = hotMap(cfg);
-        assertEquals(Math.max(1, StratumEventStores.minDurableCopies(StratumMapConfig.MAP_NAME)) - 1,
-                map.getBackupCount(),
-                "a record map holds at its own declared floor, which the override does not lower");
+        assertEquals(StratumMapConfig.DEFAULT_BACKUP_COUNT, hotMap(cfg).getBackupCount(),
+                "a deliberately single-instance deployment is not a statement about memory"
+                        + " redundancy in either direction");
     }
 
+    /**
+     * The protection counts WRITERS.
+     *
+     * <p>Hazelcast's own {@code minimumClusterSize} counts everything in the view, and
+     * with search members in the cluster that stopped answering the question the
+     * protection exists to ask: one writer and five search members satisfy "six members
+     * are here" while holding one durable copy, so a minority partition of that shape
+     * would go on accepting writes at the cluster level. The number is set as well as
+     * the function, because {@code minimumClusterSize} defaults to 2 on its own and a
+     * config that reads as the floor by accident is worse than one that does not.
+     */
     @Test
-    void theHotMapIsUnderSplitBrainProtectionAtTheFloor() {
-        Config cfg = StratumMapConfig.build(List.of(), 2);
+    void theHotMapIsUnderWriterCountedSplitBrainProtection() {
+        Config cfg = StratumMapConfig.build(List.of(), 3);
         MapConfig map = hotMap(cfg);
 
         assertEquals(StratumMapConfig.SPLIT_BRAIN_PROTECTION_NAME, map.getSplitBrainProtectionName(),
@@ -97,12 +119,16 @@ class StratumMapConfigDurabilityTest {
                 cfg.getSplitBrainProtectionConfig(StratumMapConfig.SPLIT_BRAIN_PROTECTION_NAME);
         assertNotNull(protection);
         assertTrue(protection.isEnabled());
-        assertEquals(2, protection.getMinimumClusterSize(),
-                "a minority partition that keeps accepting writes is how a store stops being atomic");
+        assertEquals(3, protection.getMinimumClusterSize(),
+                "the stated number must be the floor, not Hazelcast's default of 2");
+        assertTrue(protection.getFunctionImplementation() instanceof WriterCountProtection,
+                "the protection counts members, so search members talk a minority partition"
+                        + " up to the floor");
+        assertEquals(3, ((WriterCountProtection) protection.getFunctionImplementation()).minWriters());
     }
 
     /**
-     * EVERY typed record map carries the durability settings, not just the hot map.
+     * EVERY typed record map carries the replication settings, not just the hot map.
      *
      * <p>Only {@link StratumMapConfig#MAP_NAME} used to get them. The other record maps
      * — accountingrecord.AccountingRecord, agentsensor.AgentSessionState,
@@ -116,7 +142,7 @@ class StratumMapConfigDurabilityTest {
      * .off-ed moves this assertion with it rather than leaving a map behind.
      */
     @Test
-    void everyRecordMapCarriesTheDurabilityFloor() {
+    void everyRecordMapCarriesTheReplicationSettings() {
         Config cfg = StratumMapConfig.build(List.of(), 3);
 
         assertTrue(StratumEventStores.mapNames().size() > 1,
@@ -124,7 +150,8 @@ class StratumMapConfigDurabilityTest {
         for (String name : StratumEventStores.mapNames()) {
             MapConfig map = cfg.getMapConfigs().get(name);
             assertNotNull(map, name + " has no MapConfig, so it silently takes Hazelcast's defaults");
-            assertEquals(2, map.getBackupCount(), name + " is not at the declared floor");
+            assertEquals(StratumMapConfig.DEFAULT_BACKUP_COUNT, map.getBackupCount(),
+                    name + " is not at the deployment's memory redundancy");
             assertEquals(0, map.getAsyncBackupCount(), name + " counts an async backup towards the floor");
             assertEquals(StratumMapConfig.SPLIT_BRAIN_PROTECTION_NAME, map.getSplitBrainProtectionName(),
                     name + " accepts writes in a minority partition");
@@ -168,68 +195,51 @@ class StratumMapConfigDurabilityTest {
     }
 
     /**
-     * A record declaring MORE than the deployment floor gets its own higher backupCount.
+     * A record's own {@code (spec.min_durable_copies)} no longer touches its map's
+     * replication, above or below the deployment floor.
      *
-     * <p>The deployment number is a floor, and it used to be the only input to
-     * backupCount. A record declaring {@code (spec.min_durable_copies) = 3} against a
-     * deployment floor of 2 therefore got one backup — {@code HotWrites.durableCopies()}
-     * could reach only 2 — while {@code HotWrites.effectiveFloor} still held it to its own
-     * declared 3, so EVERY write to that record was rejected permanently on a healthy
-     * cluster.
+     * <p>It used to be the input that raised it: the durable copies were the partition
+     * replicas, so a record declaring 3 against a deployment floor of 2 needed a third
+     * replica or {@code HotWrites.durableCopies()} could never reach its declared floor
+     * and every write to it was refused permanently on a healthy cluster. A record
+     * declaring more is now declaring it needs more WRITER MEMBERS, which is what the
+     * write gate counts and what {@code HotWritesWriterCountTest} asserts — and the
+     * replica count is left to say the one thing it was always read as saying.
      *
-     * <p>Driven at a deployment floor of 1 because that is the relationship the real
-     * generated fleet can express today: every record declares 2, so a floor of 1 is the
-     * case where the record's own declaration is the higher of the two. Nothing here
-     * depends on a specific record declaring a specific number — the expectation comes
-     * from the generated lookup, so a record raising its declaration moves the assertion
-     * with it.
+     * <p>Driven across the floors the generated fleet can express, so a record raising
+     * or lowering its declaration cannot move the assertion.
      */
     @Test
-    void aRecordDeclaringAboveTheDeploymentFloorGetsItsOwnHigherBackupCount() {
-        Config cfg = StratumMapConfig.build(List.of(), 1);
-
-        boolean sawARaisedMap = false;
-        for (String name : StratumEventStores.mapNames()) {
-            int declared = StratumEventStores.minDurableCopies(name);
-            MapConfig map = cfg.getMapConfigs().get(name);
-            assertNotNull(map, name + " has no MapConfig");
-            assertEquals(Math.max(1, declared) - 1, map.getBackupCount(),
-                    name + " declares min_durable_copies=" + declared
-                            + " but its map was built from the deployment floor alone");
-            sawARaisedMap |= declared > 1;
+    void aRecordsOwnDeclarationDoesNotTouchItsMapsReplication() {
+        boolean sawARecordAboveAFloor = false;
+        for (int floor : new int[] {1, 2, 3}) {
+            Config cfg = StratumMapConfig.build(List.of(), floor);
+            for (String name : StratumEventStores.mapNames()) {
+                int declared = StratumEventStores.minDurableCopies(name);
+                MapConfig map = cfg.getMapConfigs().get(name);
+                assertNotNull(map, name + " has no MapConfig");
+                assertEquals(StratumMapConfig.DEFAULT_BACKUP_COUNT, map.getBackupCount(),
+                        name + " declares min_durable_copies=" + declared + " and at a deployment"
+                                + " floor of " + floor + " that moved its replica count");
+                sawARecordAboveAFloor |= declared > floor;
+            }
         }
-        assertTrue(sawARaisedMap,
-                "no generated record declares above a floor of 1; the raise is untested");
-    }
-
-    /** A record at or below the deployment floor is untouched — the floor stays a floor. */
-    @Test
-    void aRecordAtOrBelowTheDeploymentFloorIsUnaffected() {
-        Config cfg = StratumMapConfig.build(List.of(), 3);
-
-        for (String name : StratumEventStores.mapNames()) {
-            assertTrue(StratumEventStores.minDurableCopies(name) <= 3,
-                    name + " declares above 3; this test no longer covers the at-or-below case");
-            MapConfig map = cfg.getMapConfigs().get(name);
-            assertNotNull(map, name + " has no MapConfig");
-            assertEquals(2, map.getBackupCount(),
-                    name + " was lowered below the deployment floor by its own declaration");
-        }
+        assertTrue(sawARecordAboveAFloor,
+                "no generated record declares above any floor tested; the decoupling is untested");
     }
 
     /**
-     * The restore ledger is outside the per-record durability raise.
+     * The restore ledger is outside the record maps' replication.
      *
      * <p>It is not a record map: it has no {@code (spec.min_durable_copies)} declaration
-     * and nothing in the generated lookup, so the per-record raise must not reach it.
-     * Its backup count is decided on its own grounds instead — it is the barrier's
-     * knowledge of who has recovered, not a durability statement about rows — and
-     * {@code theBarriersOwnMapsAreProtectedAndFullyReplicated} is where that is
-     * asserted. What is asserted here is only that no record's number is what decides
-     * it.
+     * and nothing in the generated lookup. Its backup count is decided on its own
+     * grounds — it is the barrier's knowledge of who has recovered, not a statement
+     * about rows — and {@code theBarriersOwnMapsAreProtectedAndFullyReplicated} is where
+     * that is asserted. What is asserted here is only that nothing about a record
+     * decides it.
      */
     @Test
-    void theRestoreLedgerIsOutsideThePerRecordRaise() {
+    void theRestoreLedgerIsOutsideTheRecordMapsReplication() {
         Config cfg = StratumMapConfig.build(List.of(), 1);
 
         assertEquals(0, StratumEventStores.minDurableCopies(HotRestore.LEDGER_MAP),
@@ -301,6 +311,51 @@ class StratumMapConfigDurabilityTest {
             assertEquals(name, ((RecordDiskLoader) store.getImplementation()).mapName(),
                     "the loader behind " + name + " answers for another record type");
         }
+    }
+
+    /**
+     * A SEARCH member's record maps carry NEITHER the idle clock NOR the loader.
+     *
+     * <p>The two travel together, and on a member with no volume the pair is neither.
+     * The clock alone would make eviction a DELETION on every partition a search member
+     * owned: the row goes off-heap, the loader has no index to answer from, and a Get
+     * reports a durable row as absent. So a search member holds its partitions resident
+     * for as long as it is a member, which is what "partitions in memory only" means.
+     *
+     * <p>The role also travels, as a member attribute, because every durability count in
+     * stratum is taken over the writers in the cluster view.
+     */
+    @Test
+    void aSearchMembersRecordMapsCarryNoClockAndNoLoader() {
+        Config cfg = StratumMapConfig.build(List.of(), 2, 1, StratumRole.SEARCH);
+
+        assertEquals(StratumRole.SEARCH.name(),
+                cfg.getMemberAttributeConfig().getAttribute(StratumRole.ATTRIBUTE),
+                "a search member that does not publish its role is counted as a durable copy");
+
+        for (String name : StratumEventStores.mapNames()) {
+            MapConfig map = cfg.getMapConfigs().get(name);
+            assertNotNull(map, name + " has no MapConfig");
+            assertEquals(0, map.getMaxIdleSeconds(),
+                    name + " carries the idle clock on a member with no disk leg behind it, so"
+                            + " eviction there is a deletion");
+            assertFalse(map.getMapStoreConfig().isEnabled(),
+                    name + " carries an enabled read-through loader on a member with no volume");
+            assertNull(map.getMapStoreConfig().getImplementation(),
+                    name + " was given a RecordDiskLoader on a member with no index for it to read");
+            assertEquals(StratumMapConfig.DEFAULT_BACKUP_COUNT, map.getBackupCount(),
+                    name + " holds a different number of replicas on a search member than on a"
+                            + " writer; Hazelcast reads the count from whichever member owns the"
+                            + " partition");
+        }
+    }
+
+    /** A WRITER publishes its role too, so absence never has to be guessed at. */
+    @Test
+    void aWriterPublishesItsRole() {
+        Config cfg = StratumMapConfig.build(List.of(), 2, 1, StratumRole.WRITER);
+        assertEquals(StratumRole.WRITER.name(),
+                cfg.getMemberAttributeConfig().getAttribute(StratumRole.ATTRIBUTE));
     }
 
     /**

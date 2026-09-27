@@ -27,8 +27,32 @@ stratum provides the infrastructure for that persistence.
   - **Storage**: `EventStore` — a Hazelcast `IMap<event_id, AgentEvent>` with
     SORTED indexes on epoch/timestampMs and HASH indexes on spiffe_id,
     sessionId, agentId, eventType.
+  - **Member roles** (`hazelcast/StratumRole`): one cluster, two kinds of member,
+    carried as the member attribute `stratum.role` and declared per pod by
+    `STRATUM_MEMBER_ROLE`.
+    - **writer** — holds partitions like any member AND persists every write:
+      every write cluster-wide goes to every writer's redo log and record index
+      (`hot/RecordPersistTask`), whichever member owns the partition, so **a writer
+      holds the full dataset on disk** and can restore it alone. Writers take part
+      in the daily checkpoint, and they are the only members counted for
+      `min_durable_copies`, for the split-brain minimum, for the cluster-formation
+      wait and for the hot-restore barrier. A static count (2 or 3), one volume
+      each — the operator's `stratum_nodes`.
+    - **search** — holds partitions (primaries and backups) and answers queries
+      like any member, and nothing else: no volume, no redo log, no record index,
+      no checkpoint, and no idle clock (the clock is wired to the disk leg it does
+      not have, and without the leg eviction would be deletion). Never a durable
+      copy, never a restore contributor. A dynamic count scaled for query
+      throughput — the operator's `stratum_search_nodes`, default 0 — and a search
+      member that leaves loses nothing durable.
+    `backupCount` (`STRATUM_BACKUP_COUNT`, default 1) is memory redundancy and is
+    independent of `min_durable_copies`, which is durability. They were the same
+    number while the redo append rode the partition replication; separating them is
+    what lets a volume-less member own a partition safely. **A predicate query is a
+    scatter-gather across all members in parallel whose results are merged**, which
+    is what a search member is for. See `docs/DURABILITY.md`.
   - **Record lifecycle** (`DailyCheckpoint`): on the `cleanup_interval_seconds`
-    tick every pod runs one transaction over its own replica — purge
+    tick every WRITER runs one transaction over its own volume — purge
     flagged-deleted rows past their max age into a write-only tombstone log (and
     out of the record index, not memory alone), dump every surviving row to
     `<dataRoot>/checkpoint/<ts>` committed by one atomic rename, then truncate the
@@ -46,11 +70,12 @@ stratum provides the infrastructure for that persistence.
   - **The disk leg** (`disk/RecordDisk`, `disk/RecordIndex`,
     `disk/RecordDiskLoader`): one Lucene index per record type under
     `<dataRoot>/records/<pkg>.<Type>/`, keyed by the record key and holding the
-    serialized record. Every write lands there as well as in memory, riding the
-    same entry processor that queues the redo append so each pod's index holds
-    that pod's own replica; a memory miss loads back through a Hazelcast
+    serialized record. Every write lands on every writer's index as well as in
+    memory, riding the same task that queues the redo append, so a writer's index
+    holds the whole store; a memory miss loads back through a Hazelcast
     `MapLoader` wired in the same branch of `StratumMapConfig.durableMap` that
-    applies the clock, so a map cannot carry the clock without the leg. This is
+    applies the clock, so a map cannot carry the clock without the leg — and a
+    search member, having no leg, gets neither. This is
     what makes idle eviction a cache miss rather than a deletion, and it is what
     the clock was hotfixed off for lacking on 2026-09-21. It is NOT the warm tier
     returning: no slices, no epoch pruning, no disk-side query plane. One

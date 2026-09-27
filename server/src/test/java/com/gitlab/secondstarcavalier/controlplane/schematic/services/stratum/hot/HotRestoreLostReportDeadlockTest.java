@@ -172,7 +172,7 @@ class HotRestoreLostReportDeadlockTest {
         IllegalStateException wedged = assertThrows(IllegalStateException.class,
                 () -> HotRestore.awaitClusterReplay(restarted, 468, 0, MIN_DURABLE_COPIES, WAIT),
                 "with the serving peer's report gone the barrier cannot be satisfied");
-        assertTrue(wedged.getMessage().contains("only 1 of 2 expected instances reported"),
+        assertTrue(wedged.getMessage().contains("only 1 of 2 expected writer members reported"),
                 "the wedge is the barrier's own count, not the contributor check: " + wedged.getMessage());
 
         assertTrue(HotRestore.refileReport(serving, 468), "the missing report must be put back");

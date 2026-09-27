@@ -23,11 +23,10 @@ import com.hazelcast.map.MapLoader;
  *
  * <h2>A LOADER, not a store</h2>
  * {@link MapLoader} and not {@code MapStore}: the write leg is not Hazelcast's to
- * run. Writes ride {@code RedoAppendProcessor} onto the partition owner AND its
- * synchronous backup, so each node's index holds that node's own replica — which
- * is what makes a per-pod checkpoint dump a dump of that pod's data. A MapStore
- * would write from the owner only, on Hazelcast's schedule, and the backup's
- * volume would hold nothing.
+ * run. Writes ride {@code RecordPersistTask} out to every WRITER member, so each
+ * writer's index holds the whole store and a per-pod checkpoint dump is a complete
+ * dump. A MapStore would write from the partition owner only, on Hazelcast's
+ * schedule — and the owner may be a search member with no volume at all.
  *
  * <h2>Why {@link #loadAllKeys} answers null</h2>
  * Null is Hazelcast's "there is no key set to preload", and it is the whole point.

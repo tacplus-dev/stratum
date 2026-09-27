@@ -422,7 +422,7 @@ class HotRedoRestoreTest {
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> HotRestore.awaitClusterReplay(hz, 5, 0, 2, java.time.Duration.ofSeconds(2)),
                 "the first pod up passed a two-instance barrier by itself");
-        assertTrue(e.getMessage().contains("only 1 of 2 expected instances"), e.getMessage());
+        assertTrue(e.getMessage().contains("only 1 of 2 expected writer members"), e.getMessage());
     }
 
     /**

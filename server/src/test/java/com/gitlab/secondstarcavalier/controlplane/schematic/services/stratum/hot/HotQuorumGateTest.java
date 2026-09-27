@@ -97,14 +97,16 @@ class HotQuorumGateTest {
     }
 
     /**
-     * Durable copies are counted from what the cluster can actually supply, not
-     * from what the map was configured to want. A one-member cluster with
-     * backupCount=2 has one copy, not three.
+     * Durable copies are the WRITERS in the cluster view, and no longer a per-map
+     * number derived from that map's backup count. This one-member cluster carries no
+     * role attribute at all — which reads as writer, the direction that cannot invent
+     * durability — so it supplies one copy however many backups a map asks for.
      */
     @Test
-    void durableCopiesAreCappedByTheVisibleCluster() {
+    void durableCopiesAreTheWritersInTheView() {
         HotWrites hot = new HotWrites(hz, 0);
-        assertEquals(1, hot.durableCopies("demo.HighFloor"));
-        assertEquals(1, hot.durableCopies("demo.Event"));
+        assertEquals(1, hot.durableCopies(),
+                "one member, no role attribute: one writer, so one durable copy —"
+                        + " backupCount=2 on demo.HighFloor buys memory redundancy, not a log");
     }
 }

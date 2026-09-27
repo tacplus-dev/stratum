@@ -36,6 +36,7 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.che
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.checkpoint.TombstoneLog;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.disk.RecordDisk;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumMapConfig;
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumRole;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumEventTypeExtractor;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotDataset;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotRedoLogs;
@@ -132,6 +133,12 @@ public class EventStore {
     private DailyCheckpoint dailyCheckpoint;
     private RecordDisk recordDisk;
     private long deletedMaxAgeSeconds;
+    /**
+     * What this member is for. Set once at {@link #init} from {@link StratumRole#configured}
+     * and never revised; a search member has no volume, so everything this class
+     * opens on one is behind a check of it.
+     */
+    private StratumRole role = StratumRole.WRITER;
 
     /**
      * How long a cold start waits for its peers' redo replay before giving up.
@@ -207,6 +214,12 @@ public class EventStore {
         int minDurableCopies = floorOverride > 0
                 ? floorOverride
                 : StratumMapConfig.DEFAULT_MIN_DURABLE_COPIES;
+        // What this member is FOR, and the only branch in this method: a writer opens
+        // the three things that live on a volume — the record indexes, the redo logs
+        // and the checkpoint — and a search member opens none of them, because it has
+        // no volume. Everything else below is identical, which is the point: a search
+        // member is a full member of the cluster in memory and in the query plane.
+        this.role = StratumRole.configured();
 
         // The on-disk record leg comes up BEFORE the Hazelcast member, because the
         // member's record maps carry a read-through loader that resolves this
@@ -214,10 +227,13 @@ public class EventStore {
         // A loader with no leg behind it answers null, which is not wrong but is
         // the pre-leg store, and the window would be exactly the boot.
         this.deletedMaxAgeSeconds = configuredDeletedMaxAgeSeconds();
-        recordDisk = new RecordDisk(dataRoot(), StratumEventStores.mapNames(),
-                () -> deletedMaxAgeSeconds * 1000L);
+        if (role.isWriter()) {
+            recordDisk = new RecordDisk(dataRoot(), StratumEventStores.mapNames(),
+                    () -> deletedMaxAgeSeconds * 1000L);
+        }
 
-        hz = Hazelcast.newHazelcastInstance(StratumMapConfig.build(seedMembers, minDurableCopies));
+        hz = Hazelcast.newHazelcastInstance(StratumMapConfig.build(
+                seedMembers, minDurableCopies, StratumMapConfig.configuredBackupCount(), role));
 
         // Before ANY hot map is touched. newHazelcastInstance returns when this
         // member is up, not when the cluster is assembled, so the first pod of the
@@ -231,53 +247,63 @@ public class EventStore {
         stores.init(hz, hotWrites);
         events = hz.getMap(StratumMapConfig.MAP_NAME);
 
-        // The hot tier's redo logs, on THIS pod's volume. One per replayable record
-        // type; with no record carrying (spec.store_epoch) the list is empty, the
-        // node opens no log, and the tier is exactly what it is today plus the
-        // quorum gate.
+        // The hot tier's redo logs, on THIS pod's volume — writers only. One per
+        // replayable record type; with no record carrying (spec.store_epoch) the list
+        // is empty, the node opens no log, and the tier is exactly what it is today
+        // plus the quorum gate.
         List<HotDataset> hotDatasets = StratumHotStores.datasets();
-        hotLogs = new HotRedoLogs(dataRoot(), hotDatasets, HOT_ARCHIVE_COUNT, Codec.NONE);
+        if (role.isWriter()) {
+            hotLogs = new HotRedoLogs(dataRoot(), hotDatasets, HOT_ARCHIVE_COUNT, Codec.NONE);
 
-        // BEFORE the redo replay, and that order is the cold start: the checkpoint
-        // is the baseline, the redo logs hold only the tail that landed after it
-        // (see HotRedoLogs.truncateToCheckpoint), and replaying the tail onto the
-        // baseline is what makes recovery proportional to the data rather than to
-        // the whole history.
-        checkpoint = new Checkpoint(dataRoot());
-        loadCheckpoint();
+            // BEFORE the redo replay, and that order is the cold start: the checkpoint
+            // is the baseline, the redo logs hold only the tail that landed after it
+            // (see HotRedoLogs.truncateToCheckpoint), and replaying the tail onto the
+            // baseline is what makes recovery proportional to the data rather than to
+            // the whole history.
+            checkpoint = new Checkpoint(dataRoot());
+            loadCheckpoint();
+        }
+        // Both roles, and a search member reports nothing and waits: it is handed
+        // partitions the moment it joins, so it must not answer a query before the
+        // writers have finished recovering. See HotRestore.awaitClusterReplay.
         restoreHotTier(hotDatasets, minDurableCopies);
 
-        this.dailyCheckpoint = new DailyCheckpoint(
-                // The union of this node's disk indexes and its resident memory.
-                // Memory alone is what made idle eviction destructive: an off-heap
-                // row was absent from the dump and its redo entries were truncated
-                // behind it. See DurableRows for why disk alone is not the answer
-                // either.
-                new DurableRows(hz, recordDisk, StratumEventStores.mapNames()),
-                // And the same leg is what a purge has to remove from. Removing the
-                // row from memory alone would leave the index's copy for step 2's
-                // dump to write straight back into the next checkpoint.
-                recordDisk::purge,
-                new TombstoneLog(dataRoot()),
-                checkpoint,
-                hotLogs::truncateToCheckpoint);
+        if (role.isWriter()) {
+            this.dailyCheckpoint = new DailyCheckpoint(
+                    // The union of this node's disk indexes and its resident memory.
+                    // Memory alone is what made idle eviction destructive: an off-heap
+                    // row was absent from the dump and its redo entries were truncated
+                    // behind it. See DurableRows for why disk alone is not the answer
+                    // either.
+                    new DurableRows(hz, recordDisk, StratumEventStores.mapNames()),
+                    // And the same leg is what a purge has to remove from. Removing the
+                    // row from memory alone would leave the index's copy for step 2's
+                    // dump to write straight back into the next checkpoint.
+                    recordDisk::purge,
+                    new TombstoneLog(dataRoot()),
+                    checkpoint,
+                    hotLogs::truncateToCheckpoint);
 
-        // Per pod, not leader-gated: the transaction writes this pod's own volume
-        // and truncates this pod's own redo logs, so one pod running it for the
-        // cluster would leave every other pod with no baseline to start from.
-        cleaner.scheduleWithFixedDelay(
-                this::runDailyCheckpoint,
-                cleanupIntervalSecs, cleanupIntervalSecs, TimeUnit.SECONDS);
+            // Per writer, not leader-gated: the transaction writes this pod's own
+            // volume and truncates this pod's own redo logs, so one pod running it for
+            // the cluster would leave every other writer with no baseline to start
+            // from. A search member runs no cycle at all — it has nothing to dump,
+            // nothing to truncate and no tombstone log to purge into.
+            cleaner.scheduleWithFixedDelay(
+                    this::runDailyCheckpoint,
+                    cleanupIntervalSecs, cleanupIntervalSecs, TimeUnit.SECONDS);
 
-        // On the cleaner rather than on a thread of its own: it is the same kind of
-        // work — keeping what this pod publishes about its own volume true — and a
-        // putIfAbsent every 30s does not need one.
-        cleaner.scheduleWithFixedDelay(
-                this::repairRestoreReport,
-                REPORT_REPAIR_SECONDS, REPORT_REPAIR_SECONDS, TimeUnit.SECONDS);
+            // On the cleaner rather than on a thread of its own: it is the same kind of
+            // work — keeping what this pod publishes about its own volume true — and a
+            // putIfAbsent every 30s does not need one. A search member files no report
+            // in the first place, so there is nothing of its to repair.
+            cleaner.scheduleWithFixedDelay(
+                    this::repairRestoreReport,
+                    REPORT_REPAIR_SECONDS, REPORT_REPAIR_SECONDS, TimeUnit.SECONDS);
+        }
 
-        log.info("EventStore initialised: deleted_max_age_seconds={}, seed_members={}",
-                deletedMaxAgeSeconds, seedMembers.isEmpty() ? "multicast" : seedMembers);
+        log.info("EventStore initialised: role={}, deleted_max_age_seconds={}, seed_members={}",
+                role, deletedMaxAgeSeconds, seedMembers.isEmpty() ? "multicast" : seedMembers);
     }
 
     // -----------------------------------------------------------------------
@@ -307,7 +333,10 @@ public class EventStore {
         int applied = 0;
         int read = 0;
         List<String> diverged = new ArrayList<>();
-        for (HotDataset d : datasets) {
+        // A search member has no log to replay. It still goes through the barrier
+        // below — reporting nothing, waiting for the writers — because it is handed
+        // partitions as soon as it joins.
+        for (HotDataset d : role.isWriter() ? datasets : List.<HotDataset>of()) {
             HotRestore.Result result = HotRestore.replay(hotLogs.log(d.mapName), d, hz.getMap(d.mapName));
             applied += result.applied;
             read += result.read;
@@ -329,7 +358,7 @@ public class EventStore {
         // exactly the boots where the barrier is decided. What the ledger needs is
         // not "what did this pod load" but "what does this volume hold durably", and
         // after a DailyCheckpoint cycle that is the dump, not the emptied redo tail.
-        long checkpointRows = checkpointRows();
+        long checkpointRows = role.isWriter() ? checkpointRows() : 0L;
         HotRestore.awaitClusterReplay(hz, read, checkpointRows, minDurableCopies, RESTORE_TIMEOUT);
         // The SAME number, kept so it can be put back unchanged if the entry is ever
         // lost — read once above rather than twice, because a repair that filed a
@@ -338,8 +367,8 @@ public class EventStore {
         // occasion to file one; see repairRestoreReport.
         bootDurableRecords = HotRestore.durableRecordCount(read, checkpointRows);
         redoReplayDone = true;
-        log.info("hot tier restored: {} record(s) read from this node's redo logs, {} applied",
-                read, applied);
+        log.info("hot tier restored ({} member): {} record(s) read from this node's redo logs,"
+                + " {} applied", role, read, applied);
     }
 
     /**

@@ -13,10 +13,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.protobuf.Message;
-import com.hazelcast.cluster.Member;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.map.IMap;
 
+import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hazelcast.StratumRole;
 import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.chassis.diskstore.RedoLog;
 
 /**
@@ -24,12 +24,20 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
  * the other reachable nodes to have done the same before hot reads are served.
  *
  * <h2>The union</h2>
- * Every node's log is partial. Each node replays its OWN log — {@code
- * RedoLog.restore} unchanged, including its recovery of a crashed
- * {@code .building}/{@code .temp} — through {@link EpochMergeProcessor}, which
- * resolves each key at its partition owner by highest store epoch. The union is
- * therefore the map itself, assembled by the same partitioning that decided the
- * writes; nothing ships logs between nodes.
+ * Each WRITER replays its OWN log — {@code RedoLog.restore} unchanged, including its
+ * recovery of a crashed {@code .building}/{@code .temp} — through
+ * {@link EpochMergeProcessor}, which resolves each key at its partition owner by
+ * highest store epoch. The union is therefore the map itself, assembled by the same
+ * partitioning that decided the writes; nothing ships logs between nodes.
+ *
+ * <p>A writer's log is complete, so one writer could in principle restore the store
+ * alone. The union is still what runs, because a writer that joined the cluster later
+ * than its peers has a log that starts later than theirs, and the epoch merge is what
+ * decides between them.
+ *
+ * <p>SEARCH members replay nothing: no volume, no log, never a contributor. They
+ * still wait at the barrier below, because they are handed partitions the moment they
+ * join and answering a query off a half-recovered store is the failure this refuses.
  *
  * <h2>Why reads wait (Q2)</h2>
  * A node that has replayed only its own log holds a store that is
@@ -149,7 +157,7 @@ public final class HotRestore {
      *
      * <p>Does NOT re-append: the records being replayed are already in this
      * node's log, and the merge runs through {@link EpochMergeProcessor}, not
-     * through the write path's {@link RedoAppendProcessor}.
+     * through the write path's {@link RecordPersistTask}.
      */
     public static Result replay(RedoLog redoLog, HotDataset dataset, IMap<String, Message> map) {
         List<String> diverged = new ArrayList<>();
@@ -215,15 +223,15 @@ public final class HotRestore {
      *                         since the dump", not "nothing". Counting the tail alone
      *                         reported every just-checkpointed pod as holding nothing.
      * @param minDurableCopies the declared floor. It bounds the wait as well as the
-     *                         alarm: it is how many instances there are SUPPOSED to
+     *                         alarm: it is how many WRITERS there are SUPPOSED to
      *                         be, so the barrier cannot be satisfied by fewer, and
      *                         fewer contributors than this is LOUD, because the
      *                         recovered store is then thinner than the durability
      *                         the writes were acked under
-     * @return the number of instances that contributed a durable copy — the ones
-     *         that reported holding one at their own boot, plus the live peers that
-     *         have already completed this barrier and are serving the maps now
-     *         ({@link #INFLIGHT_MAP})
+     * @return the number of WRITERS that contributed a durable copy — the ones
+     *         that reported holding one at their own boot, plus the live writer peers
+     *         that have already completed this barrier and are serving the maps now
+     *         ({@link #INFLIGHT_MAP}). Search members are never counted.
      * @throws IllegalStateException if the wait times out, or if the instances that
      *                               did contribute came in below {@code
      *                               minDurableCopies} — a recovery thinner than the
@@ -237,16 +245,30 @@ public final class HotRestore {
         IMap<String, Integer> ledger = hz.getMap(LEDGER_MAP);
         IMap<String, Boolean> inflight = hz.getMap(INFLIGHT_MAP);
         String self = hz.getCluster().getLocalMember().getUuid().toString();
-        // Marked BEFORE the ledger entry is filed, so the two are never observable
-        // in the order that would let a sibling read this member as serving while
-        // it is in fact still here. Removed only on the way out through the
-        // success path: a member that refuses below is exiting, and its entries —
-        // this one and its ledger report — stop counting when it leaves the
-        // cluster view, which liveReports already handles. Clearing it on the way
-        // out of a REFUSAL would be the one direction that is unsafe, because it
-        // would advertise a member that never finished as one that had.
-        inflight.put(self, Boolean.TRUE);
-        ledger.put(self, durableRecordCount(redoRecordsRead, checkpointRecords));
+        boolean writer = StratumRole.of(hz.getCluster().getLocalMember()).isWriter();
+        // A SEARCH member files NOTHING and waits. It has no volume, so it has no
+        // durable copy to report and no replay of its own to report done; it is
+        // never a contributor and must never be counted as one. What it still has to
+        // do is wait, because it will be handed partitions by the live cluster the
+        // moment it joins and a query it answers off a half-recovered store is the
+        // same silent incompleteness this barrier exists to refuse — answered from a
+        // member that never had a volume to be honest about.
+        //
+        // Filing nothing is also what keeps it out of the counts without a special
+        // case in them: it has no ledger entry, so liveReports cannot see it, and it
+        // has no in-flight mark, which only ever suppresses a contributor.
+        if (writer) {
+            // Marked BEFORE the ledger entry is filed, so the two are never observable
+            // in the order that would let a sibling read this member as serving while
+            // it is in fact still here. Removed only on the way out through the
+            // success path: a member that refuses below is exiting, and its entries —
+            // this one and its ledger report — stop counting when it leaves the
+            // cluster view, which liveReports already handles. Clearing it on the way
+            // out of a REFUSAL would be the one direction that is unsafe, because it
+            // would advertise a member that never finished as one that had.
+            inflight.put(self, Boolean.TRUE);
+            ledger.put(self, durableRecordCount(redoRecordsRead, checkpointRecords));
+        }
 
         long deadlineMs = System.currentTimeMillis() + timeout.toMillis();
         int expected;
@@ -266,7 +288,13 @@ public final class HotRestore {
             // STRATUM_MIN_DURABLE_COPIES=1 — the same declared number that already
             // decides the map's backup count and its split-brain minimum, so a
             // single-node run that has not set it cannot take a write either.
-            expected = Math.max(hz.getCluster().getMembers().size(), minDurableCopies);
+            //
+            // WRITERS, not members. Search members file no report, so counting them
+            // into the expectation would make the barrier unsatisfiable by exactly
+            // the number of them the deployment happened to be running — every
+            // search member added for query throughput would cost every pod's
+            // restart a five-minute timeout.
+            expected = Math.max(StratumRole.writerCount(hz), minDurableCopies);
             // Only reports from members of the CURRENT cluster view count. The
             // ledger is keyed by member UUID, which Hazelcast mints fresh on every
             // restart, so a departed member's entry outlives it and the raw map
@@ -282,8 +310,9 @@ public final class HotRestore {
             }
             if (System.currentTimeMillis() >= deadlineMs) {
                 throw new IllegalStateException("hot restore: only " + reports.size() + " of " + expected
-                        + " expected instances reported their redo replay within " + timeout
+                        + " expected writer members reported their redo replay within " + timeout
                         + " (cluster size " + hz.getCluster().getMembers().size()
+                        + ", writers " + StratumRole.writerCount(hz)
                         + ", min_durable_copies " + minDurableCopies
                         + "); refusing to serve a silently incomplete hot store");
             }
@@ -379,11 +408,13 @@ public final class HotRestore {
         // Only now, and only here: this member has a complete store and is about to
         // serve it, which is the whole of what a peer reads out of this map's
         // absence.
-        inflight.delete(self);
-        log.info("hot restore complete: {} of {} instances contributed a durable copy"
+        if (writer) {
+            inflight.delete(self);
+        }
+        log.info("hot restore complete ({} member): {} of {} writers contributed a durable copy"
                 + " ({} of them already serving; this node: {} redo record(s) + {} checkpoint row(s))",
-                contributors, expected, reports.size() - restoring.size(),
-                redoRecordsRead, checkpointRecords);
+                writer ? "writer" : "search", contributors, expected,
+                reports.size() - restoring.size(), redoRecordsRead, checkpointRecords);
         return contributors;
     }
 
@@ -480,10 +511,7 @@ public final class HotRestore {
      * entry of a member that exited inside its barrier.
      */
     private static Set<String> liveInflight(HazelcastInstance hz) {
-        Set<String> live = new HashSet<>();
-        for (Member m : hz.getCluster().getMembers()) {
-            live.add(m.getUuid().toString());
-        }
+        Set<String> live = StratumRole.writerUuids(hz);
         IMap<String, Boolean> inflight = hz.getMap(INFLIGHT_MAP);
         Set<String> restoring = new HashSet<>();
         for (Map.Entry<String, Boolean> e : inflight.entrySet()) {
@@ -497,10 +525,10 @@ public final class HotRestore {
     }
 
     private static Map<String, Integer> liveReports(HazelcastInstance hz, IMap<String, Integer> ledger) {
-        Set<String> live = new HashSet<>();
-        for (Member m : hz.getCluster().getMembers()) {
-            live.add(m.getUuid().toString());
-        }
+        // WRITERS of the current view, not members of it: only a writer ever files a
+        // report, and the population the barrier is decided against has to be the
+        // same one the expectation is computed over.
+        Set<String> live = StratumRole.writerUuids(hz);
         Map<String, Integer> reports = new HashMap<>();
         for (Map.Entry<String, Integer> e : ledger.entrySet()) {
             if (live.contains(e.getKey())) {

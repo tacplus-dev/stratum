@@ -6,11 +6,12 @@ Stratum is a **record store with three durability legs**, not the single in-memo
 map this document used to describe. A record stratum holds is recoverable from:
 
 1. **In-memory replication.** Every record map is a Hazelcast `IMap<key, Message>`
-   with a declared `min_durable_copies` floor and split-brain protection. A write
-   is acked only once that many distinct instances hold it; a below-quorum write
-   throws rather than storing locally (`HotWrites`).
-2. **This pod's own volume.** A checkpoint, a redo log and a per-type record
-   index, per pod, under `<dataRoot>` — the subject of the rest of this document.
+   with `backupCount` synchronous replicas and split-brain protection. A write is
+   acked once the primary and those replicas hold it.
+2. **The writers' volumes.** A checkpoint, a redo log and a per-type record index,
+   per **writer** member, under `<dataRoot>` — the subject of the rest of this
+   document. A write is refused unless `min_durable_copies` writers are in the
+   cluster to receive it (`HotWrites`).
 3. **The event log.** Records are event-sourced: they are written only by republish
    on the record's bus, and the record plane is read-only. A pod with no volume and
    no peers rebuilds from offset zero (`ColdStartRebuilder`).
@@ -19,11 +20,75 @@ The write path is unchanged by any of this: nothing below ever writes a record, 
 a read never restamps `store_epoch`, never appends to the event log and never
 touches disk.
 
-## The daily checkpoint (per pod, one transaction)
+## Members, partitions and queries
 
-Each pod runs one transaction on the existing `cleanup_interval_seconds` cadence
-(`DailyCheckpoint`). It is **not** leader-gated — it writes this pod's own volume,
-and one pod doing it for the cluster would leave every other pod with no baseline.
+Every record map is a **partitioned** Hazelcast `IMap`: each entry has one primary
+and `backupCount` backups on other members, and primaries are spread nearly evenly.
+No member holds the whole dataset in memory, and **a predicate query — `List`,
+`Count`, a watch's fan-in — is a scatter-gather across ALL members in parallel whose
+results are merged**. Adding a member rebalances partitions onto it and adds that
+much query parallelism.
+
+## Member roles: writer and search
+
+Every member holds partitions and answers that scatter-gather. The **role** says what
+a member does besides, and the whole of the difference is disk. It travels as the
+Hazelcast member attribute `stratum.role` (`hazelcast/StratumRole`), declared per pod
+by `STRATUM_MEMBER_ROLE`; a member with no attribute reads as a **writer**, the
+direction that cannot invent durability.
+
+| | **writer** | **search** |
+|---|---|---|
+| partitions, queries | yes | yes |
+| volume | yes | **no** |
+| redo log, record index, checkpoint | yes | **no** |
+| counted for `min_durable_copies` | yes | **never** |
+| restore-barrier contributor | yes | **never** |
+| idle-clock eviction | yes | no — nothing to reload from |
+| count | static, sized for durability (2 or 3) | dynamic, sized for query throughput |
+| operator field | `stratum_nodes` | `stratum_search_nodes` (default 0) |
+
+**A writer holds the full dataset on disk.** Every write is sent to every writer —
+`RecordPersistTask`, submitted to `StratumRole.writers` — regardless of which member
+owns the partition, so a writer's redo log and record index cover the whole store and
+a writer can restore it alone. That is what makes durability independent of where
+Hazelcast happened to put a partition, and it is what lets a volume-less member own
+one safely.
+
+**`backupCount` is memory redundancy and nothing else** (`STRATUM_BACKUP_COUNT`,
+default 1). Until the roles landed it was `min_durable_copies - 1`, because the
+durable copies WERE the partition's replicas: the append rode the replication onto the
+owner and its synchronous backups. Tying them together is also what made search
+members impossible — a partition whose primary and backup both landed on volume-less
+members would have been acked with no durable copy at all.
+
+**Search members are a query-throughput knob, not a durability one.** The write gate
+counts writers (`HotWrites.durableCopies`), the split-brain minimum counts writers
+(`hazelcast/WriterCountProtection`), the cluster-formation wait counts writers
+(`StratumMapConfig.awaitProtectedClusterSize`) and the hot-restore barrier counts
+writers (`HotRestore.awaitClusterReplay`). So one writer plus five search members with
+`min_durable_copies = 2` **refuses writes**, and scaling search members from 0 to 4
+and back changes nothing durable — it rebalances partitions and nothing else.
+
+A search member does still wait at the cluster-formation and hot-restore barriers: it
+is handed partitions the moment it joins, and answering a query off a half-recovered
+store is the silent incompleteness those barriers exist to refuse. It files no report
+of its own on the way through.
+
+A search member's record maps carry **neither the idle clock nor the read-through
+loader**. The two are wired together so a map cannot get the clock without the leg
+that answers for what the clock evicts, and on a member with no volume the pair is
+neither — the clock alone would make eviction a deletion. A search member therefore
+holds its partitions resident for as long as it is a member, which is what its memory
+request is sized for.
+
+## The daily checkpoint (per writer, one transaction)
+
+Each **writer** runs one transaction on the existing `cleanup_interval_seconds`
+cadence (`DailyCheckpoint`). It is **not** leader-gated — it writes this pod's own
+volume, and one pod doing it for the cluster would leave every other writer with no
+baseline. A search member runs no cycle at all: nothing to dump, nothing to truncate,
+no tombstone log to purge into.
 
 1. **Purge.** Every row whose `(spec.deleted_flag)` field is true and whose delete
    `(spec.store_epoch)` is older than the deleted-max-age is appended to the pod's
@@ -143,15 +208,18 @@ read-through leg beneath it:
   line shape the checkpoint uses, and for the same reason: the class name is what
   lets a row come back as the type the maps and the query plane expect without a
   per-type generated descriptor.
-- **Every write lands there as well as in memory.** The index write rides
-  `RedoAppendProcessor`, the same entry processor that queues the redo append, so
-  it runs on the partition owner AND on its synchronous backup and each pod's index
-  holds that pod's own replica. It is queued to one node-local thread and is **not**
-  on the ack path, exactly like the redo append.
-- **A memory miss loads from it.** Each record map carries a Hazelcast `MapLoader`
-  (`disk/RecordDiskLoader`), wired in `StratumMapConfig.durableMap` in the same
-  branch that applies the max-idle clock, so a map cannot get the clock without the
-  leg. `loadAllKeys()` answers null: this is read-through only, and preloading the
+- **Every write lands on every writer's index as well as in memory.** The index write
+  rides `RecordPersistTask`, the same task that queues the redo append, so it runs on
+  every writer member and each writer's index holds the whole store. It is queued to
+  one node-local thread and is **not** on the ack path, exactly like the redo append.
+  Because each writer is reached over its own connection, two writes to one key can
+  arrive in either order, so `RecordDisk.writeAsync` refuses a row whose
+  `store_epoch` is older than the one the index already holds. The redo log needs no
+  such guard — `HotRestore` resolves its records by the same epoch on the way in.
+- **A memory miss loads from it.** Each record map on a WRITER carries a Hazelcast
+  `MapLoader` (`disk/RecordDiskLoader`), wired in `StratumMapConfig.durableMap` in the
+  same branch that applies the max-idle clock, so a map cannot get the clock without
+  the leg — and a search member, having no leg, gets neither. `loadAllKeys()` answers null: this is read-through only, and preloading the
   index would both start from the wrong file and undo eviction every time a map is
   opened.
 - **A dead row is not loadable.** A flagged-deleted row past its deleted-max-age
@@ -206,11 +274,13 @@ when the `stratum` consumer group's offsets have already advanced past the histo
   `min(what was ever published, broker retention)`.
 - **A redo append is queued, not awaited.** The ack is the in-memory replication.
   A process killed inside that window loses that append; the row survives on the
-  peers that queued the same append, and a simultaneous loss of every replica
+  other writers that queued the same append, and a simultaneous loss of every writer
   inside that window is the named, accepted cost of acking on replication rather
-  than on the disk write.
-- **N pods write N identical dumps.** That is the accepted cost until the
-  "collect from one pod and compress" process exists (Jody, 2026-09-20).
+  than on the disk write. The persist now crosses a network hop before it is queued,
+  so the window is one hop wider than it was when the append rode the replication.
+- **N writers write N identical dumps**, and since every writer holds the whole store
+  they are now identical in full. That is the accepted cost until the "collect from
+  one pod and compress" process exists (Jody, 2026-09-20).
 
 ## Verification
 
@@ -235,6 +305,18 @@ when the `stratum` consumer group's offsets have already advanced past the histo
   logs; `HotRestoreCheckpointContributorTest` — a peer whose log is empty because
   its checkpoint just truncated it still counts toward that floor, and a peer with
   neither a tail nor a dump still does not.
+- `hot/HotWritesWriterCountTest` — one writer and five search members refuse a write
+  needing two copies, the same write is acked once a second writer joins, and a
+  member with no role attribute counts as a writer.
+- `hot/SearchMemberRoleTest` — the persist goes to every writer and no search member
+  (including to a writer that owns nothing of the key, which is the property the old
+  partition-scoped append did not have); the restore barrier expects writers only and
+  search members file nothing; search members take partitions, answer the query, and
+  give them back losslessly.
+- `hazelcast/StratumMapConfigDurabilityTest` — `backupCount` does not move with
+  `min_durable_copies` and a record's own declaration does not move it either; the
+  protection counts writers; a search member's maps carry neither the clock nor the
+  loader.
 - `StratumMapConfigDurabilityTest.everyRecordMapCarriesItsDeclaredIdleClock` — every
   record map is configured with its declared clock; `IdleResidencyEvictionTest` —
   that the clock actually evicts, and that a read resets it without writing.

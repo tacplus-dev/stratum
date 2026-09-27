@@ -41,20 +41,24 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.che
  *
  * <p>It is NOT the crash-recovery record. The redo log is, and stays so: it is
  * ordered, it is append-only, it carries the store epoch the restore merge
- * resolves on, and it is written on the two instances that hold the value. This
- * leg is a per-key latest-value store with no ordering and no epoch merge, so
- * nothing about recovery is moved onto it and nothing here duplicates it.
+ * resolves on. This leg is a per-key latest-value store with no ordering and only
+ * the stale-write guard in {@link #writeAsync}, so nothing about recovery is moved
+ * onto it and nothing here duplicates it.
+ *
+ * <h2>Only a WRITER has one</h2>
+ * A search member has no volume, so it opens no leg and none of the three uses
+ * above applies to it: it keeps no index, runs no checkpoint, and — because
+ * {@code StratumMapConfig.durableMap} gives a map the idle clock only where the leg
+ * exists — never evicts a row it would have nothing to answer for. A writer's index
+ * holds EVERY row in the store, not just the partitions this member happens to own,
+ * because the persist fans out to every writer ({@code HotWrites}).
  *
  * <h2>Why the node-local handle is reachable statically</h2>
  * Exactly the reason {@link com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.hot.HotRedoLogs}
- * is: the disk write rides the Hazelcast write as an entry processor, which is
- * serialized to the partition owner and to its synchronous backup and
- * deserialized there, and a deserialized entry processor carries no reference to
+ * is: the disk write arrives as a {@code RecordPersistTask} submitted to this
+ * member, deserialized here, and a deserialized task carries no reference to
  * anything on the receiving member. A node-local registry is the only way its body
- * can reach that member's own indexes. Riding the replication is also what makes
- * the on-disk set match the in-memory set on each node: a pod's index holds the
- * rows that pod holds, so its dump is its own replica, not a third arbitrary
- * partitioning of the data.
+ * can reach that member's own indexes.
  *
  * <p>{@link RecordDiskLoader} resolves through the same registry rather than
  * holding an index reference, because the loaders are built by
@@ -66,13 +70,13 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.che
  *
  * <h2>The disk write is off the ack path</h2>
  * Same discipline, and the same single thread, as the redo append. The ack
- * condition is in-memory replication across {@code min_durable_copies} instances;
- * a Lucene commit is not on it. One thread rather than a pool so a key's own
- * updates cannot reorder against each other.
+ * condition is the write's in-memory replication; a Lucene commit is not on it. One
+ * thread rather than a pool so the appends land in the order this member received
+ * them; ordering ACROSS members is what the stale-write guard covers.
  *
  * <p>What the asynchrony costs, stated: a process killed between the in-memory ack
  * and the commit leaves that row absent from this node's index. It is not lost —
- * it is in memory, it is in the peers' redo logs, and the checkpoint dump reads
+ * it is in memory, it is in the other writers' logs, and the checkpoint dump reads
  * memory as well as disk precisely so a row that has not reached disk yet is still
  * dumped. The window matters only for a row that is ALSO idle-evicted before it
  * ever reached disk, which cannot happen: eviction needs a full idle window of no
@@ -108,6 +112,8 @@ public final class RecordDisk implements AutoCloseable {
 
     private final AtomicLong written = new AtomicLong();
     private final AtomicLong writeFailures = new AtomicLong();
+    /** Writes refused because the index already held a newer row — see {@link #writeAsync}. */
+    private final AtomicLong staleWrites = new AtomicLong();
     private final AtomicLong loaded = new AtomicLong();
     private final AtomicLong refusedDead = new AtomicLong();
 
@@ -172,9 +178,23 @@ public final class RecordDisk implements AutoCloseable {
      * Queues {@code value} for this node's {@code mapName} index and returns at
      * once, WITHOUT waiting for it to reach disk.
      *
-     * <p>Called from the entry-processor body, i.e. on a Hazelcast partition thread
-     * on the partition owner and on its synchronous backup. The queueing is what
-     * keeps the Lucene commit of one record write off the ack path.
+     * <p>Called from {@code RecordPersistTask}, i.e. on a Hazelcast executor thread
+     * on every WRITER member of the cluster. The queueing is what keeps the Lucene
+     * commit of one record write off the ack path.
+     *
+     * <p>An OLDER row never overwrites a newer one. The persist task reaches each
+     * writer over its own connection, so two writes to one key can arrive in one
+     * order here and the other order on the next writer — and this index is a
+     * latest-value store with no merge of its own, so the later arrival would win
+     * whatever it was. That is not a theoretical reordering: it is the price of
+     * fanning the persist out to every writer rather than riding one partition's
+     * replication, and the consequence would be a stale row served back after an
+     * idle eviction. The redo log needs no such guard because {@code HotRestore}
+     * resolves its records by the same epoch on the way in.
+     *
+     * <p>A record type carrying no {@code (spec.store_epoch)} reports 0 for both
+     * rows, so the comparison never refuses one: such a type has no write order to
+     * preserve and its last arrival is as good an answer as its first.
      *
      * @return false when this JVM has no leg open, or the name is not a record map,
      *         so nothing was queued
@@ -190,6 +210,12 @@ public final class RecordDisk implements AutoCloseable {
         }
         active.writePool.execute(() -> {
             try {
+                Message held = index.get(key);
+                if (held != null
+                        && RecordAnnotations.storeEpochMs(held) > RecordAnnotations.storeEpochMs(value)) {
+                    active.staleWrites.incrementAndGet();
+                    return;
+                }
                 index.put(key, value);
                 active.written.incrementAndGet();
             } catch (Exception e) {
@@ -275,6 +301,7 @@ public final class RecordDisk implements AutoCloseable {
 
     public long writtenCount()      { return written.get(); }
     public long writeFailureCount() { return writeFailures.get(); }
+    public long staleWriteCount()   { return staleWrites.get(); }
     public long loadedCount()       { return loaded.get(); }
     public long refusedDeadCount()  { return refusedDead.get(); }
 

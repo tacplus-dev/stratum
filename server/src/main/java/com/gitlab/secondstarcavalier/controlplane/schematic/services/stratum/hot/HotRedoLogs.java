@@ -24,39 +24,45 @@ import com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.mod
  * The node's own redo logs — one per hot record type, on this pod's volume — and
  * the single thread that writes them.
  *
- * <h2>Per node, no leader</h2>
- * {@link RedoLog} is single-writer, single-process, local-filesystem only. Three
- * instances therefore own three logs, each satisfying that contract untouched,
- * and the cluster-level durability property is composed above the log rather
- * than inside it. Each log is PARTIAL — it holds the rows this node owned or
- * backed up — so recovery is the union of the reachable nodes' logs, resolved by
- * epoch ({@link HotRestore}).
+ * <h2>Per WRITER, no leader</h2>
+ * {@link RedoLog} is single-writer, single-process, local-filesystem only. Each
+ * writer therefore owns its own logs, satisfying that contract untouched, and the
+ * cluster-level durability property is composed above the log rather than inside it.
+ * A search member opens none: it has no volume, and it is never counted as a durable
+ * copy or as a restore contributor.
+ *
+ * <p>Each writer's log is COMPLETE, not partial. Every write is sent to every writer
+ * ({@link RecordPersistTask}) whichever member owns the partition, so a writer holds
+ * the whole store on disk and can restore it alone; recovery is still run as the
+ * union of the reachable writers' logs, resolved by epoch ({@link HotRestore}),
+ * because a writer that joined after some of those writes has a log that starts
+ * later than its peers'.
  *
  * <h2>Why the node-local handle is reachable statically</h2>
- * A redo append rides the Hazelcast write as an {@link RedoAppendProcessor},
- * which is SERIALIZED to the partition owner and to its backup and deserialized
- * there. A deserialized entry processor carries no reference to anything on the
- * receiving member, so the only way its body can reach that member's own log is a
- * node-local lookup — this registry. It is set once at init and cleared at
+ * A redo append arrives as a {@link RecordPersistTask}, which is SERIALIZED to
+ * every writer member and deserialized there. A deserialized task carries no
+ * reference to anything on the receiving member, so the only way its body can reach
+ * that member's own log is a node-local lookup — this registry. It is set once at
+ * init and cleared at
  * shutdown; a second live instance in one JVM would be a second process by
  * RedoLog's contract, so {@link #install} refuses it rather than let two writers
  * share an append stream.
  *
  * <h2>The disk append is off the ack path</h2>
- * The hot-path safety bar is in-memory replication across
- * {@code min_durable_copies} instances; disk is not the blocker. So
- * {@link #appendAsync} hands the record to ONE thread and returns, and the entry
- * processor bodies — primary and backup alike — never wait on a file write. One
- * thread, not a pool: appends then land in the order the partition threads
- * produced them, so a key's own updates cannot reorder against each other. It
- * also makes this the log's single writer in fact as well as in contract, which
- * a set of Hazelcast partition threads calling {@code append} directly was not.
+ * The hot-path safety bar is the write's in-memory replication; disk is not the
+ * blocker. So {@link #appendAsync} hands the record to ONE thread and returns, and
+ * the persist task never waits on a file write. One thread, not a pool: appends then
+ * land in the order this member received them, and it makes this the log's single
+ * writer in fact as well as in contract, which a set of Hazelcast partition threads
+ * calling {@code append} directly was not. Ordering ACROSS writers is not preserved
+ * and does not need to be — {@link HotRestore} resolves every replayed record by its
+ * store epoch.
  *
  * <p>What the asynchrony costs, stated: a process killed between the in-memory
- * ack and the append loses that append. The row is not lost while any replica
+ * ack and the append loses that append. The row is not lost while any writer
  * that also queued it survives — the union in {@link HotRestore} recovers it from
- * the peer's log — and it is still on the event log besides. A simultaneous loss
- * of every replica inside that window does lose the write's disk copies, which is
+ * that writer's log — and it is still on the event log besides. A simultaneous loss
+ * of every writer inside that window does lose the write's disk copies, which is
  * the accepted, named consequence of acking on memory replication instead of on
  * the write.
  */
@@ -109,16 +115,6 @@ public final class HotRedoLogs implements AutoCloseable {
                     "a HotRedoLogs is already active in this JVM; a redo log is single-writer,"
                             + " single-process, so a second one would share an append stream with it");
         }
-    }
-
-    /**
-     * This node's log for {@code mapName}, or null when the node keeps no redo log
-     * for it. Called from entry-processor bodies on whichever member they landed
-     * on — the primary resolves its own log, the backup resolves its own.
-     */
-    public static RedoLog logFor(String mapName) {
-        HotRedoLogs active = ACTIVE.get();
-        return active == null ? null : active.logs.get(mapName);
     }
 
     /**
