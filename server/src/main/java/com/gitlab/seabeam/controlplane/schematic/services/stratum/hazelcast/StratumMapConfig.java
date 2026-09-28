@@ -178,6 +178,8 @@ public final class StratumMapConfig {
     public static Config build(List<String> seedMembers, int minDurableCopies,
                                int backupCount, StratumRole role) {
         Config cfg = new Config();
+        // Pre-rename redo-log values name com.gitlab.secondstarcavalier classes; map on load.
+        cfg.setClassLoader(new LegacyClassNameLoader(StratumMapConfig.class.getClassLoader()));
         cfg.setClusterName(CLUSTER_NAME);
         cfg.setInstanceName("stratum-events-" + UUID.randomUUID().toString().substring(0, 8));
 
