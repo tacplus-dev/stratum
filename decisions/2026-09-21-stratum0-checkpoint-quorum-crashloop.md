@@ -480,7 +480,7 @@ $ cd platform/services/stratum && git log --oneline -1
 $ mvn -o -pl server -Dtacplus.skip=true -Dtest=HotRestoreServingPeerContributorTest test
 Tests run: 2, Failures: 0, Errors: 0, Skipped: 0
 
-$ REGISTRY=us-central1-docker.pkg.dev/jody1-328023/cavalier TAG=396d952 \
+$ REGISTRY=us-central1-docker.pkg.dev/jody1-328023/seabeam TAG=396d952 \
     ./scripts/build-fleet.sh stratum
   OK   artifact
   OK   image us-central1-docker.pkg.dev/.../schematic/stratum:396d952

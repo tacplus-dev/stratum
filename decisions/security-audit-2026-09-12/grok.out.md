@@ -5,313 +5,313 @@ Launching a security review of `stratum` and reading `server/src` and `codegen/s
 
 / Search (glob)
   │ "**/*.{java,kt}" in
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen/src
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen/src
   └ 15 files found
 
 / Search (glob)
   │ "**/*.{java,kt}" in
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src
   └ 47 files found
 
 / Search (glob)
-  │ "**/*" in ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum
+  │ "**/*" in ~/workspace/gitlab/seabeam/schematic/platform/services/stratum
   └ 289 files found
 
 Security review is running. I’ll inspect cluster bootstrap, auth, and map/query paths for sibling races.
 
 ● Read Main.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/Main.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/Main.java
   └ 36 lines read
 
 ● Read StratumHandler.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/StratumHandler.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/StratumHandler.java
   └ 306 lines read
 
 / Search (grep)
   │ "tenant|auth|authorize|grant|permission|namespace" in **/*.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main)
   └ No matches found
 
 / Search (grep)
   │ "SQL|sql|query|deserialize|ObjectInput|readObject|Calcite" in **/*.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main)
   └ 15 files found
 
 / Search (grep)
   │ "quorum|split.?brain|cluster.?of.?one|waitFor|memberAdded|membership" in **/*.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src)
   └ 9 files found
 
 ● Read EventStore.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/EventStore.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/EventStore.java
   └ 1 line read
 
 ● Read HotWrites.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/hot/HotWrites.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/hot/HotWrites.java
   └ 113 lines read
 
 ● Read HotRestore.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/hot/HotRestore.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/hot/HotRestore.java
   └ 223 lines read
 
 ● Read CalciteEngine.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/CalciteEngine.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/CalciteEngine.java
   └ 297 lines read
 
 ● Read StratumMapConfig.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/hazelcast/StratumMapConfig.
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/hazelcast/StratumMapConfig.
   │ java
   └ 281 lines read
 
 ● Read ColdStartRebuilder.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/ColdStartRebuilder.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/ColdStartRebuilder.java
   └ 153 lines read
 
 ● Read EventStore.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/EventStore.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/EventStore.java
   └ L1:250 (250 lines read)
 
 ● Read EpochMergeProcessor.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/hot/EpochMergeProcessor.jav
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/hot/EpochMergeProcessor.jav
   │ a
   └ 95 lines read
 
 ● Read HotRedoLogs.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/hot/HotRedoLogs.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/hot/HotRedoLogs.java
   └ 201 lines read
 
 ● Read RedoAppendProcessor.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/hot/RedoAppendProcessor.jav
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/hot/RedoAppendProcessor.jav
   │ a
   └ 83 lines read
 
 ● Read EventStore.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/EventStore.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/EventStore.java
   └ L250:550 (301 lines read)
 
 ✗ Read WarmStore.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/schematic/services/stratum/warm/WarmStore.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/schematic/services/stratum/warm/WarmStore.java
   └ Path does not exist
 
 ● Read HotQuorumGateTest.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/test/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/hot/HotQuorumGateTest.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/test/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/hot/HotQuorumGateTest.java
   └ 105 lines read
 
 / Search (grep)
   │ "CalciteEngine|setConfig|initFromConfig|hotReadable|synchronized" in **/*.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum)
   └ 8 files found
 
 ● Read EventStore.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/EventStore.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/EventStore.java
   └ L550:750 (27 lines read)
 
 ● Read WarmStore.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/warm/WarmStore.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/warm/WarmStore.java
   └ L1:200 (200 lines read)
 
 ● Read RecordMapImplGenerator.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen/src/main/java/
-  │ com/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/codegen/RecordMapImplGener
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen/src/main/java/
+  │ com/gitlab/seabeam/controlplane/schematic/services/stratum/codegen/RecordMapImplGener
   │ ator.java
   └ L1:150 (150 lines read)
 
 ● Read StratumAnyGrantProbe.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/test/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/model/chassis/grpcserver/St
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/test/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/model/chassis/grpcserver/St
   │ ratumAnyGrantProbe.java
   └ L1:80 (80 lines read)
 
 / Search (grep)
   │ "hotReadable|requireHotReadable|ROOT_TENANT|tenant" in **/*.{java,java.ftl}
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum)
   └ 13 files found
 
 ● Read RecordQueryImplGenerator.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen/src/main/java/
-  │ com/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/codegen/RecordQueryImplGen
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen/src/main/java/
+  │ com/gitlab/seabeam/controlplane/schematic/services/stratum/codegen/RecordQueryImplGen
   │ erator.java
   └ L1:120 (120 lines read)
 
 ● Read EventStoreGenerator.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen/src/main/java/
-  │ com/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/codegen/EventStoreGenerato
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen/src/main/java/
+  │ com/gitlab/seabeam/controlplane/schematic/services/stratum/codegen/EventStoreGenerato
   │ r.java
   └ L1:200 (199 lines read)
 
 ● Read WarmQueries.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/warm/WarmQueries.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/warm/WarmQueries.java
   └ L1:200 (76 lines read)
 
 / Search (grep)
   │ "query_id|caller|tenant|SPIFFE|requireHotReadable|watch" in **/RecordMapImplGenerator.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen/src)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen/src)
   └ 1 file found
 
 / Search (grep)
   │ "MembershipListener|memberRemoved|ledger" in **/*.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src)
   └ 2 files found
 
 ● Read RecordMapImplGenerator.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen/src/main/java/
-  │ com/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/codegen/RecordMapImplGener
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen/src/main/java/
+  │ com/gitlab/seabeam/controlplane/schematic/services/stratum/codegen/RecordMapImplGener
   │ ator.java
   └ L150:450 (301 lines read)
 
 ● Read WarmEviction.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/WarmEviction.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/WarmEviction.java
   └ 125 lines read
 
 ● Read WarmIndex.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/warm/WarmIndex.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/warm/WarmIndex.java
   └ L1:180 (180 lines read)
 
 ● Read HotStoreGenerator.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen/src/main/java/
-  │ com/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/codegen/HotStoreGenerator.
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen/src/main/java/
+  │ com/gitlab/seabeam/controlplane/schematic/services/stratum/codegen/HotStoreGenerator.
   │ java
   └ L1:150 (150 lines read)
 
 / Search (grep)
   │ "JavaSerialization|setClassLoader|UserCodeDeployment|enableXml|hazelcast.security|symmetric" in
-  │ **/*.{java,xml,yaml} (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum)
+  │ **/*.{java,xml,yaml} (~/workspace/gitlab/seabeam/schematic/platform/services/stratum)
   └ No matches found
 
 ● Read WarmStore.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/warm/WarmStore.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/warm/WarmStore.java
   └ L200:450 (246 lines read)
 
 ● Read WarmResidency.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/warm/WarmResidency.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/warm/WarmResidency.java
   └ 71 lines read
 
 ● Read EventStoreGenerator.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen/src/main/java/
-  │ com/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/codegen/EventStoreGenerato
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen/src/main/java/
+  │ com/gitlab/seabeam/controlplane/schematic/services/stratum/codegen/EventStoreGenerato
   │ r.java
   └ L200:350 (104 lines read)
 
 ● Read HotRedoRestoreTest.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/test/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/hot/HotRedoRestoreTest.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/test/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/hot/HotRedoRestoreTest.java
   └ L1:120 (120 lines read)
 
 / Search (grep)
   │ "SqlParser|load_by_sql|CalciteEngine" in **/*.{java,md}
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum)
   └ 3 files found
 
 ● Read WarmIndex.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/warm/WarmIndex.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/warm/WarmIndex.java
   └ L180:380 (201 lines read)
 
 ● Read StratumEpochExtractor.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/hazelcast/StratumEpochExtra
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/hazelcast/StratumEpochExtra
   │ ctor.java
   └ 14 lines read
 
 ● Read VServiceWiringGenerator.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen/src/main/java/
-  │ com/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/codegen/VServiceWiringGene
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen/src/main/java/
+  │ com/gitlab/seabeam/controlplane/schematic/services/stratum/codegen/VServiceWiringGene
   │ rator.java
   └ L1:150 (150 lines read)
 
 ● Read WarmFilter.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/warm/WarmFilter.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/warm/WarmFilter.java
   └ 66 lines read
 
 / Search (grep)
   │ "create.*Query|queries\.put|caller" in **/RecordMapImplGenerator.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen)
   └ 1 file found
 
 ● Read WarmSlices.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/warm/WarmSlices.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/warm/WarmSlices.java
   └ 89 lines read
 
 ● Read EventTopicDiscovery.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen/src/main/java/
-  │ com/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/codegen/EventTopicDiscover
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen/src/main/java/
+  │ com/gitlab/seabeam/controlplane/schematic/services/stratum/codegen/EventTopicDiscover
   │ y.java
   └ L1:120 (120 lines read)
 
 ● Read WarmIndex.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/warm/WarmIndex.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/warm/WarmIndex.java
   └ L380:520 (141 lines read)
 
 ● Read HotDataset.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/hot/HotDataset.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/hot/HotDataset.java
   └ 59 lines read
 
 / Search (grep)
   │ "minDurableCopies|isWarm|MUTABILITY|appendOnly" in **/EventTopicDiscovery.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen/src)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen/src)
   └ 1 file found
 
 ● Read EventTopicDiscovery.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen/src/main/java/
-  │ com/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/codegen/EventTopicDiscover
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen/src/main/java/
+  │ com/gitlab/seabeam/controlplane/schematic/services/stratum/codegen/EventTopicDiscover
   │ y.java
   └ L120:350 (231 lines read)
 
 ● Read WarmIndex.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/warm/WarmIndex.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/warm/WarmIndex.java
   └ L520:700 (109 lines read)
 
 / Search (grep)
   │ "getBackupProcessor|writeObject|readObject" in **/*.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main)
   └ 1 file found
 
 ● Read StratumEventTypeExtractor.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/hazelcast/StratumEventTypeE
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/hazelcast/StratumEventTypeE
   │ xtractor.java
   └ 20 lines read
 
 ● Read Dockerfile
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/Dockerfile
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/Dockerfile
   └ 38 lines read
 
 ● Read WarmStoreGenerator.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen/src/main/java/
-  │ com/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/codegen/WarmStoreGenerator
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen/src/main/java/
+  │ com/gitlab/seabeam/controlplane/schematic/services/stratum/codegen/WarmStoreGenerator
   │ .java
   └ L1:80 (80 lines read)
 
 / Search (grep)
   │ "phone.home|cluster-name|5001" in **/*.{java,yml,yaml,xml}
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum)
   └ 12 files found
 
 Security specialist is still running. Correctness pass on cluster/restore/query paths is done; I’ll merge both into the ranked report when that review lands.
@@ -323,138 +323,138 @@ Security review returned one high-confidence issue. I’ll pin exact line number
 
 / Search (grep)
   │ "cfg\.setClusterName|writePool\.execute" in **/*.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main)
   └ 3 files found
 
 / Search (grep)
   │ "queries\.put\(qid|Row filtering|emptyIterator|ledger\.size\(\)|hotReadable = true|if
   │ \(this\.config != null" in **/*.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum)
   └ 5 files found
 
 / Search (grep)
   │ "setClusterName" in **/StratumMapConfig.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main)
   └ 1 line found
 
 / Search (grep)
   │ "hotReadable = true" in **/EventStore.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main)
   └ 1 line found
 
 / Search (grep)
   │ "onCompleted" in **/RecordMapImplGenerator.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen)
   └ 1 line found
 
 / Search (grep)
   │ "writeFailures" in **/WarmStore.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main)
   └ 3 lines found
 
 / Search (grep)
   │ "queries\.put\(qid" in **/RecordMapImplGenerator.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen)
   └ 1 line found
 
 / Search (grep)
   │ "ExecutionException" in **/WarmIndex.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main)
   └ 2 lines found
 
 / Search (grep)
   │ "ledger\.size" in **/HotRestore.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main)
   └ 2 lines found
 
 / Search (grep)
   │ "coldStartHandled" in **/StratumHandler.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main)
   └ 2 lines found
 
 / Search (grep)
   │ "entry\.setValue" in **/RedoAppendProcessor.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main)
   └ 1 line found
 
 / Search (grep)
   │ "emptyIterator" in **/RecordMapImplGenerator.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen)
   └ 1 line found
 
 / Search (grep)
   │ "this\.config != null && this\.config.equals" in **/StratumHandler.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main)
   └ 1 line found
 
 / Search (grep)
   │ "Row filtering" in **/RecordQueryImplGenerator.java
-  │ (~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen)
+  │ (~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen)
   └ 1 line found
 
 ● Read RecordQueryImplGenerator.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen/src/main/java/
-  │ com/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/codegen/RecordQueryImplGen
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen/src/main/java/
+  │ com/gitlab/seabeam/controlplane/schematic/services/stratum/codegen/RecordQueryImplGen
   │ erator.java
   └ L38:45 (8 lines read)
 
 ● Read StratumMapConfig.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/hazelcast/StratumMapConfig.
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/hazelcast/StratumMapConfig.
   │ java
   └ L140:150 (11 lines read)
 
 ● Read HotRestore.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/hot/HotRestore.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/hot/HotRestore.java
   └ L210:280 (14 lines read)
 
 ● Read RecordMapImplGenerator.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen/src/main/java/
-  │ com/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/codegen/RecordMapImplGener
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen/src/main/java/
+  │ com/gitlab/seabeam/controlplane/schematic/services/stratum/codegen/RecordMapImplGener
   │ ator.java
   └ L230:250 (21 lines read)
 
 ● Read StratumHandler.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/StratumHandler.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/StratumHandler.java
   └ L188:275 (88 lines read)
 
 ● Read EventStore.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/EventStore.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/EventStore.java
   └ L348:365 (18 lines read)
 
 ● Read RedoAppendProcessor.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/hot/RedoAppendProcessor.jav
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/hot/RedoAppendProcessor.jav
   │ a
   └ L70:80 (11 lines read)
 
 ● Read WarmStore.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/warm/WarmStore.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/warm/WarmStore.java
   └ L238:258 (21 lines read)
 
 ● Read RecordMapImplGenerator.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen/src/main/java/
-  │ com/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/codegen/RecordMapImplGener
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen/src/main/java/
+  │ com/gitlab/seabeam/controlplane/schematic/services/stratum/codegen/RecordMapImplGener
   │ ator.java
   └ L330:370 (41 lines read)
 
 ● Read WarmIndex.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/warm/WarmIndex.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/warm/WarmIndex.java
   └ L318:345 (28 lines read)
 
 ● Read EventStore.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/server/src/main/java/c
-  │ om/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/EventStore.java
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/server/src/main/java/c
+  │ om/gitlab/seabeam/controlplane/schematic/services/stratum/EventStore.java
   └ L218:250 (33 lines read)
 
 ● Read RecordMapImplGenerator.java
-  │ ~/workspace/gitlab/secondstarcavalier/schematic/platform/services/stratum/codegen/src/main/java/
-  │ com/gitlab/secondstarcavalier/controlplane/schematic/services/stratum/codegen/RecordMapImplGener
+  │ ~/workspace/gitlab/seabeam/schematic/platform/services/stratum/codegen/src/main/java/
+  │ com/gitlab/seabeam/controlplane/schematic/services/stratum/codegen/RecordMapImplGener
   │ ator.java
   └ L298:320 (23 lines read)
 
