@@ -1,13 +1,16 @@
 // Copyright (c) 2024 Second Star Cavalier, LLC.
 package com.gitlab.seabeam.controlplane.schematic.services.stratum.hot;
 
-import java.io.Serializable;
+import java.io.IOException;
 import java.util.Map;
 
 import com.google.protobuf.Descriptors;
 import com.google.protobuf.Message;
 import com.google.protobuf.UnknownFieldSet;
 import com.hazelcast.map.EntryProcessor;
+import com.hazelcast.nio.ObjectDataInput;
+import com.hazelcast.nio.ObjectDataOutput;
+import com.hazelcast.nio.serialization.DataSerializable;
 
 /**
  * The restore union's merge rule, applied at the partition owner: highest store
@@ -31,10 +34,13 @@ import com.hazelcast.map.EntryProcessor;
  * <p>With exactly one exception, and it is not a softening of that rule: bytes the
  * redo payload's encoding could not carry in the first place were never evidence
  * of anything about the write path. See {@link #onlyRedoDroppedFieldsDiffer}.
+ *
+ * <p>{@link DataSerializable} rather than {@link java.io.Serializable} so the
+ * candidate row is written through Hazelcast's serializer for records
+ * ({@code ProtoMessageSerializer}) instead of protobuf's Java serialization,
+ * which would carry the generated class's Java name.
  */
-public final class EpochMergeProcessor implements EntryProcessor<String, Message, Integer>, Serializable {
-
-    private static final long serialVersionUID = 1L;
+public final class EpochMergeProcessor implements EntryProcessor<String, Message, Integer>, DataSerializable {
 
     /** The candidate was applied — no existing row, or a strictly newer epoch. */
     public static final int APPLIED = 1;
@@ -43,10 +49,13 @@ public final class EpochMergeProcessor implements EntryProcessor<String, Message
     /** Same key, same epoch, different bytes: the write path was violated. */
     public static final int DIVERGED = 3;
 
-    private final String epochField;
-    private final Message candidate;
-    private final long candidateEpoch;
-    private final boolean deleted;
+    private String epochField;
+    private Message candidate;
+    private long candidateEpoch;
+    private boolean deleted;
+
+    /** For Hazelcast's deserialization. */
+    public EpochMergeProcessor() {}
 
     public EpochMergeProcessor(String epochField, Message candidate, long candidateEpoch, boolean deleted) {
         this.epochField = epochField;
@@ -137,5 +146,21 @@ public final class EpochMergeProcessor implements EntryProcessor<String, Message
                     + " has no field " + epochField + " carrying (spec.store_epoch)");
         }
         return ((Number) msg.getField(fd)).longValue();
+    }
+
+    @Override
+    public void writeData(ObjectDataOutput out) throws IOException {
+        out.writeString(epochField);
+        out.writeObject(candidate);
+        out.writeLong(candidateEpoch);
+        out.writeBoolean(deleted);
+    }
+
+    @Override
+    public void readData(ObjectDataInput in) throws IOException {
+        epochField = in.readString();
+        candidate = in.readObject();
+        candidateEpoch = in.readLong();
+        deleted = in.readBoolean();
     }
 }

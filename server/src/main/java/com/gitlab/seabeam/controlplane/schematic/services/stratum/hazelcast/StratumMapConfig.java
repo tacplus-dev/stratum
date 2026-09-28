@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
+import com.google.protobuf.Message;
 import com.hazelcast.config.Config;
 import com.hazelcast.config.IndexConfig;
 import com.hazelcast.config.IndexType;
@@ -12,6 +13,7 @@ import com.hazelcast.config.InMemoryFormat;
 import com.hazelcast.config.MapConfig;
 import com.hazelcast.config.MapStoreConfig;
 import com.hazelcast.config.NetworkConfig;
+import com.hazelcast.config.SerializerConfig;
 import com.hazelcast.config.SplitBrainProtectionConfig;
 import com.hazelcast.core.HazelcastInstance;
 
@@ -178,8 +180,10 @@ public final class StratumMapConfig {
     public static Config build(List<String> seedMembers, int minDurableCopies,
                                int backupCount, StratumRole role) {
         Config cfg = new Config();
-        // Pre-rename redo-log values name com.gitlab.secondstarcavalier classes; map on load.
-        cfg.setClassLoader(new LegacyClassNameLoader(StratumMapConfig.class.getClassLoader()));
+        // Records travel as (proto full name, proto bytes), never as a Java class name.
+        cfg.getSerializationConfig().addSerializerConfig(new SerializerConfig()
+                .setTypeClass(Message.class)
+                .setImplementation(new ProtoMessageSerializer()));
         cfg.setClusterName(CLUSTER_NAME);
         cfg.setInstanceName("stratum-events-" + UUID.randomUUID().toString().substring(0, 8));
 

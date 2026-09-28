@@ -138,4 +138,17 @@ class EventStoreHotWriteTest {
                 "case \"demo.DemoEvent\": return MIN_DURABLE_COPIES_DEMO_DEMO_EVENT;"), src);
         assertTrue(src.contains("default: return 0;"), src);
     }
+
+    /**
+     * The durable format names a row by its protobuf full name; the registry that
+     * turns that name back into a generated type is keyed by it, not by a Java class.
+     */
+    @Test
+    void defaultInstanceIsKeyedByProtoFullName(@TempDir Path dir) throws IOException {
+        String src = generate(dir, EVENT);
+        assertTrue(src.contains("public static Message defaultInstance(String protoFullName) {"), src);
+        assertTrue(src.contains("case \"demo.DemoEvent\": return "), src);
+        assertTrue(src.contains(".DemoEvent.getDefaultInstance();"), src);
+        assertTrue(src.contains("default: return null;"), src);
+    }
 }

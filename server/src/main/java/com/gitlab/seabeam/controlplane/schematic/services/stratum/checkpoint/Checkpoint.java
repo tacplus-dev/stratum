@@ -17,8 +17,8 @@ import com.google.gson.JsonParser;
 import com.google.protobuf.Message;
 import com.google.protobuf.Parser;
 
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.StratumEventStores;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.FsUtil;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.disk.LegacyClassNames;
 
 /**
  * The pod's full dump of every row of every record type, and the pointer that
@@ -52,11 +52,12 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.disk.LegacyCla
  *
  * <h2>The line format</h2>
  * One JSON object per line: the Hazelcast map name, the record key, the value's
- * Java class and the value's protobuf bytes, base64. The class name is what makes
- * the load leg possible without a per-type generated descriptor — every protobuf
- * generated class exposes {@code getDefaultInstance()}, and its parser is the
- * type's own, so the row comes back as the concrete type the maps and the query
- * plane expect rather than as a DynamicMessage they could not serve.
+ * protobuf full name ({@code type}, e.g. {@code accountingrecord.AccountingRecord})
+ * and the value's protobuf bytes, base64. The load leg resolves the full name
+ * through the generated registry ({@link StratumEventStores#defaultInstance}), so
+ * the row comes back as the concrete type the maps and the query plane expect
+ * rather than as a DynamicMessage they could not serve. A Java class name is never
+ * written: it would tie the durable format to the generated code's package layout.
  */
 public final class Checkpoint {
 
@@ -80,7 +81,7 @@ public final class Checkpoint {
     }
 
     private final Path dir;
-    /** Class name -> that type's parser. Resolved once; a dump holds one class many times. */
+    /** Proto full name -> that type's parser. Resolved once; a dump holds one type many times. */
     private final Map<String, Parser<? extends Message>> parsers = new ConcurrentHashMap<>();
 
     public Checkpoint(Path dataRoot) {
@@ -106,7 +107,7 @@ public final class Checkpoint {
             JsonObject line = new JsonObject();
             line.addProperty("map", row.mapName);
             line.addProperty("key", row.key);
-            line.addProperty("class", row.value.getClass().getName());
+            line.addProperty("type", row.value.getDescriptorForType().getFullName());
             line.addProperty("proto", Base64.getEncoder().encodeToString(row.value.toByteArray()));
             buf.append(line).append('\n');
         }
@@ -174,7 +175,7 @@ public final class Checkpoint {
     /**
      * Every row of the checkpoint {@code current} names; empty when there is none.
      *
-     * <p>A line whose class cannot be resolved or whose bytes do not parse FAILS
+     * <p>A line whose type cannot be resolved or whose bytes do not parse FAILS
      * the load rather than being skipped: a checkpoint is the baseline a cold start
      * is built on, and quietly dropping rows out of it produces a store that is
      * silently incomplete — the failure the whole cold-start gate exists to refuse.
@@ -190,25 +191,23 @@ public final class Checkpoint {
                 continue;
             }
             JsonObject obj = JsonParser.parseString(line).getAsJsonObject();
-            String className = obj.get("class").getAsString();
+            String type = obj.get("type").getAsString();
             byte[] proto = Base64.getDecoder().decode(obj.get("proto").getAsString());
             rows.add(new Row(obj.get("map").getAsString(), obj.get("key").getAsString(),
-                    parserFor(className).parseFrom(proto)));
+                    parserFor(type).parseFrom(proto)));
         }
         return rows;
     }
 
-    private Parser<? extends Message> parserFor(String className) {
-        return parsers.computeIfAbsent(className, cn -> {
-            try {
-                Message defaultInstance =
-                        (Message) Class.forName(LegacyClassNames.map(cn)).getMethod("getDefaultInstance").invoke(null);
-                return defaultInstance.getParserForType();
-            } catch (ReflectiveOperationException | ClassCastException e) {
-                throw new IllegalStateException("checkpoint holds rows of " + cn
-                        + ", which is not a protobuf message type on this build's classpath;"
-                        + " refusing to load a partial baseline", e);
+    private Parser<? extends Message> parserFor(String type) {
+        return parsers.computeIfAbsent(type, t -> {
+            Message defaultInstance = StratumEventStores.defaultInstance(t);
+            if (defaultInstance == null) {
+                throw new IllegalStateException("checkpoint holds rows of " + t
+                        + ", which is not a record type this build declares;"
+                        + " refusing to load a partial baseline");
             }
+            return defaultInstance.getParserForType();
         });
     }
 }

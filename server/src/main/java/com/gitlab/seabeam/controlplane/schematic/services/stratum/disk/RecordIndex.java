@@ -30,6 +30,8 @@ import org.apache.lucene.util.BytesRef;
 import com.google.protobuf.Message;
 import com.google.protobuf.Parser;
 
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.StratumEventStores;
+
 /**
  * One record type's on-disk leg: a Lucene index under
  * {@code <dataRoot>/records/<pkg>.<Type>/}, keyed by the record key and holding
@@ -55,12 +57,12 @@ import com.google.protobuf.Parser;
  *
  * <h2>The document</h2>
  * Three fields, mirroring {@code Checkpoint}'s line format for the same reason:
- * the key the term addresses, the value's concrete Java class, and the value's
- * protobuf bytes. The class name is what makes the read leg possible without a
- * per-type generated descriptor — every protobuf generated class exposes
- * {@code getDefaultInstance()}, and its parser is the type's own, so a row comes
- * back as the concrete type the maps and the query plane expect rather than as a
- * DynamicMessage they could not serve.
+ * the key the term addresses, the value's protobuf full name, and the value's
+ * protobuf bytes. The full name resolves through the generated registry
+ * ({@link StratumEventStores#defaultInstance}), so a row comes back as the
+ * concrete type the maps and the query plane expect rather than as a
+ * DynamicMessage they could not serve — and no Java class name is stored, so the
+ * index outlives a move of the generated code's package.
  *
  * <h2>Opened lazily</h2>
  * The directory, the writer and the searcher are created on the first write or
@@ -75,8 +77,8 @@ public final class RecordIndex implements Closeable {
 
     /** Reserved document field: the record key, the term updates and deletes address. */
     static final String KEY_FIELD = "_key";
-    /** Reserved document field: the value's concrete protobuf class. */
-    static final String CLASS_FIELD = "_class";
+    /** Reserved document field: the value's protobuf full name. */
+    static final String TYPE_FIELD = "_type";
     /** Reserved document field: the record itself, stored verbatim. */
     static final String PROTO_FIELD = "_proto";
 
@@ -89,7 +91,7 @@ public final class RecordIndex implements Closeable {
     private IndexWriter writer;
     private SearcherManager searchers;
 
-    /** Class name -> that type's parser. Resolved once; an index holds one class many times. */
+    /** Proto full name -> that type's parser. Resolved once; an index holds one type many times. */
     private final Map<String, Parser<? extends Message>> parsers = new ConcurrentHashMap<>();
 
     RecordIndex(String mapName, Path dir) {
@@ -123,10 +125,8 @@ public final class RecordIndex implements Closeable {
      * write nothing it was waiting on.
      */
     public void put(String key, Message value) throws IOException {
-        Document doc = new Document();
-        doc.add(new StringField(KEY_FIELD, key, Field.Store.YES));
-        doc.add(new StoredField(CLASS_FIELD, value.getClass().getName()));
-        doc.add(new StoredField(PROTO_FIELD, new BytesRef(value.toByteArray())));
+        Document doc = document(key, value.getDescriptorForType().getFullName(),
+                new BytesRef(value.toByteArray()));
         synchronized (writeLock) {
             IndexWriter w = open();
             w.updateDocument(new Term(KEY_FIELD, key), doc);
@@ -222,6 +222,15 @@ public final class RecordIndex implements Closeable {
     // Internals
     // -----------------------------------------------------------------------
 
+    /** One row's document. Shared with {@link ClassNameMigration}, which rewrites rows into it. */
+    static Document document(String key, String type, BytesRef proto) {
+        Document doc = new Document();
+        doc.add(new StringField(KEY_FIELD, key, Field.Store.YES));
+        doc.add(new StoredField(TYPE_FIELD, type));
+        doc.add(new StoredField(PROTO_FIELD, proto));
+        return doc;
+    }
+
     /**
      * The key of one document.
      *
@@ -235,31 +244,29 @@ public final class RecordIndex implements Closeable {
     }
 
     private Message parse(StoredFields stored, int docId) throws IOException {
-        Document doc = stored.document(docId, Set.of(CLASS_FIELD, PROTO_FIELD));
-        String className = doc.get(CLASS_FIELD);
+        Document doc = stored.document(docId, Set.of(TYPE_FIELD, PROTO_FIELD));
+        String type = doc.get(TYPE_FIELD);
         BytesRef proto = doc.getBinaryValue(PROTO_FIELD);
-        return parserFor(className).parseFrom(proto.bytes, proto.offset, proto.length);
+        return parserFor(type).parseFrom(proto.bytes, proto.offset, proto.length);
     }
 
     /**
-     * The parser for a stored class name.
+     * The parser for a stored protobuf full name.
      *
-     * <p>An unresolvable class FAILS the read rather than being skipped, the same
+     * <p>An unresolvable type FAILS the read rather than being skipped, the same
      * posture {@code Checkpoint.load} takes for the same reason: this leg is what a
      * memory miss and the checkpoint dump are both built on, and quietly dropping
      * rows out of it produces a store that is silently incomplete.
      */
-    private Parser<? extends Message> parserFor(String className) {
-        return parsers.computeIfAbsent(className, cn -> {
-            try {
-                Message defaultInstance =
-                        (Message) Class.forName(LegacyClassNames.map(cn)).getMethod("getDefaultInstance").invoke(null);
-                return defaultInstance.getParserForType();
-            } catch (ReflectiveOperationException | ClassCastException e) {
-                throw new IllegalStateException("the disk leg for " + mapName + " holds rows of " + cn
-                        + ", which is not a protobuf message type on this build's classpath;"
-                        + " refusing to answer a read from a partial index", e);
+    private Parser<? extends Message> parserFor(String type) {
+        return parsers.computeIfAbsent(type, t -> {
+            Message defaultInstance = StratumEventStores.defaultInstance(t);
+            if (defaultInstance == null) {
+                throw new IllegalStateException("the disk leg for " + mapName + " holds rows of " + t
+                        + ", which is not a record type this build declares;"
+                        + " refusing to answer a read from a partial index");
             }
+            return defaultInstance.getParserForType();
         });
     }
 

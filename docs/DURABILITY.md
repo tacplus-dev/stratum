@@ -204,10 +204,13 @@ read-through leg beneath it:
 
 - **One Lucene index per record type**, on this pod's volume, under
   `<dataRoot>/records/<pkg>.<Type>/` (`disk/RecordIndex`). Keyed by the record key,
-  holding the record's concrete Java class name and its protobuf bytes — the same
-  line shape the checkpoint uses, and for the same reason: the class name is what
-  lets a row come back as the type the maps and the query plane expect without a
-  per-type generated descriptor.
+  holding the record's protobuf full name (e.g. `accountingrecord.AccountingRecord`)
+  and its protobuf bytes — the same line shape the checkpoint uses, and for the same
+  reason: the full name resolves through the generated registry
+  (`StratumEventStores.defaultInstance`), so a row comes back as the type the maps and
+  the query plane expect. No Java class name is stored, on disk or on the Hazelcast
+  wire (`hazelcast/ProtoMessageSerializer`); volumes written in the older class-name
+  format are rewritten once at boot by `disk/ClassNameMigration`.
 - **Every write lands on every writer's index as well as in memory.** The index write
   rides `RecordPersistTask`, the same task that queues the redo append, so it runs on
   every writer member and each writer's index holds the whole store. It is queued to

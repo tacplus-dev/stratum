@@ -49,3 +49,33 @@
    Rationale for the record: this is exactly the case the pattern is meant to prevent —
    a service hand-rolling identity plumbing because the generated surface was private.
    The fix belongs in the template so every consumer gets it, not in stratum.
+
+## Durable format: proto full names instead of Java class names (2026-09-28)
+
+4. **Rolling upgrade across this change is not wire-compatible.**
+   Records now cross Hazelcast through `hazelcast/ProtoMessageSerializer` (custom type id 1:
+   proto full name + bytes), and `RecordPersistTask` / `EpochMergeProcessor` are now
+   `DataSerializable` so the record inside them goes through that serializer instead of
+   protobuf's Java serialization. A member on the old build cannot read type id 1, and an old
+   member's Java-serialized tasks are no longer the class shape the new build expects.
+   - **Default taken**: deploy this change as a full stratum restart (all members down, then up),
+     not a rolling one. Durable state is unaffected: each writer's boot runs
+     `ClassNameMigration` over its own volume before anything reads it, then restores from its
+     checkpoint + redo logs as usual.
+   - **Question**: is a full restart acceptable for this rollout, or does the operator need a
+     rolling path (which would mean shipping the serializer in a read-both release first)?
+
+5. **When can `disk/ClassNameMigration` be deleted?**
+   It is a no-op on a volume with no legacy row and runs on every writer boot. To recognize
+   legacy rows it builds (generated Java class name → proto full name) from the registry — the
+   one remaining `getClass().getName()` in the module, used only to *match* old data, never
+   written. It also carries the `com.gitlab.secondstarcavalier.` → `com.gitlab.seabeam.` prefix
+   mapping, so pre-rename volumes migrate too.
+   - **Default taken**: keep it until every deployed volume has booted once on this build.
+   - **Question**: who confirms that, and should the deletion be queued as a follow-up item?
+
+6. **Pre-existing test failures (not caused by this change).**
+   `HotAgentEventE2ETest` (2) and `PullAgentEventE2ETest` (12) fail with
+   `PERMISSION_DENIED: ... the caller presented no verified namespace claim` on a clean tree
+   before this change and after it (identical failing set, 14 of 138). Left alone as out of scope.
+   - **Question**: is that namespace-claim test fixture gap owned by someone already?

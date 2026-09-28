@@ -1,9 +1,12 @@
 // Copyright (c) 2024 Second Star Cavalier, LLC.
 package com.gitlab.seabeam.controlplane.schematic.services.stratum.hot;
 
-import java.io.Serializable;
+import java.io.IOException;
 
 import com.google.protobuf.Message;
+import com.hazelcast.nio.ObjectDataInput;
+import com.hazelcast.nio.ObjectDataOutput;
+import com.hazelcast.nio.serialization.DataSerializable;
 
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.disk.RecordDisk;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.RedoLog;
@@ -42,18 +45,24 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.
  * queue" is now "killed between the ack and the remote queue". What bounds it is
  * unchanged: every writer was sent the same task, so the write survives while any
  * one of them queued it, and it is on the event log besides.
+ *
+ * <p>{@link DataSerializable} rather than {@link java.io.Serializable} so the
+ * record is written through Hazelcast's serializer for records
+ * ({@code ProtoMessageSerializer}) instead of protobuf's Java serialization,
+ * which would carry the generated class's Java name.
  */
-public final class RecordPersistTask implements Runnable, Serializable {
+public final class RecordPersistTask implements Runnable, DataSerializable {
 
-    private static final long serialVersionUID = 1L;
-
-    private final String mapName;
-    private final String key;
+    private String mapName;
+    private String key;
     /** The record itself, for the index leg. Null when the value is not a protobuf. */
-    private final Message value;
+    private Message value;
     /** The redo payload, computed once on the ingesting node. Null when no log keeps the type. */
-    private final String payload;
-    private final long epoch;
+    private String payload;
+    private long epoch;
+
+    /** For Hazelcast's deserialization. */
+    public RecordPersistTask() {}
 
     public RecordPersistTask(String mapName, String key, Message value, String payload, long epoch) {
         this.mapName = mapName;
@@ -84,5 +93,23 @@ public final class RecordPersistTask implements Runnable, Serializable {
     /** The store epoch stamped into the appended record. */
     public long epoch() {
         return epoch;
+    }
+
+    @Override
+    public void writeData(ObjectDataOutput out) throws IOException {
+        out.writeString(mapName);
+        out.writeString(key);
+        out.writeObject(value);
+        out.writeString(payload);
+        out.writeLong(epoch);
+    }
+
+    @Override
+    public void readData(ObjectDataInput in) throws IOException {
+        mapName = in.readString();
+        key = in.readString();
+        value = in.readObject();
+        payload = in.readString();
+        epoch = in.readLong();
     }
 }

@@ -34,6 +34,7 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.checkpoint.Che
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.checkpoint.DailyCheckpoint;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.checkpoint.DurableRows;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.checkpoint.TombstoneLog;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.disk.ClassNameMigration;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.disk.RecordDisk;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hazelcast.StratumMapConfig;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hazelcast.StratumRole;
@@ -228,6 +229,14 @@ public class EventStore {
         // the pre-leg store, and the window would be exactly the boot.
         this.deletedMaxAgeSeconds = configuredDeletedMaxAgeSeconds();
         if (role.isWriter()) {
+            // Before anything reads the volume: a dump or index written when rows were
+            // named by Java class is rewritten to protobuf full names first.
+            try {
+                ClassNameMigration.run(dataRoot(), StratumEventStores.mapNames());
+            } catch (IOException e) {
+                throw new IllegalStateException("durable format at " + dataRoot()
+                        + " could not be migrated; refusing to start on a baseline that may be partial", e);
+            }
             recordDisk = new RecordDisk(dataRoot(), StratumEventStores.mapNames(),
                     () -> deletedMaxAgeSeconds * 1000L);
         }

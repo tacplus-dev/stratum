@@ -177,6 +177,26 @@ public final class EventStoreGenerator {
         w.println("    }");
         w.println();
 
+        // defaultInstance(protoFullName) — the message-type registry the durable
+        // format resolves through. Stratum's disk legs and its Hazelcast serializer
+        // name a row by its protobuf full name, never by its Java class, so the
+        // stored form survives a java_package move; this is the one place that name
+        // turns back into a concrete generated type. The map name IS the full name
+        // (proto package + message), so the keys are the mapNames() strings.
+        w.println("    /**");
+        w.println("     * The default instance of the record type with this protobuf full name");
+        w.println("     * (e.g. \"accountingrecord.AccountingRecord\"), or null if it is not a record type.");
+        w.println("     */");
+        w.println("    public static Message defaultInstance(String protoFullName) {");
+        w.println("        switch (protoFullName) {");
+        for (EventTopicDiscovery.TopicEvent e : events) {
+            w.println("            case \"" + mapName(e) + "\": return " + fqn(e) + ".getDefaultInstance();");
+        }
+        w.println("            default: return null;");
+        w.println("        }");
+        w.println("    }");
+        w.println();
+
         // minDurableCopies(mapName) — the floorConst() constants keyed by map name, for
         // callers (StratumMapConfig) that only have the name, not the record type, in hand.
         w.println("    /** The declared durability floor for a map name, or 0 if unknown. */");
