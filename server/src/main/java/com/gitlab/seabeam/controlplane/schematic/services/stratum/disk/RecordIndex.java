@@ -253,7 +253,7 @@ public final class RecordIndex implements Closeable {
         return parsers.computeIfAbsent(className, cn -> {
             try {
                 Message defaultInstance =
-                        (Message) Class.forName(cn).getMethod("getDefaultInstance").invoke(null);
+                        (Message) Class.forName(LegacyClassNames.map(cn)).getMethod("getDefaultInstance").invoke(null);
                 return defaultInstance.getParserForType();
             } catch (ReflectiveOperationException | ClassCastException e) {
                 throw new IllegalStateException("the disk leg for " + mapName + " holds rows of " + cn
