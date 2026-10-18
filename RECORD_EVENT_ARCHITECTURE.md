@@ -5,7 +5,7 @@ Stratum is a **generic, app-agnostic, typed, stateful database**. It holds the
 (offshoots) of those records. Stratum's hand-written code names **no vservice** —
 every per-record-type surface is generated from the tacplus contract.
 
-> Authoritative annotation contract: `schematic/tacplus/docs/RECORD_EVENT_MODEL.md`.
+> Authoritative annotation contract: `github.com/tacplus-dev/tacplus/docs/RECORD_EVENT_MODEL.md`.
 
 > **2026-08-25 — timedb and graphdb are in the boneyard** (BIG GOAL 3, first move
 > #1): out of the fleet build, protos deleted, no images published. Every mention
