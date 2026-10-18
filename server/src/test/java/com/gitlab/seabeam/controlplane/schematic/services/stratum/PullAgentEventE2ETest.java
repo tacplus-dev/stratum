@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Seabeam LLC. All rights reserved.
 package com.gitlab.seabeam.controlplane.schematic.services.stratum;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -18,10 +20,13 @@ import com.hazelcast.core.HazelcastInstance;
 
 import io.grpc.ManagedChannel;
 import io.grpc.Server;
+import io.grpc.ServerInterceptors;
 import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotWrites;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.grpcserver.Authorizer;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.servicemanager.Auth;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.token.TokenWrapper;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.vservices.query.RecordMap;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.query.RecordMapGrpc;
@@ -48,9 +53,11 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vs
  *    the generated wrapper. A deployed stratum is brought up by the generated
  *    ServiceManager with TLS, kernel-sourced config and a real key source; none
  *    of that runs here.
- *  - No auth. The wrapper demands an Authorizer and cannot be built without one,
- *    so the harness passes one that authorizes everything. Whether a real caller
- *    is entitled to RecordMap/*AgentEvent is untested here.
+ *  - No signature check. The harness Authorizer records the caller's bearer
+ *    token as verified without checking it, so the plane sees the namespace
+ *    claim a real caller presents. Whether a real caller is entitled to
+ *    RecordMap/*AgentEvent is untested here; the tenant boundary itself is
+ *    TwoTenantQueryScopeE2ETest's.
  *  - No ingest path. Fixtures are written straight into the generated store; the
  *    EventBus subscribe → store leg is not exercised.
  */
@@ -58,6 +65,9 @@ class PullAgentEventE2ETest {
 
     private static final String SPIFFE_A = "spiffe://cav/tenants/t1/users/a";
     private static final String SPIFFE_B = "spiffe://cav/tenants/t1/users/b";
+
+    /** The one tenant every fixture row and the caller's token belong to. */
+    private static final String NAMESPACE = "/tenants/t1";
 
     private static HazelcastInstance hz;
     private static Server server;
@@ -77,6 +87,7 @@ class PullAgentEventE2ETest {
                 .setSessionId(sessionId)
                 .setAgentId(agentId)
                 .setSpiffeId(spiffeId)
+                .setNamespace(NAMESPACE)
                 .setTimestampMs(ts)
                 .setEventType(SensorEventType.SENSOR_EVENT_TYPE_TOOL_USE)
                 .setSensorType(SensorType.SENSOR_TYPE_CLAUDE_CODE)
@@ -91,6 +102,20 @@ class PullAgentEventE2ETest {
             event("e4", "s2", "ag2", SPIFFE_B, 4000),
             event("e5", "s2", "ag3", SPIFFE_A, 5000),
             event("e6", "s2", "ag3", SPIFFE_A, 6000));
+
+    /**
+     * A token carrying {@link #NAMESPACE} as its namespace claim, in the shape
+     * {@code header.payload.signature} the chassis reads claims out of — what the
+     * shipped CLI sends as {@code --token}. Unsigned on purpose: the stub
+     * Authorizer below stands in for signature verification.
+     */
+    private static String token() {
+        Base64.Encoder b64 = Base64.getUrlEncoder().withoutPadding();
+        String header = b64.encodeToString("{\"alg\":\"none\"}".getBytes(StandardCharsets.UTF_8));
+        String payload = b64.encodeToString(("{\"namespace\":\"" + NAMESPACE + "\"}")
+                .getBytes(StandardCharsets.UTF_8));
+        return header + "." + payload + ".stub-signature";
+    }
 
     @BeforeAll
     static void up() throws Exception {
@@ -123,29 +148,35 @@ class PullAgentEventE2ETest {
                 "a fixture failed the generated AgentEvent validation and was dropped");
 
         // The wrapper's authorizer is mandatory by construction. This one allows
-        // everything: the auth path is out of scope here and stubbing it is
-        // visible rather than silent.
-        var authorizer = new com.gitlab.seabeam.controlplane.schematic.services.stratum
-                .model.chassis.grpcserver.Authorizer(sink -> { }) {
+        // everything: signature verification is out of scope here and stubbing it
+        // is visible rather than silent.
+        Authorizer authorizer = new Authorizer(sink -> { }) {
             @Override
             public TokenWrapper authorize(String fullMethod, Object request) throws ProtoException {
-                // Allow everything. Returning null is the documented "nothing
-                // verified an identity on this call" case: the wrapper feeds
-                // this to Authorizer.identityClaims, which maps null to an
-                // empty claim set rather than dereferencing it.
-                return null;
+                // Verifies nothing; records the call's bearer token into the slot the
+                // real Authorizer fills after it HAS verified one, so the plane sees
+                // the namespace claim a real caller presents.
+                String header = Authorizer.AUTH_HEADER_CTX_KEY.get();
+                if (header == null || header.isEmpty()) {
+                    return null;
+                }
+                TokenWrapper tw = TokenWrapper.parse(header.replaceFirst("^Bearer ", ""));
+                Auth.recordVerifiedToken(tw);
+                return tw;
             }
         };
 
         server = NettyServerBuilder.forPort(0)
-                .addService(new RecordMap(
-                        // The hot tier's restore gate, open: this fixture has no cold
-                        // start to wait for. HotAgentEventE2ETest drives it closed.
-                        new StratumRecordMaps(() -> stores, () -> true), authorizer))
+                .addService(ServerInterceptors.intercept(
+                        new RecordMap(
+                                // The hot tier's restore gate, open: this fixture has no cold
+                                // start to wait for. HotAgentEventE2ETest drives it closed.
+                                new StratumRecordMaps(() -> stores, () -> true), authorizer),
+                        Authorizer.headerCaptureInterceptor()))
                 .build()
                 .start();
         channel = PullAgentEvent.channel("localhost:" + server.getPort(), true);
-        stub = PullAgentEvent.stub(channel, null);
+        stub = PullAgentEvent.stub(channel, token());
     }
 
     @AfterAll

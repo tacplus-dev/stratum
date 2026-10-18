@@ -1,7 +1,9 @@
 // Copyright (c) 2026 Seabeam LLC. All rights reserved.
 package com.gitlab.seabeam.controlplane.schematic.services.stratum;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -23,6 +25,7 @@ import com.hazelcast.map.IMap;
 
 import io.grpc.ManagedChannel;
 import io.grpc.Server;
+import io.grpc.ServerInterceptors;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotDataset;
@@ -30,6 +33,8 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotRedoLog
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotRestore;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotWrites;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.Codec;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.grpcserver.Authorizer;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.servicemanager.Auth;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.token.TokenWrapper;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.vservices.query.RecordMap;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.sys.errors.ProtoException;
@@ -66,6 +71,9 @@ class HotAgentEventE2ETest {
     private static final long EPOCH_1 = 1_700_000_000_000L;
     private static final long EPOCH_2 = 1_700_000_001_000L;
 
+    /** The one tenant every fixture row and the caller's token belong to. */
+    private static final String NAMESPACE = "/tenants/t1";
+
     private static HazelcastInstance hz;
     private static HotRedoLogs logs;
     private static StratumEventStores stores;
@@ -92,12 +100,27 @@ class HotAgentEventE2ETest {
                 .setSessionId("s1")
                 .setAgentId("ag1")
                 .setSpiffeId("spiffe://cav/tenants/t1/users/a")
+                .setNamespace(NAMESPACE)
                 .setTimestampMs(timestampMs)
                 .setStoreEpochMs(storeEpochMs)
                 .setEventType(SensorEventType.SENSOR_EVENT_TYPE_TOOL_USE)
                 .setSensorType(SensorType.SENSOR_TYPE_CLAUDE_CODE)
                 .setHookPhase(HookPhase.HOOK_PHASE_POST)
                 .build();
+    }
+
+    /**
+     * A token carrying {@link #NAMESPACE} as its namespace claim, in the shape
+     * {@code header.payload.signature} the chassis reads claims out of — what the
+     * shipped CLI sends as {@code --token}. Unsigned on purpose: the stub
+     * Authorizer below stands in for signature verification.
+     */
+    private static String token() {
+        Base64.Encoder b64 = Base64.getUrlEncoder().withoutPadding();
+        String header = b64.encodeToString("{\"alg\":\"none\"}".getBytes(StandardCharsets.UTF_8));
+        String payload = b64.encodeToString(("{\"namespace\":\"" + NAMESPACE + "\"}")
+                .getBytes(StandardCharsets.UTF_8));
+        return header + "." + payload + ".stub-signature";
     }
 
     @BeforeAll
@@ -122,19 +145,29 @@ class HotAgentEventE2ETest {
         assertEquals(2, stores.totalCount(),
                 "a fixture failed the generated AgentEvent validation and was dropped");
 
-        var authorizer = new com.gitlab.seabeam.controlplane.schematic.services.stratum
-                .model.chassis.grpcserver.Authorizer(sink -> { }) {
+        Authorizer authorizer = new Authorizer(sink -> { }) {
             @Override
             public TokenWrapper authorize(String fullMethod, Object request) throws ProtoException {
-                return null;
+                // Verifies nothing; records the call's bearer token into the slot the
+                // real Authorizer fills after it HAS verified one, so the plane sees
+                // the namespace claim a real caller presents.
+                String header = Authorizer.AUTH_HEADER_CTX_KEY.get();
+                if (header == null || header.isEmpty()) {
+                    return null;
+                }
+                TokenWrapper tw = TokenWrapper.parse(header.replaceFirst("^Bearer ", ""));
+                Auth.recordVerifiedToken(tw);
+                return tw;
             }
         };
         server = NettyServerBuilder.forPort(0)
-                .addService(new RecordMap(new StratumRecordMaps(() -> stores, hotReadable::get), authorizer))
+                .addService(ServerInterceptors.intercept(
+                        new RecordMap(new StratumRecordMaps(() -> stores, hotReadable::get), authorizer),
+                        Authorizer.headerCaptureInterceptor()))
                 .build()
                 .start();
         channel = PullAgentEvent.channel("localhost:" + server.getPort(), true);
-        stub = PullAgentEvent.stub(channel, null);
+        stub = PullAgentEvent.stub(channel, token());
     }
 
     @AfterAll
