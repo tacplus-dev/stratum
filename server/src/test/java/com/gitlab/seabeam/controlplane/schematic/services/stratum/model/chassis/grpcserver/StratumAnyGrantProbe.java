@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC. All rights reserved.
 //
 // D3 diagnostic — NOT a surefire test (no "Test" suffix, main-method only).
 // Run it by hand:

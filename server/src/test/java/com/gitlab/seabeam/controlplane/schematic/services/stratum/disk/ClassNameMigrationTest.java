@@ -1,4 +1,4 @@
-// Copyright (c) 2024 Second Star Cavalier, LLC.
+// Copyright (c) 2026 Seabeam LLC. All rights reserved.
 package com.gitlab.seabeam.controlplane.schematic.services.stratum.disk;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
