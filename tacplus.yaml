@@ -2,5 +2,7 @@ language: java
 pkg: com.gitlab.seabeam.controlplane.schematic.services.stratum
 output-dir: model/target/generated-sources
 src: https://gitlab.com/seabeam/schematic/platform/proto.git
+sources:
+  - archive-deps
 header: |
   Copyright (c) 2026 Seabeam LLC. All rights reserved.

@@ -1,0 +1,7 @@
+# Stratum-only tacplus source: merged into platform/proto's dependencies.yaml.
+# Pinning the GCS SDK makes tacplus emit the diskstore GcsArchiveSink for stratum
+# without forcing the jar onto other services generated from platform/proto.
+lang:
+    java:
+        dependencies:
+            com.google.cloud:google-cloud-storage: 2.75.0
