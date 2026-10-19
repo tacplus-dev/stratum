@@ -45,6 +45,7 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotDataset
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotRedoLogs;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotRestore;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotWrites;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.backoff.Backoff;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.ArchiveSink;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.Codec;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.GcsArchiveSink;
@@ -157,13 +158,14 @@ public class EventStore {
     /**
      * How long a cold start waits for its peers' redo replay before giving up.
      *
-     * <p>The SECOND of two sequential waits in {@link #init}, after
-     * {@link StratumMapConfig#FORMATION_TIMEOUT}, and deliberately still
-     * sequential: this barrier cannot begin before the cluster floor is met,
-     * because the replay it waits on opens split-brain-protected maps and needs
-     * that many live members to have filed reports. The combined worst case and
-     * why it does not cost the pod its listener are documented on
-     * {@code FORMATION_TIMEOUT}.
+     * <p>Runs after the writer-quorum wait ({@link StratumMapConfig#withWriterQuorum}),
+     * and deliberately sequential with it: this barrier cannot begin before the
+     * cluster floor is met, because the replay it waits on opens
+     * split-brain-protected maps and needs that many live members to have filed
+     * reports. A quorum lost while it runs restarts it with a fresh timeout once the
+     * quorum is back. None of this costs the pod its listener: the generated chassis
+     * binds its grpc.health.v1 listener in {@code ServiceManager.create()} and holds
+     * it at NOT_SERVING until bootstrap completes. See {@code StartupHealthGateTest}.
      */
     static final java.time.Duration RESTORE_TIMEOUT = java.time.Duration.ofMinutes(5);
 
@@ -266,17 +268,18 @@ public class EventStore {
         hz = Hazelcast.newHazelcastInstance(StratumMapConfig.build(
                 seedMembers, minDurableCopies, StratumMapConfig.configuredBackupCount(), role));
 
-        // Before ANY hot map is touched. newHazelcastInstance returns when this
-        // member is up, not when the cluster is assembled, so the first pod of the
-        // StatefulSet is briefly a cluster of one — and every line below opens a map
-        // whose split-brain protection refuses a proxy below the floor. Opening one
-        // there threw SplitBrainProtectionException straight out of init.
-        StratumMapConfig.awaitProtectedClusterSize(hz, minDurableCopies,
-                StratumMapConfig.FORMATION_TIMEOUT);
-
+        // Every protected-map step from here to the end of the restore runs under the
+        // writer quorum, and waits again if it is lost. newHazelcastInstance returns
+        // when this member is up, not when the cluster is assembled, so the first pod
+        // of the StatefulSet is briefly a cluster of one — and during a roll the peers
+        // restart underneath this one. Either way every map below refuses with
+        // SplitBrainProtectionException, which used to go straight out of init.
         hotWrites = new HotWrites(hz, floorOverride);
-        stores.init(hz, hotWrites);
-        events = hz.getMap(StratumMapConfig.MAP_NAME);
+        StratumMapConfig.withWriterQuorum(hz, "opening the hot maps", () -> {
+            stores.init(hz, hotWrites);
+            events = hz.getMap(StratumMapConfig.MAP_NAME);
+            return null;
+        }, Backoff.THREAD_SLEEPER);
 
         // The hot tier's redo logs, on THIS pod's volume — writers only. One per
         // replayable record type; with no record carrying (spec.store_epoch) the list
@@ -383,7 +386,11 @@ public class EventStore {
         // below — reporting nothing, waiting for the writers — because it is handed
         // partitions as soon as it joins.
         for (HotDataset d : role.isWriter() ? datasets : List.<HotDataset>of()) {
-            HotRestore.Result result = HotRestore.replay(hotLogs.log(d.mapName), d, hz.getMap(d.mapName));
+            // Re-runnable: the replay merges by epoch, so a record applied by an attempt
+            // the quorum interrupted is SKIPPED by the next one.
+            HotRestore.Result result = StratumMapConfig.withWriterQuorum(hz, "replaying " + d.mapName,
+                    () -> HotRestore.replay(hotLogs.log(d.mapName), d, hz.getMap(d.mapName)),
+                    Backoff.THREAD_SLEEPER);
             applied += result.applied;
             read += result.read;
             diverged.addAll(result.diverged);
@@ -405,7 +412,13 @@ public class EventStore {
         // not "what did this pod load" but "what does this volume hold durably", and
         // after a DailyCheckpoint cycle that is the dump, not the emptied redo tail.
         long checkpointRows = role.isWriter() ? checkpointRows() : 0L;
-        HotRestore.awaitClusterReplay(hz, read, checkpointRows, minDurableCopies, RESTORE_TIMEOUT);
+        // Re-runnable: the report and the in-flight mark are re-put under this
+        // member's UUID, which does not change while it lives.
+        int redoRecordsRead = read;
+        StratumMapConfig.withWriterQuorum(hz, "the hot-restore barrier",
+                () -> HotRestore.awaitClusterReplay(hz, redoRecordsRead, checkpointRows,
+                        minDurableCopies, RESTORE_TIMEOUT),
+                Backoff.THREAD_SLEEPER);
         // The SAME number, kept so it can be put back unchanged if the entry is ever
         // lost — read once above rather than twice, because a repair that filed a
         // different number from the report would be revising it. The barrier needs a
@@ -533,7 +546,14 @@ public class EventStore {
     // Stats
     // -----------------------------------------------------------------------
 
-    public long eventCount()    { return stores.totalCount(); }
+    /**
+     * Rows held cluster-wide. Read by StratumHandler's cold-boot decision, right after
+     * {@link #init}, so it waits out a lost writer quorum the way init does.
+     */
+    public long eventCount() {
+        return StratumMapConfig.withWriterQuorum(hz, "counting the store", stores::totalCount,
+                Backoff.THREAD_SLEEPER);
+    }
     public boolean isEmpty()    { return stores.totalCount() == 0; }
     public int  clusterSize()   { return hz.getCluster().getMembers().size(); }
     public long lastCheckpointMs() { return lastCheckpointMs.get(); }
@@ -633,7 +653,8 @@ public class EventStore {
      */
     private void loadCheckpoint() {
         try {
-            long held = stores.totalCount();
+            long held = StratumMapConfig.withWriterQuorum(hz, "counting the store for the checkpoint",
+                    stores::totalCount, Backoff.THREAD_SLEEPER);
             if (!ColdStartRebuilder.shouldReplay(held)) {
                 log.info("checkpoint: not a cold boot ({} row(s) held cluster-wide) — the peers"
                         + " hold the data, this pod's checkpoint is not loaded", held);
@@ -646,9 +667,15 @@ public class EventStore {
                         + " and the event log");
                 return;
             }
-            for (var row : rows) {
-                hz.<String, Message>getMap(row.mapName).putIfAbsent(row.key, row.value);
-            }
+            // The cold-boot decision above is taken once: re-taking it after an
+            // interrupted load would read this load's own rows as the peers' data.
+            // The load itself is re-runnable, being putIfAbsent.
+            StratumMapConfig.withWriterQuorum(hz, "loading the checkpoint", () -> {
+                for (var row : rows) {
+                    hz.<String, Message>getMap(row.mapName).putIfAbsent(row.key, row.value);
+                }
+                return null;
+            }, Backoff.THREAD_SLEEPER);
             log.info("checkpoint: {} row(s) loaded from {}", rows.size(), checkpoint.current());
         } catch (IOException e) {
             throw new IllegalStateException("checkpoint at " + dataRoot()

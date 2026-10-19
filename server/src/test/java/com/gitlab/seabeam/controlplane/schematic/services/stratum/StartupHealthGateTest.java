@@ -28,9 +28,9 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.se
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.sys.grpcconfig.Grpcconfig;
 
 /**
- * Stratum's startup runs two bounded barriers back to back inside
- * {@code EventStore.init} — the cluster-formation wait
- * ({@code StratumMapConfig.FORMATION_TIMEOUT}, 2 min) and this node's redo
+ * Stratum's startup runs two barriers back to back inside
+ * {@code EventStore.init} — the writer-quorum wait
+ * ({@code StratumMapConfig.withWriterQuorum}, unbounded) and this node's redo
  * replay plus peer catch-up ({@code EventStore.RESTORE_TIMEOUT}, 5 min) — so a
  * slow-but-healthy cold start can sit there for minutes before the handler
  * returns. A pod that answers nothing at all through that window looks

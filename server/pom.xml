@@ -162,6 +162,18 @@
 			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<version>3.6.0</version>
+				<configuration>
+					<!-- EventStore.init reads its volume from STRATUM_DATA_DIR (/app/data otherwise);
+					     StartupWriterQuorumTest drives the real init against it. -->
+					<environmentVariables>
+						<STRATUM_DATA_DIR>${project.build.directory}/stratum-test-data</STRATUM_DATA_DIR>
+					</environmentVariables>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-shade-plugin</artifactId>
 				<version>${shade-plugin.version}</version>
 				<executions>

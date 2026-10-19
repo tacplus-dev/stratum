@@ -65,7 +65,7 @@ members would have been acked with no durable copy at all.
 **Search members are a query-throughput knob, not a durability one.** The write gate
 counts writers (`HotWrites.durableCopies`), the split-brain minimum counts writers
 (`hazelcast/WriterCountProtection`), the cluster-formation wait counts writers
-(`StratumMapConfig.awaitProtectedClusterSize`) and the hot-restore barrier counts
+(`StratumMapConfig.withWriterQuorum`) and the hot-restore barrier counts
 writers (`HotRestore.awaitClusterReplay`). So one writer plus five search members with
 `min_durable_copies = 2` **refuses writes**, and scaling search members from 0 to 4
 and back changes nothing durable — it rebalances partitions and nothing else.

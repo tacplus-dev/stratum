@@ -4,6 +4,7 @@ package com.gitlab.seabeam.controlplane.schematic.services.stratum.hazelcast;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 import com.google.protobuf.Message;
 import com.hazelcast.config.Config;
@@ -16,6 +17,8 @@ import com.hazelcast.config.NetworkConfig;
 import com.hazelcast.config.SerializerConfig;
 import com.hazelcast.config.SplitBrainProtectionConfig;
 import com.hazelcast.core.HazelcastInstance;
+import com.hazelcast.splitbrainprotection.SplitBrainProtection;
+import com.hazelcast.splitbrainprotection.SplitBrainProtectionException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +26,7 @@ import org.slf4j.LoggerFactory;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.StratumEventStores;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.disk.RecordDiskLoader;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotRestore;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.backoff.Backoff;
 
 /**
  * StratumMapConfig builds the Hazelcast Config for the stratum hot event store.
@@ -294,89 +298,74 @@ public final class StratumMapConfig {
     }
 
     /**
-     * How long a starting member waits for the cluster to reach the declared floor
-     * before giving up, so a cluster that never forms fails loudly rather than
-     * looking like a hang.
-     *
-     * <p>It is NOT bounded inside a probe window on its own, and must not be read
-     * as if it were: {@link com.gitlab.seabeam.controlplane.schematic.services.stratum.EventStore#RESTORE_TIMEOUT}
-     * runs after it on the same thread, so a worst-case cold start spends 2 + 5
-     * minutes inside {@code EventStore.init} before the handler returns. The two
-     * cannot be overlapped — the redo barrier needs the cluster the first wait is
-     * waiting for, both to open a protected map and to have enough live members to
-     * file reports — so the combined wait is what a start has to survive. What lets
-     * it survive is that nothing about serving depends on this thread finishing
-     * promptly: the generated chassis binds its plaintext grpc.health.v1 listener
-     * in {@code ServiceManager.create()} and holds it at NOT_SERVING until
-     * bootstrap completes, which is after config delivery has run this wait, so a
-     * probe gets a connected "not ready" answer throughout rather than a refused
-     * connection. See {@code StartupHealthGateTest}.
-     */
-    public static final Duration FORMATION_TIMEOUT = Duration.ofMinutes(2);
-
-    /**
-     * Blocks until the cluster holds {@code minDurableCopies} WRITER members, which
-     * is the precondition for touching any map built by {@link #durableMap}.
+     * Runs {@code step} — anything that touches a map built by {@link #durableMap} —
+     * once the cluster holds the writer quorum, and again whenever the quorum is lost
+     * while it runs. The wait is unbounded and on the chassis reconnect schedule
+     * ({@link Backoff}: 0.5s doubling to 30s), with one log line per attempt.
      *
      * <p>{@link com.hazelcast.core.Hazelcast#newHazelcastInstance} returns as soon
      * as THIS member is up, not when the cluster is assembled, and the pods of a
      * StatefulSet do not start together — so the first pod up is a cluster of one.
      * Every hot map carries {@link #SPLIT_BRAIN_PROTECTION_NAME} with a minimum of
-     * the same floor, and Hazelcast enforces that on proxy CREATION, not only on
+     * the floor, and Hazelcast enforces that on proxy CREATION, not only on
      * writes: {@code hz.getMap(name)} below the floor throws
-     * {@code SplitBrainProtectionException} before a single record is read. The
-     * floor is a statement about the assembled cluster, so the assembly is waited
-     * for rather than the exception being caught — catching it would only move the
-     * same incomplete-cluster start one line later.
+     * {@code SplitBrainProtectionException} before a single record is read.
+     *
+     * <p>What is waited on is the protection's OWN state, not a count of the member
+     * list. The two disagree: a fresh member's protection starts out refusing and only
+     * takes the view into account on the next membership event or periodic scan,
+     * seconds later, so a count that says "enough writers" was followed by a
+     * {@code getMap} that threw.
+     *
+     * <p>And the quorum is not a one-time precondition. During a roll the peers that
+     * made it up restart while this member is still inside its own startup — the redo
+     * replay and the restore barrier run for minutes against protected maps — and
+     * every protected operation refuses from that moment. That is defect #14: a
+     * starting writer exited on exactly that refusal. Below the quorum this member
+     * cannot serve, but it is a state the cluster recovers from on its own, so it is
+     * waited out rather than turned into an exit; the health probe answers
+     * NOT_SERVING throughout (see {@code StartupHealthGateTest}). A deployment that
+     * really runs one instance declares {@code STRATUM_MIN_DURABLE_COPIES=1}.
+     *
+     * <p>{@code step} must therefore be safe to re-run from the start. Only the
+     * refusal is retried: every other failure is the step's own and is rethrown on the
+     * attempt that produced it.
      *
      * <p>WRITERS, because that is the population the protection counts
-     * ({@link WriterCountProtection}) and the population the restore barrier is
-     * decided on. A search member waits for the same thing and for the same reason:
-     * its maps carry the same protection, so it cannot open one until the writers
-     * are there either, and it has nothing to serve before them in any case.
+     * ({@link WriterCountProtection}). A search member waits for the same thing: its
+     * maps carry the same protection.
      *
-     * <p>Waiting is bounded and then fatal on purpose. With the floor unmet this
-     * member genuinely cannot serve: it may not take a write, and the redo barrier
-     * it would go on to run ({@code HotRestore.awaitClusterReplay}) cannot be
-     * satisfied by fewer writers either. A deployment that really runs one instance
-     * declares {@code STRATUM_MIN_DURABLE_COPIES=1} and never waits here.
-     *
-     * @throws IllegalStateException if the floor is not reached within {@code timeout}
+     * @param what the step, for the log line
+     * @throws IllegalStateException if the thread is interrupted while waiting
      */
-    public static void awaitProtectedClusterSize(HazelcastInstance hz, int minDurableCopies,
-                                                 Duration timeout) {
-        int writers = StratumRole.writerCount(hz);
-        if (writers >= minDurableCopies) {
-            return;
-        }
-        log.info("waiting for the cluster to reach min_durable_copies={} WRITER members before"
-                + " opening the hot maps (currently {} writer(s) of {} member(s)); every hot map's"
-                + " split-brain protection refuses a proxy below the floor",
-                minDurableCopies, writers, hz.getCluster().getMembers().size());
-
-        long deadlineMs = System.currentTimeMillis() + timeout.toMillis();
+    public static <T> T withWriterQuorum(HazelcastInstance hz, String what, Supplier<T> step,
+                                         Backoff.Sleeper sleeper) {
+        SplitBrainProtection protection =
+                hz.getSplitBrainProtectionService().getSplitBrainProtection(SPLIT_BRAIN_PROTECTION_NAME);
+        int minWriters = hz.getConfig().getSplitBrainProtectionConfig(SPLIT_BRAIN_PROTECTION_NAME)
+                .getMinimumClusterSize();
+        Duration delay = Backoff.RECONNECT_INITIAL_BACKOFF;
         while (true) {
-            writers = StratumRole.writerCount(hz);
-            if (writers >= minDurableCopies) {
-                log.info("cluster reached {} writer(s) of {} member(s) — opening the hot maps",
-                        writers, hz.getCluster().getMembers().size());
-                return;
+            String refused = "below the floor";
+            if (protection.hasMinimumSize()) {
+                try {
+                    return step.get();
+                } catch (SplitBrainProtectionException e) {
+                    refused = "refused mid-step: " + e.getMessage();
+                }
             }
-            if (System.currentTimeMillis() >= deadlineMs) {
-                throw new IllegalStateException("stratum: cluster reached only " + writers + " of the "
-                        + minDurableCopies + " WRITER members min_durable_copies declares, within "
-                        + timeout + " (cluster size " + hz.getCluster().getMembers().size()
-                        + "); every hot map refuses to open below that floor, so this member cannot"
-                        + " serve. Search members do not count — scale stratum_nodes, not"
-                        + " stratum_search_nodes. Set STRATUM_MIN_DURABLE_COPIES=1 for a"
-                        + " deliberately single-instance deployment.");
-            }
+            log.info("{}: waiting for {} WRITER members ({}; currently {} writer(s) of {} member(s));"
+                    + " retrying in {}ms. Search members do not count — scale stratum_nodes, not"
+                    + " stratum_search_nodes.",
+                    what, minWriters, refused, StratumRole.writerCount(hz),
+                    hz.getCluster().getMembers().size(), delay.toMillis());
             try {
-                Thread.sleep(100);
+                sleeper.sleep(delay);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new IllegalStateException("stratum: interrupted while awaiting cluster formation", e);
+                throw new IllegalStateException("stratum: interrupted while waiting for the writer quorum", e);
             }
+            delay = Backoff.nextReconnectBackoff(delay);
         }
     }
 
