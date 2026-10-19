@@ -29,6 +29,7 @@
 		<hazelcast.version>5.5.0</hazelcast.version>
 		<calcite.version>1.37.0</calcite.version>
 		<lucene.version>10.2.1</lucene.version>
+		<google-cloud-storage.version>2.75.0</google-cloud-storage.version>
 	</properties>
 	<repositories>
 		<repository>
@@ -140,6 +141,11 @@
 				<groupId>com.hazelcast</groupId>
 				<artifactId>hazelcast</artifactId>
 				<version>${hazelcast.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.google.cloud</groupId>
+				<artifactId>google-cloud-storage</artifactId>
+				<version>${google-cloud-storage.version}</version>
 			</dependency>
 			<dependency>
 				<groupId>org.apache.calcite</groupId>

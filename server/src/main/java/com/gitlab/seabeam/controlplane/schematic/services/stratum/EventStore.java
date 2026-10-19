@@ -4,6 +4,7 @@ package com.gitlab.seabeam.controlplane.schematic.services.stratum;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collection;
@@ -39,11 +40,16 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.disk.RecordDis
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hazelcast.StratumMapConfig;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hazelcast.StratumRole;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hazelcast.StratumEventTypeExtractor;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotArchive;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotDataset;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotRedoLogs;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotRestore;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotWrites;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.ArchiveSink;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.Codec;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.GcsArchiveSink;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.sys.diskstore.Diskstore.ArchiveConfig;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.sys.diskstore.Diskstore.DiskPersistenceConfig;
 
 /**
  * EventStore manages the Hazelcast IMap that backs stratum's hot event store.
@@ -133,6 +139,13 @@ public class EventStore {
     private Checkpoint checkpoint;
     private DailyCheckpoint dailyCheckpoint;
     private RecordDisk recordDisk;
+    /**
+     * {@code grpcconfig.disk_persistence}: the hot logs' roll interval and the
+     * archive they ship to ({@link HotArchive}). Init-time, like the rest of the
+     * bootstrap config.
+     */
+    private final DiskPersistenceConfig persistence;
+    private HotArchive hotArchive;
     private long deletedMaxAgeSeconds;
     /**
      * What this member is for. Set once at {@link #init} from {@link StratumRole#configured}
@@ -203,6 +216,15 @@ public class EventStore {
     // Init
     // -----------------------------------------------------------------------
 
+    /** A store whose hot logs stay on the volume: no archive, no scheduled roll. */
+    public EventStore() {
+        this(DiskPersistenceConfig.getDefaultInstance());
+    }
+
+    public EventStore(DiskPersistenceConfig persistence) {
+        this.persistence = persistence;
+    }
+
     /**
      * Initialises the Hazelcast member and the "events" IMap.
      *
@@ -261,8 +283,13 @@ public class EventStore {
         // is empty, the node opens no log, and the tier is exactly what it is today
         // plus the quorum gate.
         List<HotDataset> hotDatasets = StratumHotStores.datasets();
+        ArchiveConfig archive = HotArchive.configFor(role, persistence);
+        String archiveMember = archive == null ? null : HotArchive.member();
         if (role.isWriter()) {
             hotLogs = new HotRedoLogs(dataRoot(), hotDatasets, HOT_ARCHIVE_COUNT, Codec.NONE);
+            if (archive != null) {
+                openArchive(archive, archiveMember, hotDatasets);
+            }
 
             // BEFORE the redo replay, and that order is the cold start: the checkpoint
             // is the baseline, the redo logs hold only the tail that landed after it
@@ -278,13 +305,14 @@ public class EventStore {
         restoreHotTier(hotDatasets, minDurableCopies);
 
         if (role.isWriter()) {
+            // The union of this node's disk indexes and its resident memory.
+            // Memory alone is what made idle eviction destructive: an off-heap
+            // row was absent from the dump and its redo entries were truncated
+            // behind it. See DurableRows for why disk alone is not the answer
+            // either.
+            DurableRows durableRows = new DurableRows(hz, recordDisk, StratumEventStores.mapNames());
             this.dailyCheckpoint = new DailyCheckpoint(
-                    // The union of this node's disk indexes and its resident memory.
-                    // Memory alone is what made idle eviction destructive: an off-heap
-                    // row was absent from the dump and its redo entries were truncated
-                    // behind it. See DurableRows for why disk alone is not the answer
-                    // either.
-                    new DurableRows(hz, recordDisk, StratumEventStores.mapNames()),
+                    durableRows,
                     // And the same leg is what a purge has to remove from. Removing the
                     // row from memory alone would leave the index's copy for step 2's
                     // dump to write straight back into the next checkpoint.
@@ -292,6 +320,15 @@ public class EventStore {
                     new TombstoneLog(dataRoot()),
                     checkpoint,
                     hotLogs::truncateToCheckpoint);
+
+            // Only now that the hot tier is restored: every roll and checkpoint
+            // snapshots the store, and one taken while it was still filling would
+            // fold a partial baseline into the log.
+            if (archive != null) {
+                hotArchive = new HotArchive(hotDatasets, hotLogs, durableRows, archiveMember,
+                        Duration.ofSeconds(persistence.getRollIntervalSeconds()),
+                        Duration.ofSeconds(archive.getCheckpointIntervalSeconds()));
+            }
 
             // Per writer, not leader-gated: the transaction writes this pod's own
             // volume and truncates this pod's own redo logs, so one pod running it for
@@ -555,6 +592,30 @@ public class EventStore {
     }
 
     /**
+     * Restores this writer's hot logs from the archive when {@link HotArchive#RESTORE_ENV}
+     * names a member, then attaches the shippers — both before the redo replay, so
+     * the restored records replay like any others and the first roll already ships.
+     */
+    private void openArchive(ArchiveConfig archive, String member, List<HotDataset> datasets) {
+        if (archive.getGcsBucket().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "grpcconfig.disk_persistence.archive.gcs_bucket is required when the archive is set");
+        }
+        ArchiveSink sink = new GcsArchiveSink(archive.getGcsBucket());
+        String restoreFrom = System.getenv(HotArchive.RESTORE_ENV);
+        if (restoreFrom != null && !restoreFrom.isBlank()) {
+            try {
+                HotArchive.restore(sink, archive.getPrefix(), restoreFrom.trim(), datasets, hotLogs);
+            } catch (IOException e) {
+                throw new IllegalStateException("archive restore from " + restoreFrom.trim()
+                        + " failed; refusing to start on a partial restore", e);
+            }
+        }
+        HotArchive.attach(sink, archive.getPrefix(), member,
+                Codec.fromProtoInt(persistence.getCompressionValue()), datasets, hotLogs);
+    }
+
+    /**
      * Loads this pod's newest complete checkpoint into the maps, on a cold boot only.
      *
      * <p>The gate is {@code ColdStartRebuilder.shouldReplay} — the same
@@ -614,6 +675,7 @@ public class EventStore {
 
     public void shutdown() {
         cleaner.shutdownNow();
+        if (hotArchive != null) hotArchive.close();
         if (hotLogs != null) hotLogs.close();
         if (hz != null) hz.shutdown();
         // After the member, so nothing can still be queueing writes into an index

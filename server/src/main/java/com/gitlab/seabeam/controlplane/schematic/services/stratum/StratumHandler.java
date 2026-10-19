@@ -301,7 +301,7 @@ public class StratumHandler extends StratumVServiceBase {
      * demand; standing a real Hazelcast member up cannot do either.
      */
     EventStore newEventStore() {
-        return new EventStore();
+        return new EventStore(sm.getConfig().getDiskPersistence());
     }
 
     /**
