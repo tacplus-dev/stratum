@@ -133,7 +133,7 @@ class HotRedoRestoreTest {
         // The append is queued, not written, by the time the write returns — see
         // theAckDoesNotWaitOnTheDiskAppend for that being the point rather than a
         // concession. This asserts WHAT is appended, so it waits for the writer.
-        logs.awaitAppends(5_000);
+        awaitAppended(1);
 
         String log = Files.readString(logs.log(MAP).activePath());
         assertTrue(log.contains("\"key\":\"evt-1\""), log);
@@ -180,7 +180,7 @@ class HotRedoRestoreTest {
                 "the write took " + elapsedMs + "ms with a parked writer; it is waiting on something");
 
         release.countDown();
-        logs.awaitAppends(5_000);
+        awaitAppended(1);
         assertTrue(logContents(logs).contains("evt-1"),
                 "the queued append must still land once the writer is released");
         assertEquals(1, logs.appendedCount());
@@ -565,6 +565,19 @@ class HotRedoRestoreTest {
             Thread.sleep(100);
         }
         assertEquals(2, hz.getCluster().getMembers().size(), "the two members did not form one cluster");
+    }
+
+    /**
+     * Waits until {@code n} appends have reached this node's log. The persist task
+     * is itself queued on a Hazelcast executor before it queues the append, so
+     * draining the append thread alone can run ahead of it.
+     */
+    private void awaitAppended(long n) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 5_000;
+        while (logs.appendedCount() < n && System.currentTimeMillis() < deadline) {
+            logs.awaitAppends(100);
+        }
+        logs.awaitAppends(5_000);
     }
 
     /** The active log's bytes, or "" before the first append has created it. */
