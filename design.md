@@ -115,3 +115,12 @@ The pre-cutover version of this document described a retired storage-tier
 architecture and no longer reflected the system. This stub is intentionally
 minimal and truthful; the P3 stratum pass (StratumQuery implementation) should
 expand it with the storage-tier design it actually builds.
+
+## Notes from huddles
+
+- **2026-10-21 (identity graph huddle, `roadmap/identity-graph-huddle-2026-10-21.md`):** the
+  identity graph (XIDs, TIDs, login mappings, tenant names) needs a **domain-level Stratum above
+  the clusters**. Kernel state is the non-durable working copy; Stratum is the durable, atomic
+  record, and every write carrying a uniqueness invariant (mint an id, bind a mapping key or an
+  issuer, claim a name) lands in Stratum first. That domain-level instance is **not yet in the
+  quorum equation**. Separate huddle once the identity topic is thought out.
