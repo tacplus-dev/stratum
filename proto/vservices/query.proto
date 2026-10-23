@@ -1,0 +1,76 @@
+// The `query` trait — refinable, typed queries over immutable records.
+//
+// This file is INFRASTRUCTURE, not product design. The platform requires it:
+// accountingrecord.AccountingRecord and agentsensor.AgentSessionState both
+// declare (spec.record) with residency/mutability, and tacplus refuses to
+// generate a fleet in which a record declares those but "no (spec.trait) hosts
+// a record query plane, so nothing would read it". Deleting this file does not
+// simplify scotty; it stops the build.
+//
+// It is a near-copy of schematic/testapp/proto/vservices/query.proto, which is
+// the platform's own reference declaration of this trait. The differences are
+// stated below; everything else is deliberately identical, because a trait is a
+// CONTRACT and two consumers spelling one contract differently is drift.
+//
+// A trait names the RPC surface and the entitlement key, and names the physical
+// service that implements it. Callers authenticate against the TRAIT
+// (aud=query) and are entitled against the trait's own grants; the host is only
+// whom the gateway dials.
+//
+// The plane covers EVERY (spec.record) message in the fleet, not a list kept
+// here — so scotty.ScottyActivity joins the query surface by generation rather
+// than by hand. That is what makes §4's neutral auditor possible at all: it
+// reads the artifact plane through a surface Scotty did not write.
+//
+// CAVEAT, worth knowing before anyone merges three proto sources: testapp
+// declares this same trait under this same name. A build of
+// `--src platform --src testapp --src scotty` would carry two `query`
+// traits and is expected to fail. scotty/build.sh does not do that — it
+// merges platform + scotty only — but deploying scotty ALONGSIDE the
+// testapp fleet on one cluster would, and that is a real sequencing question,
+// not a detail. See
+// loopers/schematic/decisions/journeyman-deploy-alongside-testapp-open.md.
+
+syntax = "proto3";
+
+package query;
+
+import "sys/spec.proto";
+
+option (spec.trait) = {
+  // name is the audience callers authenticate against and the entitlement key
+  // their grants are issued under.
+  name: "query"
+
+  // host is the routing label of the physical implementor. stratum declares
+  // (spec.record_store), which is what makes this trait's plane the RECORD
+  // query plane rather than some other trait's surface.
+  host: "stratum"
+
+  s2s_service: "RecordMap"
+
+  // auth_services is the peer audience for the S2S half, and the generator
+  // REQUIRES one: an empty list fails with "the s2s half would be callable by
+  // nobody".
+  //
+  // It named `argus` until 2026-09-01 as an admitted placeholder for §4's
+  // neutral auditor. That placeholder is now resolved by deletion, not by
+  // naming: BIG GOAL 8 phase 2 item 9 deleted argus from the platform outright
+  // (proto, service, web client), so the name pointed at nothing at all.
+  //
+  // It now names `stratum`, the host itself, which is a DELIBERATELY CLOSED
+  // DOOR and not a new peer grant: the plane's s2s half has no authorized
+  // caller other than the record store that implements it. No service is
+  // widened by this edit — the surface was already dead, authorized to a
+  // service that had left the fleet on 2026-08-20 — and no auditor identity is
+  // invented. §4's constraint still holds and still forbids naming `scotty`
+  // here.
+  //
+  // The door reopens when the per-service own-record read/write client lands
+  // (loopers/schematic/decisions/big8-p1-own-record-read-write-mechanism-scoped-
+  // 2026-09-01.md), which is also what has to exist before this whole file can
+  // be deleted per phase 2 item 10 — see
+  // loopers/schematic/workers/big8-p2-argus-cleanup-result.md for the generation
+  // proof that deleting it today hard-fails tacplus VAL-6.
+  auth_services: ["stratum"]
+};

@@ -1,0 +1,103 @@
+// Stratum — hot event store and S2S data master.
+//
+// Stratum is the canonical source of truth for all SensorEvents.
+// It subscribes to EventBus and persists every SensorEvent into a
+// Hazelcast IMap<event_id, SensorEvent> hot store with Apache Calcite
+// SQL indexes. There is no cold storage — all data is hot.
+//
+// The agentsensor vservice (vservices/sensor-query.proto) defines the
+// S2S gRPC surface that Stratum implements:
+//   - StratumQuery: working-set maps, operator queries, live-session streaming
+//
+// TimeDB and Dgraph hold lightweight projections of Stratum data,
+// linked by the same event_id / session_id / agent_id keys.
+// Stratum federates into them for aggregation and graph traversal queries.
+//
+syntax = "proto3";
+
+package stratum;
+
+import "sys/spec.proto";
+import "sys/healthreport.proto";
+
+option (spec.service) = {};
+option (spec.int_const) = {name: "DEFAULT_PORT", value: 8443};
+
+// Stratum used to declare s2s clients against agentsensor.TimedbQuery and
+// agentsensor.GraphdbQuery to federate projection queries into timedb and
+// graphdb. Both went to the boneyard 2026-08-25 (BIG GOAL 3, first move #1) and
+// the federation model was already superseded by the 2026-08-23 "client calls,
+// NOT federation" ruling. Stratum now reaches no other store.
+
+// Stratum subscribes to EventBus and ingests SensorEvents into the hot store.
+option (spec.record_store) = {};
+
+// ============================================================================
+// Config
+// ============================================================================
+
+message Config {
+  option (spec.grpc_config) = {service_name: "stratum"};
+
+  // hazelcast_memory_mb is the Hazelcast cluster memory limit in MB. Default: 2048.
+  int32 hazelcast_memory_mb = 1 [(spec.default_int) = 2048, (spec.assert_ge) = 256];
+
+  // map_idle_ttl_seconds evicts idle working-set maps. Default: 7200 (2h).
+  int32 map_idle_ttl_seconds = 2 [(spec.default_int) = 7200, (spec.assert_ge) = 60];
+
+  // max_maps limits concurrent working-set maps. Default: 20.
+  int32 max_maps = 4 [(spec.default_int) = 20, (spec.assert_ge) = 1];
+
+  // retention_days is the number of days to retain hot events. Default: 90.
+  int32 retention_days = 5 [(spec.default_int) = 90, (spec.assert_ge) = 1];
+
+  // cleanup_interval_seconds is how often the retention cleanup job runs. Default: 3600.
+  int64 cleanup_interval_seconds = 6 [(spec.default_int) = 3600, (spec.assert_ge) = 60];
+
+  // active_session_idle_seconds is the idle threshold for ListActiveSessions.
+  // A session is considered active if its last event was within this window.
+  // Default: 900 (15 min). Min: 30.
+  int32 active_session_idle_seconds = 7 [(spec.default_int) = 900, (spec.assert_ge) = 30];
+
+  // warm_window_seconds is the memory-residency window for warm-tiered records:
+  // rows younger than this are served from memory, rows older than it are served
+  // from the on-disk warm tier. It is the default applied to a record type that
+  // declares the warm residency preset without a window_seconds of its own.
+  //
+  // It must be SHORTER than retention_days or the disk tier is never reached:
+  // retention deletes a row before it is ever old enough to age out of memory,
+  // and the "still queryable, only slower" promise the disk tier exists to keep
+  // never applies to anything. Default: 604800 (7 days), which leaves rows aged
+  // 7-90 days served from disk under the 90-day retention default. Min: 60.
+  int64 warm_window_seconds = 8 [(spec.default_int) = 604800, (spec.assert_ge) = 60];
+}
+
+// ============================================================================
+// State
+// ============================================================================
+
+message StratumState {
+  option (spec.service_state) = {label: ["kernel"], auto_tls: TLS_KEY_TYPE_ED25519};
+}
+
+// ============================================================================
+// Typed Health
+// ============================================================================
+
+message StratumServiceHealth {
+  option (spec.service_health) = {};
+
+  // Required: base health for gateway routing.
+  healthreport.ServiceInstanceHealth base = 1;
+
+  // Timestamp of this snapshot.
+  int64 timestamp_ms = 2;
+
+  // Hot event store stats.
+  int64 event_count                  = 3;
+  int64 hazelcast_memory_used_bytes  = 4;
+  int64 hazelcast_memory_total_bytes = 5;
+
+  // Working-set maps in use.
+  int32 active_maps = 6;
+}
