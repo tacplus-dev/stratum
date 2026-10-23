@@ -1,4 +1,13 @@
 # Managed by tacplus — do not edit IDs manually.
 registries:
     - https://github.com/tacplus-dev/registry.git
-services: []
+services:
+    - name: stratum
+      id: 34
+      contract: https://github.com/tacplus-dev/stratum.git
+      visibility: private
+vservices:
+    - name: query
+      field_id: 71
+      contract: https://github.com/tacplus-dev/stratum.git
+      visibility: private
