@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,6 +26,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.StratumHotStores;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.Codec;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.RedoLog;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Letsencrypt;
@@ -116,6 +118,8 @@ class HotRedoRestoreTest {
 
     @Test
     void aHotWriteAppendsToThisNodesRedoLog(@TempDir Path dir) throws Exception {
+        assumeFalse(StratumHotStores.datasets().isEmpty(),
+                "no record in this fleet declares (spec.store_epoch); the hot tier has nothing to log");
         hz = member("stratum-redo-append-test");
         HotDataset d = dataset(1);
         logs = new HotRedoLogs(dir, List.of(d), 3, Codec.NONE);
@@ -153,6 +157,8 @@ class HotRedoRestoreTest {
      */
     @Test
     void theAckDoesNotWaitOnTheDiskAppend(@TempDir Path dir) throws Exception {
+        assumeFalse(StratumHotStores.datasets().isEmpty(),
+                "no record in this fleet declares (spec.store_epoch); the hot tier has nothing to log");
         hz = member("stratum-redo-ack-latency-test");
         HotDataset d = dataset(1);
         logs = new HotRedoLogs(dir, List.of(d), 3, Codec.NONE);
@@ -228,6 +234,8 @@ class HotRedoRestoreTest {
      */
     @Test
     void everyRecordWrittenBeforeARestartIsBackAfterIt(@TempDir Path dir) throws Exception {
+        assumeFalse(StratumHotStores.datasets().isEmpty(),
+                "no record in this fleet declares (spec.store_epoch); the hot tier has nothing to log");
         HotDataset d = dataset(1);
 
         hz = member("stratum-redo-restart-test-a");

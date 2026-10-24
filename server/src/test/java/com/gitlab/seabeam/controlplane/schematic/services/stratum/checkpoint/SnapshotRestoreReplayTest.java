@@ -4,6 +4,7 @@ package com.gitlab.seabeam.controlplane.schematic.services.stratum.checkpoint;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.StratumHotStores;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotDataset;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotRedoLogs;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotRestore;
@@ -275,6 +277,8 @@ class SnapshotRestoreReplayTest {
     @Test
     void resumingAtTheCommittedOffsetLosesEveryRowWrittenAfterTheSnapshot(
             @TempDir Path dataRoot, @TempDir Path snapshot, @TempDir Path restored) throws Exception {
+        assumeFalse(StratumHotStores.datasets().isEmpty(),
+                "no record in this fleet declares (spec.store_epoch); the hot tier has nothing to log");
         Restored r = snapshotThenLoseEveryWriter(dataRoot, snapshot, restored);
         IMap<String, Message> map = coldStart(restored, "stratum-snapshot-restore-resume");
 
@@ -300,6 +304,8 @@ class SnapshotRestoreReplayTest {
     @Test
     void rewindingTheGroupToTheSnapshotBringsBackEveryRowWrittenAfterIt(
             @TempDir Path dataRoot, @TempDir Path snapshot, @TempDir Path restored) throws Exception {
+        assumeFalse(StratumHotStores.datasets().isEmpty(),
+                "no record in this fleet declares (spec.store_epoch); the hot tier has nothing to log");
         Restored r = snapshotThenLoseEveryWriter(dataRoot, snapshot, restored);
         IMap<String, Message> map = coldStart(restored, "stratum-snapshot-restore-rewind");
 

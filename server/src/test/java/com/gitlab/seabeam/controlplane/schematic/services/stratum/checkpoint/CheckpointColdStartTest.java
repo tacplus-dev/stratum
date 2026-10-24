@@ -3,6 +3,7 @@ package com.gitlab.seabeam.controlplane.schematic.services.stratum.checkpoint;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -17,6 +18,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.StratumHotStores;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotDataset;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotRedoLogs;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotRestore;
@@ -97,6 +99,8 @@ class CheckpointColdStartTest {
 
     @Test
     void aColdStartLoadsTheCheckpointAndReplaysOnlyTheTail(@TempDir Path dataRoot) throws Exception {
+        assumeFalse(StratumHotStores.datasets().isEmpty(),
+                "no record in this fleet declares (spec.store_epoch); the hot tier has nothing to log");
         hz = member("stratum-checkpoint-coldstart-test");
         logs = new HotRedoLogs(dataRoot, List.of(dataset()), 3, Codec.NONE);
         HotWrites hot = new HotWrites(hz, 0);

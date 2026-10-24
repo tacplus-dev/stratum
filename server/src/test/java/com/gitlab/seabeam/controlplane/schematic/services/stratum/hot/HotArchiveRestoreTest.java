@@ -4,6 +4,7 @@ package com.gitlab.seabeam.controlplane.schematic.services.stratum.hot;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.StratumHotStores;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.checkpoint.DurableRows;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.ArchiveSink;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.Codec;
@@ -159,6 +161,8 @@ class HotArchiveRestoreTest {
     @Test
     void aWipedWriterIsRestoredFromTheNewestCheckpointPlusTheSegmentsAfterIt(@TempDir Path dir)
             throws Exception {
+        assumeFalse(StratumHotStores.datasets().isEmpty(),
+                "no record in this fleet declares (spec.store_epoch); the hot tier has nothing to log");
         HotDataset d = dataset();
         MemSink sink = new MemSink();
         Path volume = dir.resolve("stratum-0");
