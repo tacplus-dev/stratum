@@ -24,7 +24,7 @@ COPY --from=setup --chown=65532:65532 /var/lib/stratum /var/lib/stratum
 COPY server/target/stratum.jar /app/stratum.jar
 
 ARG TARGETARCH
-COPY launcher-linux-${TARGETARCH} /usr/local/bin/stratum
+COPY launcher-linux-${TARGETARCH} /usr/local/bin/launcher
 
 USER nonroot
 
@@ -35,4 +35,4 @@ ENV HEALTH_PORT=8443
 # Hazelcast Hot Restart persistence directory for the scratchpad map.
 VOLUME /var/lib/stratum/persistence
 
-ENTRYPOINT ["stratum"]
+ENTRYPOINT ["launcher"]
