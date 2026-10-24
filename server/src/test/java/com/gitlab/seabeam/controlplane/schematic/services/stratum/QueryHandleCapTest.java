@@ -41,8 +41,8 @@ class QueryHandleCapTest {
     }
 
     private static String open(StratumRecordMaps plane, Caller c) throws ProtoException {
-        Query.QueryHandle h = plane.createAgentEventQuery(c,
-                Query.OpenAgentEventQueryRequest.getDefaultInstance());
+        Query.QueryHandle h = plane.createLetsEncryptCertQuery(c,
+                Query.OpenLetsEncryptCertQueryRequest.getDefaultInstance());
         assertNotNull(h);
         return h.getQueryId();
     }
@@ -74,7 +74,7 @@ class QueryHandleCapTest {
         }
         assertThrows(ProtoException.class, () -> open(plane, a));
 
-        plane.deleteAgentEventQuery(a, Query.QueryHandle.newBuilder().setQueryId(first).build());
+        plane.deleteLetsEncryptCertQuery(a, Query.QueryHandle.newBuilder().setQueryId(first).build());
         assertNotNull(open(plane, a), "a closed handle must give its slot back");
     }
 

@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.s2sm.Handler;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Letsencrypt;
 
 /**
  * The cold-start rebuild has to STOP once it has caught up.
@@ -31,7 +31,7 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vs
  */
 class ColdStartRebuildStopsAtCatchUpTest {
 
-    private static final String TOPIC = "agentsensor.event_stream";
+    private static final String TOPIC = "letsencrypt.LetsEncryptCertBus.stream";
 
     /**
      * The real handler with its one ingest method recorded instead of stored — so
@@ -57,7 +57,7 @@ class ColdStartRebuildStopsAtCatchUpTest {
 
     private static void deliver(ColdStartRebuilder rebuilder, Handler handler, long offset,
             Runnable onCaughtUp) throws Exception {
-        rebuilder.replayRecord(TOPIC, handler, Agentsensor.AgentEvent.getDefaultInstance(),
+        rebuilder.replayRecord(TOPIC, handler, Letsencrypt.LetsEncryptCert.getDefaultInstance(),
                 meta(offset), onCaughtUp);
     }
 

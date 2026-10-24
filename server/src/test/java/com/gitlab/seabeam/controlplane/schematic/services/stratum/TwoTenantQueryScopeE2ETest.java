@@ -21,11 +21,15 @@ import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
 
 import io.grpc.ManagedChannel;
+import io.grpc.Metadata;
 import io.grpc.Server;
 import io.grpc.ServerInterceptors;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
+import io.grpc.netty.shaded.io.grpc.netty.NegotiationType;
+import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
+import io.grpc.stub.MetadataUtils;
 
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotWrites;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.grpcserver.Authorizer;
@@ -33,10 +37,8 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.token.TokenWrapper;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.s2sm.internal.grpc.servers.vservices.query.RecordMap;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.sys.errors.ProtoException;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor.AgentEvent;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor.HookPhase;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor.SensorEventType;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor.SensorType;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Letsencrypt.CertMagicState;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Letsencrypt.LetsEncryptCert;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.query.Query;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.query.RecordMapGrpc;
 
@@ -102,19 +104,29 @@ class TwoTenantQueryScopeE2ETest {
         return header + "." + payload + ".stub-signature";
     }
 
-    private static AgentEvent event(String eventId, String namespace, long timestampMs) {
-        return AgentEvent.newBuilder()
-                .setEventId(eventId)
-                .setSessionId("s1")
-                .setAgentId("ag1")
-                .setSpiffeId("spiffe://cav" + namespace + "/users/a")
+    /**
+     * A row that passes the generated LetsEncryptCert validation: cert_set_id,
+     * certmagic_state and hostnames are required.
+     */
+    private static LetsEncryptCert cert(String certSetId, String namespace, long expiresAt) {
+        return LetsEncryptCert.newBuilder()
+                .setCertSetId(certSetId)
+                .setCertmagicState(CertMagicState.getDefaultInstance())
+                .addHostnames("cav" + namespace.replace('/', '.') + ".example")
+                .setExpiresAt(expiresAt)
+                .setSpiffeId("spiffe://cav" + namespace + "/services/letsencrypt")
                 .setNamespace(namespace)
-                .setTimestampMs(timestampMs)
-                .setStoreEpochMs(1_700_000_000_000L)
-                .setEventType(SensorEventType.SENSOR_EVENT_TYPE_TOOL_USE)
-                .setSensorType(SensorType.SENSOR_TYPE_CLAUDE_CODE)
-                .setHookPhase(HookPhase.HOOK_PHASE_POST)
                 .build();
+    }
+
+    private static RecordMapGrpc.RecordMapBlockingStub stub(ManagedChannel ch, String token) {
+        RecordMapGrpc.RecordMapBlockingStub s = RecordMapGrpc.newBlockingStub(ch);
+        if (token == null) {
+            return s;
+        }
+        Metadata md = new Metadata();
+        md.put(Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER), "Bearer " + token);
+        return s.withInterceptors(MetadataUtils.newAttachHeadersInterceptor(md));
     }
 
     @BeforeAll
@@ -129,13 +141,13 @@ class TwoTenantQueryScopeE2ETest {
 
         stores = new StratumEventStores();
         stores.init(hz, new HotWrites(hz, 1));
-        stores.store(event("a-1", TENANT_A, 1000));
-        stores.store(event("a-2", TENANT_A, 2000));
-        stores.store(event("b-1", TENANT_B, 3000));
-        stores.store(event("b-2", TENANT_B, 4000));
-        stores.store(event("b-3", TENANT_B, 5000));
+        stores.store(cert("a-1", TENANT_A, 1000));
+        stores.store(cert("a-2", TENANT_A, 2000));
+        stores.store(cert("b-1", TENANT_B, 3000));
+        stores.store(cert("b-2", TENANT_B, 4000));
+        stores.store(cert("b-3", TENANT_B, 5000));
         assertEquals(5, stores.totalCount(),
-                "a fixture failed the generated AgentEvent validation and was dropped");
+                "a fixture failed the generated LetsEncryptCert validation and was dropped");
 
         // Verifies nothing; records whatever bearer token the call carried into the
         // slot the real Authorizer fills after it HAS verified one. A call with no
@@ -160,11 +172,12 @@ class TwoTenantQueryScopeE2ETest {
                         Authorizer.headerCaptureInterceptor()))
                 .build()
                 .start();
-        channel = PullAgentEvent.channel("localhost:" + server.getPort(), true);
-        tenantA = PullAgentEvent.stub(channel, token(TENANT_A));
-        tenantB = PullAgentEvent.stub(channel, token(TENANT_B));
-        system = PullAgentEvent.stub(channel, token(SYSTEM));
-        anonymous = PullAgentEvent.stub(channel, null);
+        channel = NettyChannelBuilder.forTarget("localhost:" + server.getPort())
+                .negotiationType(NegotiationType.PLAINTEXT).build();
+        tenantA = stub(channel, token(TENANT_A));
+        tenantB = stub(channel, token(TENANT_B));
+        system = stub(channel, token(SYSTEM));
+        anonymous = stub(channel, null);
     }
 
     @AfterAll
@@ -182,19 +195,19 @@ class TwoTenantQueryScopeE2ETest {
 
     /** The broadest query a caller can ask for: no criterion at all. */
     private static Query.QueryHandle openMatchAll(RecordMapGrpc.RecordMapBlockingStub stub) {
-        return stub.createAgentEventQuery(Query.OpenAgentEventQueryRequest.newBuilder()
-                .setFilter(Query.AgentEventFilter.newBuilder().build())
+        return stub.createLetsEncryptCertQuery(Query.OpenLetsEncryptCertQueryRequest.newBuilder()
+                .setFilter(Query.LetsEncryptCertFilter.newBuilder().build())
                 .setStanding(false)
                 .build());
     }
 
-    private static Query.SampleAgentEventRequest sample(Query.QueryHandle h) {
-        return Query.SampleAgentEventRequest.newBuilder()
+    private static Query.SampleLetsEncryptCertRequest sample(Query.QueryHandle h) {
+        return Query.SampleLetsEncryptCertRequest.newBuilder()
                 .setQueryId(h.getQueryId()).setSeed(1).setN(100).build();
     }
 
-    private static Query.PullAgentEventRequest pull(Query.QueryHandle h) {
-        return Query.PullAgentEventRequest.newBuilder()
+    private static Query.PullLetsEncryptCertRequest pull(Query.QueryHandle h) {
+        return Query.PullLetsEncryptCertRequest.newBuilder()
                 .setQueryId(h.getQueryId()).setPageSize(100).build();
     }
 
@@ -211,43 +224,43 @@ class TwoTenantQueryScopeE2ETest {
      */
     @Test
     void listOverAMatchAllQueryReturnsOnlyTheOpeningTenantsRows() {
-        Query.PullAgentEventResponse page = tenantA.listAgentEvent(pull(openMatchAll(tenantA)));
+        Query.PullLetsEncryptCertResponse page = tenantA.listLetsEncryptCert(pull(openMatchAll(tenantA)));
 
         assertEquals(2, page.getItemsCount(), "tenant A sees exactly its own two rows");
-        for (AgentEvent row : page.getItemsList()) {
+        for (LetsEncryptCert row : page.getItemsList()) {
             assertEquals(TENANT_A, row.getNamespace(),
-                    "a row from another tenant reached the page: " + row.getEventId());
+                    "a row from another tenant reached the page: " + row.getCertSetId());
         }
     }
 
     /** The same, through the sample path, which pages off its own scan. */
     @Test
     void sampleOverAMatchAllQueryReturnsOnlyTheOpeningTenantsRows() {
-        Query.SampleAgentEventResponse s = tenantA.getAgentEventSample(sample(openMatchAll(tenantA)));
+        Query.SampleLetsEncryptCertResponse s = tenantA.getLetsEncryptCertSample(sample(openMatchAll(tenantA)));
 
         assertEquals(2, s.getItemsCount(), "tenant A samples exactly its own two rows");
-        for (AgentEvent row : s.getItemsList()) {
+        for (LetsEncryptCert row : s.getItemsList()) {
             assertEquals(TENANT_A, row.getNamespace(),
-                    "a row from another tenant reached the sample: " + row.getEventId());
+                    "a row from another tenant reached the sample: " + row.getCertSetId());
         }
     }
 
     /** The same, through the watch snapshot. */
     @Test
     void watchOverAMatchAllQueryReturnsOnlyTheOpeningTenantsRows() {
-        java.util.Iterator<Query.AgentEventWatchEvent> events =
-                tenantA.watchAgentEvent(openMatchAll(tenantA));
+        java.util.Iterator<Query.LetsEncryptCertWatchEvent> events =
+                tenantA.watchLetsEncryptCert(openMatchAll(tenantA));
 
         int rows = 0;
         while (events.hasNext()) {
-            Query.AgentEventWatchEvent e = events.next();
+            Query.LetsEncryptCertWatchEvent e = events.next();
             if (!e.hasSnapshotItem()) {
                 continue;
             }
             rows++;
             assertEquals(TENANT_A, e.getSnapshotItem().getNamespace(),
                     "a row from another tenant reached the watch snapshot: "
-                            + e.getSnapshotItem().getEventId());
+                            + e.getSnapshotItem().getCertSetId());
         }
         assertEquals(2, rows, "tenant A watches exactly its own two rows");
     }
@@ -258,7 +271,7 @@ class TwoTenantQueryScopeE2ETest {
      */
     @Test
     void countOverAMatchAllQueryCountsOnlyTheOpeningTenantsRows() {
-        assertEquals(2, tenantA.getAgentEventCount(openMatchAll(tenantA)).getCount(),
+        assertEquals(2, tenantA.getLetsEncryptCertCount(openMatchAll(tenantA)).getCount(),
                 "the count leaked rows the caller may not see");
     }
 
@@ -266,7 +279,7 @@ class TwoTenantQueryScopeE2ETest {
     @Test
     void subscribeCountOverAMatchAllQueryCountsOnlyTheOpeningTenantsRows() {
         java.util.Iterator<Query.RecordCount> counts =
-                tenantA.subscribeAgentEventCount(openMatchAll(tenantA));
+                tenantA.subscribeLetsEncryptCertCount(openMatchAll(tenantA));
 
         assertTrue(counts.hasNext(), "the subscription produced no count at all");
         assertEquals(2, counts.next().getCount(), "the subscribed count leaked rows");
@@ -278,15 +291,15 @@ class TwoTenantQueryScopeE2ETest {
      */
     @Test
     void refiningAQueryBackToMatchAllReportsOnlyTheOpeningTenantsSize() {
-        Query.QueryHandle h = tenantA.createAgentEventQuery(
-                Query.OpenAgentEventQueryRequest.newBuilder()
-                        .setFilter(Query.AgentEventFilter.newBuilder().setAgentId("ag1").build())
+        Query.QueryHandle h = tenantA.createLetsEncryptCertQuery(
+                Query.OpenLetsEncryptCertQueryRequest.newBuilder()
+                        .setFilter(Query.LetsEncryptCertFilter.newBuilder().setCertSetId("a-1").build())
                         .setStanding(false)
                         .build());
 
-        long size = tenantA.updateAgentEventQuery(Query.RefineAgentEventRequest.newBuilder()
+        long size = tenantA.updateLetsEncryptCertQuery(Query.RefineLetsEncryptCertRequest.newBuilder()
                 .setQueryId(h.getQueryId())
-                .setFilter(Query.AgentEventFilter.newBuilder().build())
+                .setFilter(Query.LetsEncryptCertFilter.newBuilder().build())
                 .build()).getSize();
 
         assertEquals(2, size, "a refine widened the handle past the tenant that opened it");
@@ -305,20 +318,20 @@ class TwoTenantQueryScopeE2ETest {
     void anotherTenantCannotUseAHandleItDidNotOpen() {
         Query.QueryHandle h = openMatchAll(tenantA);
 
-        assertRefused(() -> tenantB.listAgentEvent(pull(h)), "list");
-        assertRefused(() -> tenantB.getAgentEventSample(sample(h)), "sample");
-        assertRefused(() -> tenantB.getAgentEventCount(h), "count");
-        assertRefused(() -> tenantB.watchAgentEvent(h).hasNext(), "watch");
-        assertRefused(() -> tenantB.subscribeAgentEventCount(h).hasNext(), "subscribeCount");
-        assertRefused(() -> tenantB.updateAgentEventQuery(Query.RefineAgentEventRequest.newBuilder()
+        assertRefused(() -> tenantB.listLetsEncryptCert(pull(h)), "list");
+        assertRefused(() -> tenantB.getLetsEncryptCertSample(sample(h)), "sample");
+        assertRefused(() -> tenantB.getLetsEncryptCertCount(h), "count");
+        assertRefused(() -> tenantB.watchLetsEncryptCert(h).hasNext(), "watch");
+        assertRefused(() -> tenantB.subscribeLetsEncryptCertCount(h).hasNext(), "subscribeCount");
+        assertRefused(() -> tenantB.updateLetsEncryptCertQuery(Query.RefineLetsEncryptCertRequest.newBuilder()
                 .setQueryId(h.getQueryId())
-                .setFilter(Query.AgentEventFilter.newBuilder().build())
+                .setFilter(Query.LetsEncryptCertFilter.newBuilder().build())
                 .build()), "refine");
-        assertRefused(() -> tenantB.deleteAgentEventQuery(h), "close");
+        assertRefused(() -> tenantB.deleteLetsEncryptCertQuery(h), "close");
 
         // Refused, and still there: B's failed attempts must not have closed or
         // widened the handle out from under A.
-        assertEquals(2, tenantA.getAgentEventCount(h).getCount(),
+        assertEquals(2, tenantA.getLetsEncryptCertCount(h).getCount(),
                 "tenant B's refused calls disturbed tenant A's open query");
     }
 
@@ -345,13 +358,13 @@ class TwoTenantQueryScopeE2ETest {
     void aTenantsOwnQueryStillSeesItsOwnRows() {
         Query.QueryHandle h = openMatchAll(tenantB);
 
-        assertEquals(3, tenantB.getAgentEventCount(h).getCount());
-        Query.PullAgentEventResponse page = tenantB.listAgentEvent(pull(h));
+        assertEquals(3, tenantB.getLetsEncryptCertCount(h).getCount());
+        Query.PullLetsEncryptCertResponse page = tenantB.listLetsEncryptCert(pull(h));
         assertEquals(3, page.getItemsCount());
-        for (AgentEvent row : page.getItemsList()) {
+        for (LetsEncryptCert row : page.getItemsList()) {
             assertEquals(TENANT_B, row.getNamespace());
         }
-        assertEquals(h.getQueryId(), tenantB.deleteAgentEventQuery(h).getQueryId());
+        assertEquals(h.getQueryId(), tenantB.deleteLetsEncryptCertQuery(h).getQueryId());
     }
 
     /**
@@ -363,23 +376,23 @@ class TwoTenantQueryScopeE2ETest {
     void aSystemCallerStillReadsEveryTenant() {
         Query.QueryHandle h = openMatchAll(system);
 
-        assertEquals(5, system.getAgentEventCount(h).getCount(),
+        assertEquals(5, system.getLetsEncryptCertCount(h).getCount(),
                 "a /system caller lost the fleet-wide read");
-        assertEquals(5, system.listAgentEvent(pull(h)).getItemsCount());
+        assertEquals(5, system.listLetsEncryptCert(pull(h)).getItemsCount());
     }
 
     /** A filter the caller does supply still narrows, inside its own tenant. */
     @Test
     void aCallersOwnFilterStillNarrowsWithinItsTenant() {
-        Query.QueryHandle h = tenantB.createAgentEventQuery(
-                Query.OpenAgentEventQueryRequest.newBuilder()
-                        .setFilter(Query.AgentEventFilter.newBuilder()
-                                .setTimestampMsFrom(4000)
+        Query.QueryHandle h = tenantB.createLetsEncryptCertQuery(
+                Query.OpenLetsEncryptCertQueryRequest.newBuilder()
+                        .setFilter(Query.LetsEncryptCertFilter.newBuilder()
+                                .setExpiresAtFrom(4000)
                                 .build())
                         .setStanding(false)
                         .build());
 
-        assertEquals(2, tenantB.getAgentEventCount(h).getCount(),
+        assertEquals(2, tenantB.getLetsEncryptCertCount(h).getCount(),
                 "the caller's own range criterion stopped narrowing");
     }
 

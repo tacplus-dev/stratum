@@ -82,7 +82,7 @@ class ColdStartReadGateTest {
     void anEmptyTopicIsAlreadyCaughtUp() {
         ColdStartRebuilder.ReplayProgress progress = new ColdStartRebuilder.ReplayProgress();
 
-        progress.expect("agentsensor.event_stream", 0, 0);
+        progress.expect("letsencrypt.LetsEncryptCertBus.stream", 0, 0);
 
         assertTrue(progress.isCaughtUp(),
                 "a partition whose log ends at offset 0 holds nothing to replay");
@@ -103,15 +103,15 @@ class ColdStartReadGateTest {
     @Test
     void aPartialReplayIsNotCaughtUp() {
         ColdStartRebuilder.ReplayProgress progress = new ColdStartRebuilder.ReplayProgress();
-        progress.expect("agentsensor.event_stream", 0, 5);
+        progress.expect("letsencrypt.LetsEncryptCertBus.stream", 0, 5);
 
         for (long offset = 0; offset <= 3; offset++) {
-            progress.observed("agentsensor.event_stream", 0, offset);
+            progress.observed("letsencrypt.LetsEncryptCertBus.stream", 0, offset);
             assertFalse(progress.isCaughtUp(),
                     "offset " + offset + " of a log ending at 5 is still short of the end");
         }
 
-        progress.observed("agentsensor.event_stream", 0, 4);
+        progress.observed("letsencrypt.LetsEncryptCertBus.stream", 0, 4);
 
         assertTrue(progress.isCaughtUp(), "offset 4 is the last record of a log ending at 5");
     }
@@ -120,13 +120,13 @@ class ColdStartReadGateTest {
     @Test
     void everyPartitionMustDrain() {
         ColdStartRebuilder.ReplayProgress progress = new ColdStartRebuilder.ReplayProgress();
-        progress.expect("agentsensor.event_stream", 0, 2);
-        progress.expect("agentsensor.event_stream", 1, 3);
+        progress.expect("letsencrypt.LetsEncryptCertBus.stream", 0, 2);
+        progress.expect("letsencrypt.LetsEncryptCertBus.stream", 1, 3);
 
-        progress.observed("agentsensor.event_stream", 0, 1);
+        progress.observed("letsencrypt.LetsEncryptCertBus.stream", 0, 1);
         assertFalse(progress.isCaughtUp(), "partition 1 has not been replayed at all");
 
-        progress.observed("agentsensor.event_stream", 1, 2);
+        progress.observed("letsencrypt.LetsEncryptCertBus.stream", 1, 2);
         assertTrue(progress.isCaughtUp());
     }
 }
