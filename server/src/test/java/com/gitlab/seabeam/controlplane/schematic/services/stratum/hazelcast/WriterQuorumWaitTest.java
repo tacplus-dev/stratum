@@ -35,6 +35,7 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.
  */
 class WriterQuorumWaitTest {
 
+    private static final String MAP = "letsencrypt.LetsEncryptCert";
     private static final int FIRST_PORT = 5851;
     private static final List<String> SEEDS = List.of("127.0.0.1:" + FIRST_PORT, "127.0.0.1:" + (FIRST_PORT + 1));
 
@@ -69,7 +70,7 @@ class WriterQuorumWaitTest {
         Thread waiter = new Thread(() -> {
             try {
                 StratumMapConfig.withWriterQuorum(first, "the test step",
-                        () -> first.getMap(StratumMapConfig.MAP_NAME).size() + runs.incrementAndGet(), recording);
+                        () -> first.getMap(MAP).size() + runs.incrementAndGet(), recording);
             } catch (Throwable t) {
                 failure.set(t);
             }
@@ -131,7 +132,7 @@ class WriterQuorumWaitTest {
         assertTrue(StratumRole.writerCount(only) >= 1, "the count is satisfied immediately");
 
         int size = StratumMapConfig.withWriterQuorum(only, "the test step",
-                () -> only.getMap(StratumMapConfig.MAP_NAME).size(), Backoff.THREAD_SLEEPER);
+                () -> only.getMap(MAP).size(), Backoff.THREAD_SLEEPER);
 
         assertEquals(0, size);
     }

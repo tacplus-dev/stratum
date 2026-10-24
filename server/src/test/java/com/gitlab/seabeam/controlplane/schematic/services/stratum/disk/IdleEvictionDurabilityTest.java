@@ -27,8 +27,8 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.checkpoint.Dai
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.checkpoint.DurableRows;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.checkpoint.TombstoneLog;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotWrites;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Helpers;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Letsencrypt;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Helpers;
 
 /**
  * Idle eviction is a cache miss, not a deletion — the property the whole disk leg
@@ -58,9 +58,9 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vs
  */
 class IdleEvictionDurabilityTest {
 
-    private static final String MAP = "agentsensor.AgentEvent";
+    private static final String MAP = "letsencrypt.LetsEncryptCert";
     /** The same map shape with no read-through leg: the store as it was before this. */
-    private static final String CONTROL_MAP = "agentsensor.AgentEventNoLeg";
+    private static final String CONTROL_MAP = "letsencrypt.LetsEncryptCertNoLeg";
 
     /**
      * Wide enough that Hazelcast's own expiry granularity is not what is being
@@ -117,25 +117,19 @@ class IdleEvictionDurabilityTest {
         return mapCfg;
     }
 
-    private static Agentsensor.AgentEvent event(String id, long epochMs) {
-        return Agentsensor.AgentEvent.newBuilder()
-                .setEventId(id)
-                .setStoreEpochMs(epochMs)
-                .setTimestampMs(epochMs)
-                .setEventType(Agentsensor.SensorEventType.SENSOR_EVENT_TYPE_SESSION_START)
-                .setSessionId("s1")
-                .setAgentId("agent-1")
-                .setSensorType(Agentsensor.SensorType.SENSOR_TYPE_CLAUDE_CODE)
-                .setHookPhase(Agentsensor.HookPhase.HOOK_PHASE_PRE)
+    private static Letsencrypt.LetsEncryptCert event(String id, long epochMs) {
+        return Letsencrypt.LetsEncryptCert.newBuilder()
+                .setCertSetId(id)
+                .setIssuedAt(epochMs)
                 .setSpiffeId("spiffe://example/tenants/t/users/u")
                 .build();
     }
 
     /** One write through the real ingest path, into the map and onto this node's index. */
-    private void ingest(IMap<String, Message> map, String mapName, Agentsensor.AgentEvent e)
+    private void ingest(IMap<String, Message> map, String mapName, Letsencrypt.LetsEncryptCert e)
             throws Exception {
-        new HotWrites(hz, 1).write(map, mapName, e.getEventId(), e, 1,
-                () -> Helpers.agentEventToJson(e), e.getStoreEpochMs());
+        new HotWrites(hz, 1).write(map, mapName, e.getCertSetId(), e, 1,
+                () -> Helpers.letsEncryptCertToJson(e), e.getIssuedAt());
         // The disk write is queued off the ack path on purpose (see RecordDisk), so
         // a test that reads the index has to wait for the thread the production
         // write path deliberately does not wait for.
@@ -188,7 +182,7 @@ class IdleEvictionDurabilityTest {
     void anIdleEvictedRowIsStillReadable(@TempDir Path dataRoot) throws Exception {
         IMap<String, Message> map = member(dataRoot);
         IMap<String, Message> control = hz.getMap(CONTROL_MAP);
-        Agentsensor.AgentEvent e = event("evt-1", 1_000L);
+        Letsencrypt.LetsEncryptCert e = event("evt-1", 1_000L);
         ingest(map, MAP, e);
         ingest(control, CONTROL_MAP, e);
 
@@ -219,7 +213,7 @@ class IdleEvictionDurabilityTest {
     @Test
     void anIdleEvictedRowSurvivesACheckpointAndTruncate(@TempDir Path dataRoot) throws Exception {
         IMap<String, Message> map = member(dataRoot);
-        Agentsensor.AgentEvent e = event("evt-2", 2_000L);
+        Letsencrypt.LetsEncryptCert e = event("evt-2", 2_000L);
         ingest(map, MAP, e);
 
         evictAndSettle(map, "evt-2");
@@ -265,7 +259,7 @@ class IdleEvictionDurabilityTest {
     @Test
     void anIdleEvictedRowSurvivesAColdStart(@TempDir Path dataRoot) throws Exception {
         IMap<String, Message> map = member(dataRoot);
-        Agentsensor.AgentEvent e = event("evt-3", 3_000L);
+        Letsencrypt.LetsEncryptCert e = event("evt-3", 3_000L);
         ingest(map, MAP, e);
 
         evictAndSettle(map, "evt-3");

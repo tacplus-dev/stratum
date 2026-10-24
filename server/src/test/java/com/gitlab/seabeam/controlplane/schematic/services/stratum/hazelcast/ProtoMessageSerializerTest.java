@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test;
 
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.StratumEventStores;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.RecordPersistTask;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Letsencrypt;
 
 /**
  * A record crosses Hazelcast as (protobuf full name, bytes): no Java class name of
@@ -37,8 +37,8 @@ class ProtoMessageSerializerTest {
                 .build();
     }
 
-    private static Agentsensor.AgentEvent event() {
-        return Agentsensor.AgentEvent.newBuilder().setEventId("e1").setStoreEpochMs(42).build();
+    private static Letsencrypt.LetsEncryptCert event() {
+        return Letsencrypt.LetsEncryptCert.newBuilder().setCertSetId("e1").setIssuedAt(42).build();
     }
 
     private static String wire(Data data) {
@@ -52,8 +52,8 @@ class ProtoMessageSerializerTest {
 
         assertEquals(ProtoMessageSerializer.TYPE_ID, data.getType());
         String wire = wire(data);
-        assertTrue(wire.contains("agentsensor.AgentEvent"), wire);
-        assertFalse(wire.contains("Agentsensor"), "the generated class must not be named:\n" + wire);
+        assertTrue(wire.contains("letsencrypt.LetsEncryptCert"), wire);
+        assertFalse(wire.contains("Letsencrypt$"), "the generated class must not be named:\n" + wire);
         assertFalse(wire.contains("com.gitlab"), wire);
         assertEquals(event(), ss.toObject(data));
     }
@@ -72,11 +72,11 @@ class ProtoMessageSerializerTest {
     @Test
     void aRecordInsideAPersistTaskTravelsByFullName() {
         InternalSerializationService ss = service();
-        Data data = ss.toData(new RecordPersistTask("agentsensor.AgentEvent", "e1", event(), null, 42));
+        Data data = ss.toData(new RecordPersistTask("letsencrypt.LetsEncryptCert", "e1", event(), null, 42));
 
         String wire = wire(data);
-        assertTrue(wire.contains("agentsensor.AgentEvent"), wire);
-        assertFalse(wire.contains("Agentsensor$AgentEvent"), "the record must not be Java-serialized:\n" + wire);
+        assertTrue(wire.contains("letsencrypt.LetsEncryptCert"), wire);
+        assertFalse(wire.contains("Letsencrypt$LetsEncryptCert"), "the record must not be Java-serialized:\n" + wire);
         assertEquals(42, ss.<RecordPersistTask>toObject(data).epoch());
     }
 

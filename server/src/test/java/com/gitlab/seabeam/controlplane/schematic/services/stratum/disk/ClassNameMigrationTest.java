@@ -28,7 +28,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.StratumEventStores;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.checkpoint.Checkpoint;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Letsencrypt;
 
 /**
  * The durable format names rows by protobuf full name; a volume written when it
@@ -37,22 +37,22 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vs
  */
 class ClassNameMigrationTest {
 
-    private static final String MAP = "agentsensor.AgentEvent";
+    private static final String MAP = "letsencrypt.LetsEncryptCert";
     private static final String CLASS =
-            "com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor$AgentEvent";
+            "com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Letsencrypt$LetsEncryptCert";
     private static final String PRE_RENAME_CLASS =
-            "com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor$AgentEvent";
+            "com.gitlab.secondstarcavalier.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Letsencrypt$LetsEncryptCert";
 
-    private static Agentsensor.AgentEvent event(String id) {
-        return Agentsensor.AgentEvent.newBuilder().setEventId(id).setStoreEpochMs(42).build();
+    private static Letsencrypt.LetsEncryptCert event(String id) {
+        return Letsencrypt.LetsEncryptCert.newBuilder().setCertSetId(id).setIssuedAt(42).build();
     }
 
     /** Writes a dump in the pre-migration line format and points {@code current} at it. */
-    private static Path legacyDump(Path dataRoot, String className, Agentsensor.AgentEvent e) throws IOException {
+    private static Path legacyDump(Path dataRoot, String className, Letsencrypt.LetsEncryptCert e) throws IOException {
         Path dir = dataRoot.resolve(Checkpoint.CHECKPOINT_SUBDIR);
         Files.createDirectories(dir);
         Path dump = dir.resolve("1000");
-        Files.writeString(dump, "{\"map\":\"" + MAP + "\",\"key\":\"" + e.getEventId()
+        Files.writeString(dump, "{\"map\":\"" + MAP + "\",\"key\":\"" + e.getCertSetId()
                 + "\",\"class\":\"" + className + "\",\"proto\":\""
                 + Base64.getEncoder().encodeToString(e.toByteArray()) + "\"}\n");
         Files.writeString(dir.resolve(Checkpoint.CURRENT), "1000");

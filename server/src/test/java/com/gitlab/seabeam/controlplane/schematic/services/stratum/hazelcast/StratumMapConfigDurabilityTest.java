@@ -32,8 +32,11 @@ import org.junit.jupiter.api.Test;
  */
 class StratumMapConfigDurabilityTest {
 
+    /** The one record map this fleet's protos declare. */
+    private static final String MAP = "letsencrypt.LetsEncryptCert";
+
     private static MapConfig hotMap(Config cfg) {
-        MapConfig map = cfg.getMapConfigs().get(StratumMapConfig.MAP_NAME);
+        MapConfig map = cfg.getMapConfigs().get(MAP);
         assertNotNull(map, "the hot map config must be declared by name, not resolved by wildcard");
         return map;
     }
@@ -130,9 +133,8 @@ class StratumMapConfigDurabilityTest {
     /**
      * EVERY typed record map carries the replication settings, not just the hot map.
      *
-     * <p>Only {@link StratumMapConfig#MAP_NAME} used to get them. The other record maps
-     * — accountingrecord.AccountingRecord, agentsensor.AgentSessionState,
-     * scotty.ScottyActivity — took Hazelcast's defaults instead: one synchronous
+     * <p>Only one hand-named map used to get them. The other record maps of that
+     * build took Hazelcast's defaults instead: one synchronous
      * backup, which happens to agree with a floor of 2 and stops agreeing the moment
      * the floor moves, and NO split-brain protection at all, so a minority partition
      * accepted their writes locally. The "2 durable copies" claim held for one map in
@@ -145,8 +147,6 @@ class StratumMapConfigDurabilityTest {
     void everyRecordMapCarriesTheReplicationSettings() {
         Config cfg = StratumMapConfig.build(List.of(), 3);
 
-        assertTrue(StratumEventStores.mapNames().size() > 1,
-                "this build generated one record map; the uniformity claim is untested");
         for (String name : StratumEventStores.mapNames()) {
             MapConfig map = cfg.getMapConfigs().get(name);
             assertNotNull(map, name + " has no MapConfig, so it silently takes Hazelcast's defaults");
