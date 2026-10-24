@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Letsencrypt;
 
 /**
  * The marker annotations the checkpoint reads, resolved off the record's own
@@ -30,11 +30,11 @@ class RecordAnnotationsTest {
 
     @Test
     void aTypeWithNoMarkerHasNoDeletedState() {
-        // agentsensor.AgentEvent is a real fleet record type, and no fleet type
+        // letsencrypt.LetsEncryptCert is a real fleet record type, and no fleet type
         // carries (spec.deleted_flag) until the annotation pass runs. The purge step
         // must select nothing from it rather than guess at a field called "deleted".
-        assertNull(RecordAnnotations.deletedFlag(Agentsensor.AgentEvent.getDescriptor()));
-        assertFalse(RecordAnnotations.isDeleted(Agentsensor.AgentEvent.getDefaultInstance()));
+        assertNull(RecordAnnotations.deletedFlag(Letsencrypt.LetsEncryptCert.getDescriptor()));
+        assertFalse(RecordAnnotations.isDeleted(Letsencrypt.LetsEncryptCert.getDefaultInstance()));
     }
 
     @Test
@@ -45,13 +45,14 @@ class RecordAnnotationsTest {
     }
 
     /**
-     * The fleet's real store-epoch marker, resolved the same way — proof the
+     * The fleet's real store-namespace marker, resolved the same way — proof the
      * mechanism reads the annotation protoc actually wrote and not only the one
-     * this test assembles.
+     * this test assembles. (No fleet record declares {@code (spec.store_epoch)}
+     * yet, so the namespace marker is the one a generated type carries.)
      */
     @Test
-    void theStoreEpochMarkerResolvesOnAGeneratedType() {
-        assertEquals("store_epoch_ms",
-                RecordAnnotations.storeEpoch(Agentsensor.AgentEvent.getDescriptor()).getName());
+    void theStoreNamespaceMarkerResolvesOnAGeneratedType() {
+        assertEquals("namespace",
+                RecordAnnotations.storeNamespace(Letsencrypt.LetsEncryptCert.getDescriptor()).getName());
     }
 }

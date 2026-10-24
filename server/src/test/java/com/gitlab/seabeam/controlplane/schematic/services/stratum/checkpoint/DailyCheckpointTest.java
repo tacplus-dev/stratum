@@ -117,10 +117,10 @@ class DailyCheckpointTest {
     /** A type carrying no deleted-flag marker has no soft-delete state to purge. */
     @Test
     void aTypeWithNoDeletedFlagIsNeverPurged(@TempDir Path dataRoot) throws Exception {
-        MapRows rows = new MapRows().put("agentsensor.AgentEvent", "evt-1",
+        MapRows rows = new MapRows().put("letsencrypt.LetsEncryptCert", "evt-1",
                 com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types
-                        .vservices.agentsensor.Agentsensor.AgentEvent.newBuilder()
-                        .setEventId("evt-1").setStoreEpochMs(1L).build());
+                        .services.letsencrypt.Letsencrypt.LetsEncryptCert.newBuilder()
+                        .setCertSetId("evt-1").setIssuedAt(1L).build());
 
         assertEquals(0, checkpointOver(rows, dataRoot).run(MAX_AGE_MS, NOW).purged);
         assertFalse(Files.exists(new TombstoneLog(dataRoot).fileFor(NOW)));
@@ -164,10 +164,10 @@ class DailyCheckpointTest {
         Checkpoint checkpoint = new Checkpoint(dataRoot);
         // A generated type for the standing checkpoint, because the assertion below
         // loads it back and a dump is only loadable as the concrete type it names.
-        Path first = checkpoint.write(NOW, List.of(new Checkpoint.Row("agentsensor.AgentEvent", "evt-1",
+        Path first = checkpoint.write(NOW, List.of(new Checkpoint.Row("letsencrypt.LetsEncryptCert", "evt-1",
                 com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types
-                        .vservices.agentsensor.Agentsensor.AgentEvent.newBuilder()
-                        .setEventId("evt-1").setStoreEpochMs(1L).build())));
+                        .services.letsencrypt.Letsencrypt.LetsEncryptCert.newBuilder()
+                        .setCertSetId("evt-1").setIssuedAt(1L).build())));
 
         // The next checkpoint's committed name, occupied by a non-empty directory:
         // the rename cannot replace it.
@@ -188,14 +188,14 @@ class DailyCheckpointTest {
     @Test
     void aCheckpointRoundTripsItsRows(@TempDir Path dataRoot) throws Exception {
         var event = com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types
-                .vservices.agentsensor.Agentsensor.AgentEvent.newBuilder()
-                .setEventId("evt-1").setStoreEpochMs(7L).setSessionId("s1").build();
+                .services.letsencrypt.Letsencrypt.LetsEncryptCert.newBuilder()
+                .setCertSetId("evt-1").setIssuedAt(7L).setSpiffeId("s1").build();
         Checkpoint checkpoint = new Checkpoint(dataRoot);
-        checkpoint.write(NOW, List.of(new Checkpoint.Row("agentsensor.AgentEvent", "evt-1", event)));
+        checkpoint.write(NOW, List.of(new Checkpoint.Row("letsencrypt.LetsEncryptCert", "evt-1", event)));
 
         List<Checkpoint.Row> loaded = new Checkpoint(dataRoot).load();
         assertEquals(1, loaded.size());
-        assertEquals("agentsensor.AgentEvent", loaded.get(0).mapName);
+        assertEquals("letsencrypt.LetsEncryptCert", loaded.get(0).mapName);
         assertEquals("evt-1", loaded.get(0).key);
         assertEquals(event, loaded.get(0).value,
                 "the row must come back as the concrete generated type, not a DynamicMessage");

@@ -23,8 +23,8 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotRestore
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotWrites;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.Codec;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.RedoLog;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Helpers;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Letsencrypt;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Helpers;
 
 /**
  * Cold start is the checkpoint plus the redo tail, not a replay from offset zero.
@@ -35,7 +35,7 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vs
  */
 class CheckpointColdStartTest {
 
-    private static final String MAP = "agentsensor.AgentEvent";
+    private static final String MAP = "letsencrypt.LetsEncryptCert";
 
     private HazelcastInstance hz;
     private HotRedoLogs logs;
@@ -54,35 +54,29 @@ class CheckpointColdStartTest {
 
     private static HotDataset dataset() {
         return new HotDataset(MAP, 1,
-                m -> ((Agentsensor.AgentEvent) m).getEventId(),
-                m -> ((Agentsensor.AgentEvent) m).getStoreEpochMs(),
-                "store_epoch_ms",
+                m -> ((Letsencrypt.LetsEncryptCert) m).getCertSetId(),
+                m -> ((Letsencrypt.LetsEncryptCert) m).getIssuedAt(),
+                "issued_at",
                 m -> {
                     try {
-                        return Helpers.agentEventToJson((Agentsensor.AgentEvent) m);
+                        return Helpers.letsEncryptCertToJson((Letsencrypt.LetsEncryptCert) m);
                     } catch (Exception e) {
                         throw new IllegalArgumentException(e);
                     }
                 },
                 json -> {
                     try {
-                        return Helpers.agentEventFromJson(json);
+                        return Helpers.letsEncryptCertFromJson(json);
                     } catch (Exception e) {
                         throw new IllegalStateException(e);
                     }
                 });
     }
 
-    private static Agentsensor.AgentEvent event(String id, long epochMs) {
-        return Agentsensor.AgentEvent.newBuilder()
-                .setEventId(id)
-                .setStoreEpochMs(epochMs)
-                .setTimestampMs(epochMs)
-                .setEventType(Agentsensor.SensorEventType.SENSOR_EVENT_TYPE_SESSION_START)
-                .setSessionId("s1")
-                .setAgentId("agent-1")
-                .setSensorType(Agentsensor.SensorType.SENSOR_TYPE_CLAUDE_CODE)
-                .setHookPhase(Agentsensor.HookPhase.HOOK_PHASE_PRE)
+    private static Letsencrypt.LetsEncryptCert event(String id, long epochMs) {
+        return Letsencrypt.LetsEncryptCert.newBuilder()
+                .setCertSetId(id)
+                .setIssuedAt(epochMs)
                 .setSpiffeId("spiffe://example/tenants/t/users/u")
                 .build();
     }
@@ -96,9 +90,9 @@ class CheckpointColdStartTest {
         return Hazelcast.newHazelcastInstance(cfg);
     }
 
-    private void write(HotWrites hot, IMap<String, Message> map, Agentsensor.AgentEvent e) {
-        hot.write(map, MAP, e.getEventId(), e, 1,
-                () -> Helpers.agentEventToJson(e), e.getStoreEpochMs());
+    private void write(HotWrites hot, IMap<String, Message> map, Letsencrypt.LetsEncryptCert e) {
+        hot.write(map, MAP, e.getCertSetId(), e, 1,
+                () -> Helpers.letsEncryptCertToJson(e), e.getIssuedAt());
     }
 
     @Test
@@ -144,10 +138,10 @@ class CheckpointColdStartTest {
 
         assertEquals(2, replayed.read, "only the tail is replayed");
         assertEquals(4, map.size());
-        assertEquals(100L, ((Agentsensor.AgentEvent) map.get("evt-1")).getStoreEpochMs());
-        assertEquals(500L, ((Agentsensor.AgentEvent) map.get("evt-2")).getStoreEpochMs(),
+        assertEquals(100L, ((Letsencrypt.LetsEncryptCert) map.get("evt-1")).getIssuedAt());
+        assertEquals(500L, ((Letsencrypt.LetsEncryptCert) map.get("evt-2")).getIssuedAt(),
                 "the tail's newer copy must win over the checkpoint's");
-        assertEquals(400L, ((Agentsensor.AgentEvent) map.get("evt-4")).getStoreEpochMs());
+        assertEquals(400L, ((Letsencrypt.LetsEncryptCert) map.get("evt-4")).getIssuedAt());
     }
 
     /**

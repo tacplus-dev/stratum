@@ -29,8 +29,8 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotRedoLog
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotRestore;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotWrites;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.Codec;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Helpers;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Letsencrypt;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Helpers;
 
 /**
  * Restoring every writer from a disk snapshot is the checkpoint plus the redo
@@ -51,10 +51,10 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vs
  */
 class SnapshotRestoreReplayTest {
 
-    private static final String MAP = "agentsensor.AgentEvent";
+    private static final String MAP = "letsencrypt.LetsEncryptCert";
 
     /** One partition of the record topic. The offset is the index. */
-    private record Published(long publishedAtMs, Agentsensor.AgentEvent payload) {}
+    private record Published(long publishedAtMs, Letsencrypt.LetsEncryptCert payload) {}
 
     /** What the scenario hands each test once the writers are back from the snapshot. */
     private record Restored(long committedOffset, long snapshotAtMs) {}
@@ -85,19 +85,19 @@ class SnapshotRestoreReplayTest {
 
     private static HotDataset dataset() {
         return new HotDataset(MAP, 1,
-                m -> ((Agentsensor.AgentEvent) m).getEventId(),
-                m -> ((Agentsensor.AgentEvent) m).getStoreEpochMs(),
-                "store_epoch_ms",
+                m -> ((Letsencrypt.LetsEncryptCert) m).getCertSetId(),
+                m -> ((Letsencrypt.LetsEncryptCert) m).getIssuedAt(),
+                "issued_at",
                 m -> {
                     try {
-                        return Helpers.agentEventToJson((Agentsensor.AgentEvent) m);
+                        return Helpers.letsEncryptCertToJson((Letsencrypt.LetsEncryptCert) m);
                     } catch (Exception e) {
                         throw new IllegalArgumentException(e);
                     }
                 },
                 json -> {
                     try {
-                        return Helpers.agentEventFromJson(json);
+                        return Helpers.letsEncryptCertFromJson(json);
                     } catch (Exception e) {
                         throw new IllegalStateException(e);
                     }
@@ -105,15 +105,10 @@ class SnapshotRestoreReplayTest {
     }
 
     /** As published: no store epoch, which only the subscription stamps. */
-    private static Agentsensor.AgentEvent event(String id, String version) {
-        return Agentsensor.AgentEvent.newBuilder()
-                .setEventId(id)
-                .setEventType(Agentsensor.SensorEventType.SENSOR_EVENT_TYPE_SESSION_START)
-                .setSessionId(version)
-                .setAgentId("agent-1")
-                .setSensorType(Agentsensor.SensorType.SENSOR_TYPE_CLAUDE_CODE)
-                .setHookPhase(Agentsensor.HookPhase.HOOK_PHASE_PRE)
-                .setSpiffeId("spiffe://example/tenants/t/users/u")
+    private static Letsencrypt.LetsEncryptCert event(String id, String version) {
+        return Letsencrypt.LetsEncryptCert.newBuilder()
+                .setCertSetId(id)
+                .setSpiffeId(version)
                 .build();
     }
 
@@ -126,9 +121,9 @@ class SnapshotRestoreReplayTest {
         return Hazelcast.newHazelcastInstance(cfg);
     }
 
-    private void write(HotWrites hot, IMap<String, Message> map, Agentsensor.AgentEvent e) {
-        hot.write(map, MAP, e.getEventId(), e, 1,
-                () -> Helpers.agentEventToJson(e), e.getStoreEpochMs());
+    private void write(HotWrites hot, IMap<String, Message> map, Letsencrypt.LetsEncryptCert e) {
+        hot.write(map, MAP, e.getCertSetId(), e, 1,
+                () -> Helpers.letsEncryptCertToJson(e), e.getIssuedAt());
     }
 
     private void publish(String id, String version) {
@@ -143,8 +138,8 @@ class SnapshotRestoreReplayTest {
         HotWrites hot = new HotWrites(hz, 0);
         IMap<String, Message> map = hz.getMap(MAP);
         for (int offset = (int) fromOffset; offset < topic.size(); offset++) {
-            Agentsensor.AgentEvent stamped = topic.get(offset).payload().toBuilder()
-                    .setStoreEpochMs(epochClock.addAndGet(10L))
+            Letsencrypt.LetsEncryptCert stamped = topic.get(offset).payload().toBuilder()
+                    .setIssuedAt(epochClock.addAndGet(10L))
                     .build();
             write(hot, map, stamped);
             delivered++;
@@ -264,8 +259,8 @@ class SnapshotRestoreReplayTest {
     }
 
     private static String version(IMap<String, Message> map, String id) {
-        Agentsensor.AgentEvent e = (Agentsensor.AgentEvent) map.get(id);
-        return e == null ? null : e.getSessionId();
+        Letsencrypt.LetsEncryptCert e = (Letsencrypt.LetsEncryptCert) map.get(id);
+        return e == null ? null : e.getSpiffeId();
     }
 
     // ------------------------------------------------------------------ tests
