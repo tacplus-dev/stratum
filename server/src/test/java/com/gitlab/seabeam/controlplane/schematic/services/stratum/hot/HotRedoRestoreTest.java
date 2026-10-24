@@ -27,8 +27,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.Codec;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.RedoLog;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Helpers;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Letsencrypt;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Helpers;
 
 /**
  * The hot tier's durability path, end to end: the write appends, and a restart
@@ -38,14 +38,14 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vs
  * <p>The dataset here is hand-built rather than taken from the generated
  * {@code StratumHotStores}: the runtime under test is entirely generic — it reads
  * the descriptor, not the type — and a hand-built descriptor is how that
- * genericity is stated, over an epoch field the declaration does not use. The
- * generated descriptor is driven end to end by {@code HotAgentEventE2ETest}
- * instead, and the generator's own output is pinned by
- * {@code HotStoreGeneratorTest}.
+ * genericity is stated, over an epoch field the declaration does not use. No
+ * record in this fleet declares {@code (spec.store_epoch)} yet, so the generated
+ * {@code StratumHotStores} is empty and there is no generated descriptor to
+ * drive; the generator's own output is pinned by {@code HotStoreGeneratorTest}.
  */
 class HotRedoRestoreTest {
 
-    private static final String MAP = "agentsensor.AgentEvent";
+    private static final String MAP = "letsencrypt.LetsEncryptCert";
 
     private HazelcastInstance hz;
     private HazelcastInstance peer;
@@ -70,41 +70,36 @@ class HotRedoRestoreTest {
     // ------------------------------------------------------------------ fixtures
 
     /**
-     * The store epoch is {@code timestamp_ms} here. On a record declaring
+     * The store epoch is {@code issued_at} here. On a record declaring
      * {@code (spec.store_epoch)} the generator names that field instead; nothing
      * in the mechanism depends on which field it is, only that there IS one.
      */
     private static HotDataset dataset(int minDurableCopies) {
         return new HotDataset(MAP, minDurableCopies,
-                m -> ((Agentsensor.AgentEvent) m).getEventId(),
-                m -> ((Agentsensor.AgentEvent) m).getTimestampMs(),
-                "timestamp_ms",
+                m -> ((Letsencrypt.LetsEncryptCert) m).getCertSetId(),
+                m -> ((Letsencrypt.LetsEncryptCert) m).getIssuedAt(),
+                "issued_at",
                 m -> {
                     try {
-                        return Helpers.agentEventToJson((Agentsensor.AgentEvent) m);
+                        return Helpers.letsEncryptCertToJson((Letsencrypt.LetsEncryptCert) m);
                     } catch (Exception e) {
                         throw new IllegalArgumentException(e);
                     }
                 },
                 json -> {
                     try {
-                        return Helpers.agentEventFromJson(json);
+                        return Helpers.letsEncryptCertFromJson(json);
                     } catch (Exception e) {
                         throw new IllegalStateException(e);
                     }
                 });
     }
 
-    private static Agentsensor.AgentEvent event(String id, long epochMs, String session) {
-        return Agentsensor.AgentEvent.newBuilder()
-                .setEventId(id)
-                .setTimestampMs(epochMs)
-                .setEventType(Agentsensor.SensorEventType.SENSOR_EVENT_TYPE_SESSION_START)
-                .setSessionId(session)
-                .setAgentId("agent-1")
-                .setSensorType(Agentsensor.SensorType.SENSOR_TYPE_CLAUDE_CODE)
-                .setHookPhase(Agentsensor.HookPhase.HOOK_PHASE_PRE)
-                .setSpiffeId("spiffe://example/tenants/t/users/u")
+    private static Letsencrypt.LetsEncryptCert event(String id, long epochMs, String session) {
+        return Letsencrypt.LetsEncryptCert.newBuilder()
+                .setCertSetId(id)
+                .setIssuedAt(epochMs)
+                .setSpiffeId(session)
                 .build();
     }
 
@@ -127,8 +122,8 @@ class HotRedoRestoreTest {
         HotWrites hot = new HotWrites(hz, 0);
         IMap<String, Message> map = hz.getMap(MAP);
 
-        Agentsensor.AgentEvent e = event("evt-1", 1000L, "s1");
-        hot.write(map, MAP, "evt-1", e, 1, () -> Helpers.agentEventToJson(e), 1000L);
+        Letsencrypt.LetsEncryptCert e = event("evt-1", 1000L, "s1");
+        hot.write(map, MAP, "evt-1", e, 1, () -> Helpers.letsEncryptCertToJson(e), 1000L);
 
         // The append is queued, not written, by the time the write returns — see
         // theAckDoesNotWaitOnTheDiskAppend for that being the point rather than a
@@ -167,9 +162,9 @@ class HotRedoRestoreTest {
         CountDownLatch release = new CountDownLatch(1);
         logs.blockWriter(release);
 
-        Agentsensor.AgentEvent e = event("evt-1", 1000L, "s1");
+        Letsencrypt.LetsEncryptCert e = event("evt-1", 1000L, "s1");
         long startedNs = System.nanoTime();
-        hot.write(map, MAP, "evt-1", e, 1, () -> Helpers.agentEventToJson(e), 1000L);
+        hot.write(map, MAP, "evt-1", e, 1, () -> Helpers.letsEncryptCertToJson(e), 1000L);
         long elapsedMs = (System.nanoTime() - startedNs) / 1_000_000L;
 
         assertEquals(e, map.get("evt-1"), "the write must have acked from memory with the writer parked");
@@ -219,7 +214,7 @@ class HotRedoRestoreTest {
         assertEquals(1, fromCrashed.applied);
         assertEquals(1, fromSurvivor.applied);
         assertTrue(fromSurvivor.diverged.isEmpty());
-        assertEquals("acked", ((Agentsensor.AgentEvent) map.get("evt-1")).getSessionId(),
+        assertEquals("acked", ((Letsencrypt.LetsEncryptCert) map.get("evt-1")).getSpiffeId(),
                 "the union across reachable logs must recover a row whose append the other node lost");
     }
 
@@ -240,8 +235,8 @@ class HotRedoRestoreTest {
         HotWrites hot = new HotWrites(hz, 0);
         IMap<String, Message> map = hz.getMap(MAP);
         for (int i = 0; i < 25; i++) {
-            Agentsensor.AgentEvent e = event("evt-" + i, 1000L + i, "s" + i);
-            hot.write(map, MAP, e.getEventId(), e, 1, () -> Helpers.agentEventToJson(e), e.getTimestampMs());
+            Letsencrypt.LetsEncryptCert e = event("evt-" + i, 1000L + i, "s" + i);
+            hot.write(map, MAP, e.getCertSetId(), e, 1, () -> Helpers.letsEncryptCertToJson(e), e.getIssuedAt());
         }
         assertEquals(25, map.size());
 
@@ -260,10 +255,10 @@ class HotRedoRestoreTest {
         assertEquals(25, result.applied);
         assertEquals(25, recovered.size());
         for (int i = 0; i < 25; i++) {
-            Agentsensor.AgentEvent back = (Agentsensor.AgentEvent) recovered.get("evt-" + i);
+            Letsencrypt.LetsEncryptCert back = (Letsencrypt.LetsEncryptCert) recovered.get("evt-" + i);
             assertNotNull(back, "evt-" + i + " did not survive the restart");
-            assertEquals("s" + i, back.getSessionId());
-            assertEquals(1000L + i, back.getTimestampMs());
+            assertEquals("s" + i, back.getSpiffeId());
+            assertEquals(1000L + i, back.getIssuedAt());
         }
     }
 
@@ -283,8 +278,8 @@ class HotRedoRestoreTest {
         writeLog(nodeA, d, event("evt-1", 1000L, "old"));
         writeLog(nodeB, d, event("evt-1", 2000L, "new"));
 
-        assertEquals("new", replayBoth(d, nodeA, nodeB, "stratum-union-ab").getSessionId());
-        assertEquals("new", replayBoth(d, nodeB, nodeA, "stratum-union-ba").getSessionId());
+        assertEquals("new", replayBoth(d, nodeA, nodeB, "stratum-union-ab").getSpiffeId());
+        assertEquals("new", replayBoth(d, nodeB, nodeA, "stratum-union-ba").getSpiffeId());
     }
 
     /**
@@ -308,7 +303,7 @@ class HotRedoRestoreTest {
         assertTrue(first.diverged.isEmpty(), "the first log has nothing to disagree with");
         assertEquals(List.of("evt-1"), second.diverged,
                 "an equal-epoch, different-bytes key must be reported, not resolved");
-        assertEquals("one", ((Agentsensor.AgentEvent) map.get("evt-1")).getSessionId(),
+        assertEquals("one", ((Letsencrypt.LetsEncryptCert) map.get("evt-1")).getSpiffeId(),
                 "a diverged key must be left exactly as it was, not overwritten");
     }
 
@@ -333,7 +328,7 @@ class HotRedoRestoreTest {
     @Test
     void aFieldTheRedoEncodingDropsIsNotDivergence(@TempDir Path dir) throws Exception {
         HotDataset d = dataset(1);
-        Agentsensor.AgentEvent wire = withUnknownField(event("evt-1", 1000L, "s1"), "shipped-ahead");
+        Letsencrypt.LetsEncryptCert wire = withUnknownField(event("evt-1", 1000L, "s1"), "shipped-ahead");
         // The payload the encoding actually produced: field 300 is gone from it.
         assertFalse(d.toJson.apply(wire).contains("shipped-ahead"),
                 "premise: the redo encoding must be the thing that drops the new field");
@@ -589,10 +584,10 @@ class HotRedoRestoreTest {
     /**
      * The event as a producer running a NEWER proto than stratum's would leave it:
      * a field stratum's copy does not declare, parsed into the unknown field set.
-     * Field 300 is unused by AgentEvent, which is the point — it is what a field
+     * Field 300 is unused by LetsEncryptCert, which is the point — it is what a field
      * added after this build looks like from here.
      */
-    private static Agentsensor.AgentEvent withUnknownField(Agentsensor.AgentEvent e, String value) {
+    private static Letsencrypt.LetsEncryptCert withUnknownField(Letsencrypt.LetsEncryptCert e, String value) {
         return e.toBuilder()
                 .setUnknownFields(UnknownFieldSet.newBuilder()
                         .addField(300, UnknownFieldSet.Field.newBuilder()
@@ -602,10 +597,10 @@ class HotRedoRestoreTest {
     }
 
     /** Writes one record straight into a node's log, without a cluster. */
-    private static void writeLog(Path nodeDir, HotDataset d, Agentsensor.AgentEvent e) {
+    private static void writeLog(Path nodeDir, HotDataset d, Letsencrypt.LetsEncryptCert e) {
         try (RedoLog log = RedoLog.open(nodeDir.resolve(HotRedoLogs.HOT_SUBDIR), "/", d.mapName, 3, Codec.NONE)) {
-            log.append(new RedoLog.Record(e.getEventId(), false,
-                    Long.toString(e.getTimestampMs()), d.toJson.apply(e)));
+            log.append(new RedoLog.Record(e.getCertSetId(), false,
+                    Long.toString(e.getIssuedAt()), d.toJson.apply(e)));
         }
     }
 
@@ -615,13 +610,13 @@ class HotRedoRestoreTest {
         }
     }
 
-    private Agentsensor.AgentEvent replayBoth(HotDataset d, Path first, Path second, String cluster) {
+    private Letsencrypt.LetsEncryptCert replayBoth(HotDataset d, Path first, Path second, String cluster) {
         HazelcastInstance member = member(cluster);
         try {
             IMap<String, Message> map = member.getMap(MAP);
             assertFalse(replayFrom(first, d, map).diverged.size() > 0);
             assertFalse(replayFrom(second, d, map).diverged.size() > 0);
-            return (Agentsensor.AgentEvent) map.get("evt-1");
+            return (Letsencrypt.LetsEncryptCert) map.get("evt-1");
         } finally {
             member.shutdown();
         }

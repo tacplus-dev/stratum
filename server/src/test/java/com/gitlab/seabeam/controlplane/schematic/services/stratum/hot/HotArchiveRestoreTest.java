@@ -30,8 +30,8 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.checkpoint.Dur
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.ArchiveSink;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.Codec;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.diskstore.RedoLog;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Helpers;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Letsencrypt;
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.letsencrypt.Helpers;
 
 /**
  * A writer whose volume is gone comes back from the archive: write, roll,
@@ -42,7 +42,7 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vs
  */
 class HotArchiveRestoreTest {
 
-    private static final String MAP = "agentsensor.AgentEvent";
+    private static final String MAP = "letsencrypt.LetsEncryptCert";
     private static final String PREFIX = "stratum";
     private static final String MEMBER = "stratum-0";
 
@@ -100,35 +100,30 @@ class HotArchiveRestoreTest {
 
     private static HotDataset dataset() {
         return new HotDataset(MAP, 1,
-                m -> ((Agentsensor.AgentEvent) m).getEventId(),
-                m -> ((Agentsensor.AgentEvent) m).getTimestampMs(),
-                "timestamp_ms",
+                m -> ((Letsencrypt.LetsEncryptCert) m).getCertSetId(),
+                m -> ((Letsencrypt.LetsEncryptCert) m).getIssuedAt(),
+                "issued_at",
                 m -> {
                     try {
-                        return Helpers.agentEventToJson((Agentsensor.AgentEvent) m);
+                        return Helpers.letsEncryptCertToJson((Letsencrypt.LetsEncryptCert) m);
                     } catch (Exception e) {
                         throw new IllegalArgumentException(e);
                     }
                 },
                 json -> {
                     try {
-                        return Helpers.agentEventFromJson(json);
+                        return Helpers.letsEncryptCertFromJson(json);
                     } catch (Exception e) {
                         throw new IllegalStateException(e);
                     }
                 });
     }
 
-    private static Agentsensor.AgentEvent event(String id, long epochMs, String session) {
-        return Agentsensor.AgentEvent.newBuilder()
-                .setEventId(id)
-                .setTimestampMs(epochMs)
-                .setEventType(Agentsensor.SensorEventType.SENSOR_EVENT_TYPE_SESSION_START)
-                .setSessionId(session)
-                .setAgentId("agent-1")
-                .setSensorType(Agentsensor.SensorType.SENSOR_TYPE_CLAUDE_CODE)
-                .setHookPhase(Agentsensor.HookPhase.HOOK_PHASE_PRE)
-                .setSpiffeId("spiffe://example/tenants/t/users/u")
+    private static Letsencrypt.LetsEncryptCert event(String id, long epochMs, String session) {
+        return Letsencrypt.LetsEncryptCert.newBuilder()
+                .setCertSetId(id)
+                .setIssuedAt(epochMs)
+                .setSpiffeId(session)
                 .build();
     }
 
@@ -141,8 +136,8 @@ class HotArchiveRestoreTest {
         return Hazelcast.newHazelcastInstance(cfg);
     }
 
-    private static void write(HotWrites hot, IMap<String, Message> map, Agentsensor.AgentEvent e) {
-        hot.write(map, MAP, e.getEventId(), e, 1, () -> Helpers.agentEventToJson(e), e.getTimestampMs());
+    private static void write(HotWrites hot, IMap<String, Message> map, Letsencrypt.LetsEncryptCert e) {
+        hot.write(map, MAP, e.getCertSetId(), e, 1, () -> Helpers.letsEncryptCertToJson(e), e.getIssuedAt());
     }
 
     private static void awaitShipped(RedoLog redoLog) throws InterruptedException {
@@ -216,7 +211,7 @@ class HotArchiveRestoreTest {
         assertEquals(4, restored);
         assertEquals(4, replay.applied);
         assertEquals(written, new HashMap<>(hz.<String, Message>getMap(MAP)));
-        assertEquals("s1-updated", ((Agentsensor.AgentEvent) hz.getMap(MAP).get("evt-1")).getSessionId(),
+        assertEquals("s1-updated", ((Letsencrypt.LetsEncryptCert) hz.getMap(MAP).get("evt-1")).getSpiffeId(),
                 "the update after the checkpoint must win over the checkpointed row");
     }
 
