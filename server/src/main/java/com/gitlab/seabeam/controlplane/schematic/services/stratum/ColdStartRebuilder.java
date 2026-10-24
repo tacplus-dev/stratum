@@ -16,7 +16,6 @@ import io.grpc.Channel;
 
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.s2sm.Handler;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.s2sm.ServiceManager;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.s2sm.subscribe.AgentsensorAgentEventBusEventStreamSubscriber;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.eventbus.AdminGrpc;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.services.eventbus.Eventbus;
 
@@ -156,18 +155,11 @@ final class ColdStartRebuilder {
         Supplier<Channel> channelSupplier = () -> sm.resolveService("eventbus");
         Supplier<CallCredentials> credsSupplier = () -> sm.callCredentialsForAudience("eventbus");
 
-        // Only agentsensor remains. gitlabconnector, llmsensor and scmsensor were
-        // vservices defined in proto-app -- the APPLICATION layer -- and a platform
-        // service replaying application event streams is exactly the coupling the
-        // schematic/application split removes. Their topics move with the app.
-        String topic = "agentsensor.event_stream";
-        startTopicReplay(topic, channelSupplier, credsSupplier,
-                new AgentsensorAgentEventBusEventStreamSubscriber(channelSupplier, credsSupplier, CONSUMER_GROUP),
-                (sub) -> sub.subscribe((event, meta) -> replayRecord(topic, handler, event,
-                        new Handler.SubscriptionMeta(meta.offset, meta.timestamp, meta.key, meta.topic, meta.partition),
-                        onCaughtUp), false, false, 0),
-                onCaughtUp);
-
+        // No platform topic is replayed here any more: the last one was
+        // agentsensor's event stream, and agentsensor is gone. Application
+        // record topics reach the generated stores on their own subscriptions.
+        // With nothing to wait for, the store is caught up as soon as it opens.
+        onCaughtUp.run();
         log.info("STARTUP REPLAY: started {} subscription threads from offset 0", replayThreads.size());
     }
 

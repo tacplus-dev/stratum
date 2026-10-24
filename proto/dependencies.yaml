@@ -37,6 +37,8 @@ lang:
             gopkg.in/yaml.v3: v3.0.1
     java:
         dependencies:
+            # stratum ships its hot redo archive to GCS; this pin is what makes tacplus emit GcsArchiveSink.
+            com.google.cloud:google-cloud-storage: 2.69.0
             ch.qos.logback:logback-classic: 1.5.29
             ch.qos.logback:logback-core: 1.5.29
             com.google.code.gson:gson: 2.13.2

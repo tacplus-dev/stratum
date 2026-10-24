@@ -28,8 +28,6 @@ import com.hazelcast.map.IMap;
 import com.hazelcast.query.Predicate;
 import com.hazelcast.query.Predicates;
 
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor.AgentEvent;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vservices.agentsensor.Agentsensor.SensorEventType;
 
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.checkpoint.Checkpoint;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.checkpoint.DailyCheckpoint;
@@ -39,7 +37,6 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.disk.ClassName
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.disk.RecordDisk;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hazelcast.StratumMapConfig;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hazelcast.StratumRole;
-import com.gitlab.seabeam.controlplane.schematic.services.stratum.hazelcast.StratumEventTypeExtractor;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotArchive;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotDataset;
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.hot.HotRedoLogs;
@@ -55,11 +52,10 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.sy
 /**
  * EventStore manages the Hazelcast IMap that backs stratum's hot event store.
  *
- * Data model: IMap<event_id, AgentEvent> named "events".
+ * Data model: one typed Hazelcast IMap per record topic (StratumEventStores).
  *
  * Indexes (via ValueExtractor or Hazelcast native attribute reflection):
  *   - SORTED:  epoch, timestampMs
- *   - HASH:    spiffeId, sessionId, agentId, eventTypeValue (StratumEventTypeExtractor)
  *
  * Record residency:
  *   One clock per record type, and Hazelcast runs it: per-entry max-idle set
@@ -97,9 +93,6 @@ public class EventStore {
     private HazelcastInstance hz;
     // Generated, vservice-neutral write path: one typed IMap per EventBus topic.
     private final StratumEventStores stores = new StratumEventStores();
-    // Agent-specific read path: reads the same Hazelcast map the generated
-    // store writes for agentsensor.AgentEvent.
-    private IMap<String, AgentEvent> events;
     private HotRedoLogs hotLogs;
     private HotWrites hotWrites;
     /**
@@ -228,7 +221,7 @@ public class EventStore {
     }
 
     /**
-     * Initialises the Hazelcast member and the "events" IMap.
+     * Initialises the Hazelcast member and the record maps.
      *
      * @param cleanupIntervalSecs how often the daily checkpoint runs
      * @param seedMembers         list of "host:port" addresses for TCP/IP join;
@@ -277,7 +270,6 @@ public class EventStore {
         hotWrites = new HotWrites(hz, floorOverride);
         StratumMapConfig.withWriterQuorum(hz, "opening the hot maps", () -> {
             stores.init(hz, hotWrites);
-            events = hz.getMap(StratumMapConfig.MAP_NAME);
             return null;
         }, Backoff.THREAD_SLEEPER);
 
@@ -497,50 +489,9 @@ public class EventStore {
     // Query
     // -----------------------------------------------------------------------
 
-    public Optional<AgentEvent> getByKey(String eventId) {
-        requireHotReadable();
-        return Optional.ofNullable(events.get(eventId));
-    }
 
-    /**
-     * Executes a filter query using the SqlParser to extract predicates.
-     * Results are sorted by (timestampMs DESC, event_id ASC).
-     */
-    public List<AgentEvent> query(SqlPredicates preds) {
-        requireHotReadable();
-        Predicate<String, AgentEvent> predicate = buildPredicate(preds);
-        Collection<AgentEvent> raw = (predicate != null) ? events.values(predicate) : events.values();
-        List<AgentEvent> sorted = new ArrayList<>(raw);
-        sorted.sort(Comparator
-                .comparingLong(AgentEvent::getTimestampMs).reversed()
-                .thenComparing(AgentEvent::getEventId));
-        return sorted;
-    }
 
     @SuppressWarnings("unchecked")
-    private Predicate<String, AgentEvent> buildPredicate(SqlPredicates p) {
-        List<Predicate<String, AgentEvent>> parts = new ArrayList<>();
-
-        // "spiffeId", not "spiffe_id": Hazelcast resolves a predicate attribute
-        // through the getter, and protoc emits getSpiffeId(). The snake_case form
-        // matched no accessor, so this predicate could never evaluate.
-        if (p.spiffeId != null) parts.add(Predicates.equal("spiffeId", p.spiffeId));
-        if (p.sessionId != null) parts.add(Predicates.equal("sessionId", p.sessionId));
-        if (p.agentId   != null) parts.add(Predicates.equal("agentId", p.agentId));
-        if (p.eventType != null) parts.add(Predicates.equal(
-                StratumEventTypeExtractor.ATTRIBUTE_NAME, p.eventType.getNumber()));
-        if (p.startMs > 0 && p.endMs > 0) {
-            parts.add(Predicates.between("timestampMs", p.startMs, p.endMs));
-        } else if (p.startMs > 0) {
-            parts.add(Predicates.greaterEqual("timestampMs", p.startMs));
-        } else if (p.endMs > 0) {
-            parts.add(Predicates.lessEqual("timestampMs", p.endMs));
-        }
-
-        if (parts.isEmpty()) return null;
-        if (parts.size() == 1) return parts.get(0);
-        return Predicates.and(parts.toArray(new Predicate[0]));
-    }
 
     // -----------------------------------------------------------------------
     // Stats
@@ -710,75 +661,5 @@ public class EventStore {
         if (recordDisk != null) recordDisk.close();
     }
 
-    // -----------------------------------------------------------------------
-    // SQL predicate extraction (shared with StratumHandler for load_by_sql)
-    // -----------------------------------------------------------------------
 
-    static final class SqlPredicates {
-        String          spiffeId;
-        String          sessionId;
-        String          agentId;
-        SensorEventType eventType;
-        long            startMs;
-        long            endMs;
-    }
-
-    static final class SqlParser {
-        static SqlPredicates parse(String sql) {
-            SqlPredicates p = new SqlPredicates();
-            if (sql == null) return p;
-            String upper = sql.toUpperCase();
-
-            p.spiffeId      = extractStringPredicate(sql, "spiffe_id");
-            p.sessionId = extractStringPredicate(sql, "session_id");
-            p.agentId   = extractStringPredicate(sql, "agent_id");
-
-            // event_type = 'SENSOR_EVENT_TYPE_FILE_READ'
-            String etVal = extractStringPredicate(sql, "event_type");
-            if (etVal != null) {
-                try { p.eventType = SensorEventType.valueOf(etVal); } catch (IllegalArgumentException ignored) {}
-            }
-
-            // timestamp_ms BETWEEN <start> AND <end>
-            int betweenIdx = upper.indexOf("TIMESTAMP_MS BETWEEN");
-            if (betweenIdx >= 0) {
-                String rest = sql.substring(betweenIdx + "TIMESTAMP_MS BETWEEN".length()).trim();
-                String[] parts = rest.split("(?i)\\s+AND\\s+", 2);
-                if (parts.length == 2) {
-                    try { p.startMs = Long.parseLong(parts[0].trim()); } catch (NumberFormatException ignored) {}
-                    try {
-                        p.endMs = Long.parseLong(parts[1].trim().split("\\s+")[0]);
-                    } catch (NumberFormatException ignored) {}
-                }
-            }
-
-            // timestamp_ms > <start>
-            int gtIdx = upper.indexOf("TIMESTAMP_MS >");
-            if (gtIdx >= 0 && p.startMs == 0) {
-                String rest = sql.substring(gtIdx + "TIMESTAMP_MS >".length()).trim();
-                if (rest.startsWith("=")) rest = rest.substring(1).trim();
-                try { p.startMs = Long.parseLong(rest.split("\\s+")[0]); } catch (NumberFormatException ignored) {}
-            }
-
-            // timestamp_ms < <end>
-            int ltIdx = upper.indexOf("TIMESTAMP_MS <");
-            if (ltIdx >= 0 && p.endMs == 0) {
-                String rest = sql.substring(ltIdx + "TIMESTAMP_MS <".length()).trim();
-                if (rest.startsWith("=")) rest = rest.substring(1).trim();
-                try { p.endMs = Long.parseLong(rest.split("\\s+")[0]); } catch (NumberFormatException ignored) {}
-            }
-
-            return p;
-        }
-
-        private static String extractStringPredicate(String sql, String field) {
-            int idx = sql.toUpperCase().indexOf(field.toUpperCase() + " = '");
-            if (idx < 0) idx = sql.toUpperCase().indexOf(field.toUpperCase() + "='");
-            if (idx < 0) return null;
-            int start = sql.indexOf('\'', idx) + 1;
-            int end   = sql.indexOf('\'', start);
-            if (start <= 0 || end < 0) return null;
-            return sql.substring(start, end);
-        }
-    }
 }

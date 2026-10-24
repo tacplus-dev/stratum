@@ -31,7 +31,7 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.
 /**
  * StratumMapConfig builds the Hazelcast Config for the stratum hot event store.
  *
- * Data model: IMap<event_id, AgentEvent> named "events" in OBJECT format.
+ * Data model: one typed IMap per record topic, as the generator emits them.
  *
  * Indexes:
  *   SORTED: timestampMs        — range scans for retention cleanup and time-range queries
@@ -74,12 +74,6 @@ public final class StratumMapConfig {
         return value;
     }
 
-    // Must equal the generated StratumEventStores map name for agentsensor.AgentEvent
-    // (EventStoreGenerator.mapName = "<package>.<EventType>"). This map is shared:
-    // the generated store writes it, the (agent-specific, read-path) query reads it.
-    // The OBJECT format + agent indexes below are read-path concerns and remain
-    // hand-written until the read side is also generated.
-    public static final String MAP_NAME     = "agentsensor.AgentEvent";
 
     /** Must match the chart's HasHazelcast containerPort (kernel's convention). */
     public static final int HAZELCAST_PORT = 5001;
@@ -221,8 +215,8 @@ public final class StratumMapConfig {
         }
 
         // The durability floor is a property of the STORE, not of one record type, so
-        // it is applied to every typed map the generator emits — not to MAP_NAME
-        // alone. It used to be MAP_NAME alone, and the other three maps
+        // it is applied to every typed map the generator emits — not to one map
+        // alone. It used to be the agentsensor map alone, and the other three maps
         // (scotty.ScottyActivity, accountingrecord.AccountingRecord,
         // agentsensor.AgentSessionState) therefore took Hazelcast's defaults: one
         // synchronous backup, which coincidentally matches a floor of 2 and stops
@@ -412,7 +406,7 @@ public final class StratumMapConfig {
      *
      * <p>Named per map rather than declared once as a wildcard: Hazelcast resolves a
      * map to the most specific config, so a wildcard entry alongside the named
-     * MAP_NAME entry below would leave MAP_NAME reading only its own — the exact
+     * per-map entry below would leave that map reading only its own — the exact
      * split that produced this bug. Naming every map keeps one code path.
      *
      * @param backupCount synchronous in-memory replicas beyond the primary. The same
@@ -502,33 +496,6 @@ public final class StratumMapConfig {
             mapCfg.setMapStoreConfig(store);
         }
 
-        if (!MAP_NAME.equals(name)) {
-            return mapCfg;
-        }
-
-        // events map: OBJECT in-memory format so Hazelcast reflects directly on AgentEvent
-        // getters for predicate evaluation — no serialization overhead for in-JVM queries.
-        // Read-path concerns, and still hand-written because the read side is not
-        // generated; they attach to this one map only.
-        mapCfg.setInMemoryFormat(InMemoryFormat.OBJECT);
-
-        // Attribute names are JavaBean PROPERTY names, not proto field names.
-        // Hazelcast resolves an index attribute by reflecting for a getter, so
-        // "spiffe_id" looks for getSpiffe_id() on the protobuf class, which does
-        // not exist — protoc emits getSpiffeId(). That single snake_case name
-        // among three camelCase siblings made EVERY put on this map throw
-        //
-        //   IllegalArgumentException: There is no suitable accessor for 'spiffe_id'
-        //
-        // so no AgentEvent was ever stored, the subscriber retried the same
-        // failure every second forever, and the record query returned an empty
-        // set that looked like "nothing has been published yet".
-        mapCfg.addIndexConfig(new IndexConfig(IndexType.SORTED, "timestampMs"));
-        mapCfg.addIndexConfig(new IndexConfig(IndexType.HASH,   "spiffeId"));
-        mapCfg.addIndexConfig(new IndexConfig(IndexType.HASH,   "sessionId"));
-        mapCfg.addIndexConfig(new IndexConfig(IndexType.HASH,   "agentId"));
-        mapCfg.addIndexConfig(new IndexConfig(IndexType.HASH,
-                StratumEventTypeExtractor.ATTRIBUTE_NAME));
         return mapCfg;
     }
 }
