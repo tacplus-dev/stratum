@@ -46,9 +46,9 @@ public final class EventTopicDiscovery {
 
     /** A discovered EventBus topic event type. */
     public static final class TopicEvent {
-        /** Proto package of the vservice, e.g. "agentsensor". */
+        /** Proto package of the vservice, e.g. "letsencrypt". */
         public final String protoPackage;
-        /** Simple event message name, e.g. "AgentEvent". */
+        /** Simple event message name, e.g. "LetsEncryptCert". */
         public final String eventType;
         /** Relative proto path, e.g. "vservices/agent-sensor.proto". */
         public final String protoRelPath;
@@ -178,9 +178,9 @@ public final class EventTopicDiscovery {
          * The C2S plane is untouched and still delegates to those methods.
          */
         public final boolean isPrivate;
-        /** Java package from option java_package, e.g. "...model.types.vservices.agentsensor". */
+        /** Java package from option java_package, e.g. "...model.types.services.letsencrypt". */
         public final String javaPackage;
-        /** Java outer class name from option java_outer_classname, e.g. "Agentsensor". */
+        /** Java outer class name from option java_outer_classname, e.g. "Letsencrypt". */
         public final String outerClassName;
 
         public TopicEvent(String protoPackage, String eventType, String protoRelPath,

@@ -17,7 +17,7 @@ import com.google.protobuf.Message;
  */
 public final class HotDataset {
 
-    /** Hazelcast map name, e.g. "agentsensor.AgentEvent". */
+    /** Hazelcast map name, e.g. "letsencrypt.LetsEncryptCert". */
     public final String mapName;
     /**
      * Distinct nodes that must hold a value before the write is acked — the

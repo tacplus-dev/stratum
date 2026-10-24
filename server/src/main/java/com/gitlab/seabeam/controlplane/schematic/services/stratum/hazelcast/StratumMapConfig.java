@@ -216,9 +216,8 @@ public final class StratumMapConfig {
 
         // The durability floor is a property of the STORE, not of one record type, so
         // it is applied to every typed map the generator emits — not to one map
-        // alone. It used to be the agentsensor map alone, and the other three maps
-        // (scotty.ScottyActivity, accountingrecord.AccountingRecord,
-        // agentsensor.AgentSessionState) therefore took Hazelcast's defaults: one
+        // alone. It used to be one hand-named map alone, and the other record maps
+        // of that build therefore took Hazelcast's defaults: one
         // synchronous backup, which coincidentally matches a floor of 2 and stops
         // matching the moment the floor moves, and NO split-brain protection at all,
         // so a minority partition accepted their writes locally. The "2 durable

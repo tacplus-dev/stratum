@@ -155,8 +155,8 @@ final class ColdStartRebuilder {
         Supplier<Channel> channelSupplier = () -> sm.resolveService("eventbus");
         Supplier<CallCredentials> credsSupplier = () -> sm.callCredentialsForAudience("eventbus");
 
-        // No platform topic is replayed here any more: the last one was
-        // agentsensor's event stream, and agentsensor is gone. Application
+        // No platform topic is replayed here any more: the last one went with
+        // the sensor vservice that published it. Application
         // record topics reach the generated stores on their own subscriptions.
         // With nothing to wait for, the store is caught up as soon as it opens.
         onCaughtUp.run();

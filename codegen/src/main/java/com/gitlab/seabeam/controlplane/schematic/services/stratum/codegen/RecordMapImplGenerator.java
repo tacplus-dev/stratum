@@ -258,9 +258,9 @@ public final class RecordMapImplGenerator {
         w.println("    }");
 
         for (EventTopicDiscovery.TopicEvent e : records) {
-            String t = e.eventType;      // e.g. AgentEvent
+            String t = e.eventType;      // e.g. LetsEncryptCert
             String fqn = fqn(e);          // typed FQN
-            String acc = field(e);        // stores accessor, e.g. agentsensorAgentEvent
+            String acc = field(e);        // stores accessor, e.g. letsencryptLetsEncryptCert
             String keyGetter = "get" + pascal(e.recordKey);
             // Every (spec.record) carries a (spec.store_namespace) field — tacplus
             // refuses to generate one that does not. Without it there is no tenant to

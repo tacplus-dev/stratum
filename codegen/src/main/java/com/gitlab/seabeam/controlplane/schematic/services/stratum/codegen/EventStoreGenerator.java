@@ -249,7 +249,7 @@ public final class EventStoreGenerator {
 
     // ----- naming helpers -----
 
-    /** The emitted per-record durability-floor constant, e.g. MIN_DURABLE_COPIES_AGENTSENSOR_AGENT_EVENT. */
+    /** The emitted per-record durability-floor constant, e.g. MIN_DURABLE_COPIES_LETSENCRYPT_LETS_ENCRYPT_CERT. */
     private static String floorConst(EventTopicDiscovery.TopicEvent e) {
         return "MIN_DURABLE_COPIES_" + mapName(e).replace('.', '_')
                 .replaceAll("([a-z0-9])([A-Z])", "$1_$2").toUpperCase(java.util.Locale.ROOT);
@@ -286,12 +286,12 @@ public final class EventStoreGenerator {
         return e.javaPackage + "." + e.outerClassName + "." + e.eventType;
     }
 
-    /** Hazelcast map name, e.g. "agentsensor.AgentEvent". */
+    /** Hazelcast map name, e.g. "letsencrypt.LetsEncryptCert". */
     static String mapName(EventTopicDiscovery.TopicEvent e) {
         return e.protoPackage + "." + e.eventType;
     }
 
-    /** Field/accessor identifier, e.g. "agentsensorAgentEvent". */
+    /** Field/accessor identifier, e.g. "letsencryptLetsEncryptCert". */
     private static String field(EventTopicDiscovery.TopicEvent e) {
         return e.protoPackage + e.eventType;
     }
