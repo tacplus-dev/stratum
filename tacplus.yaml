@@ -3,6 +3,13 @@ language: java
 pkg: com.gitlab.seabeam.controlplane.schematic.services.stratum
 output-dir: model/target/generated-sources
 src: proto
+# ColdStartRebuilder and the codegen's EventTopicDiscovery read eventbus
+# types. letsencrypt is only the record fixture the server tests use
+# (LetsEncryptCert); stratum should carry a fixture record of its own, and
+# then this entry goes.
+depends:
+  - eventbus
+  - letsencrypt
 header: |
   Copyright (c) 2026 Jody Scott
   SPDX-License-Identifier: Apache-2.0
