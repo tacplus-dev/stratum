@@ -76,7 +76,7 @@ public final class RecordMapImplGenerator {
         w.println();
         w.println("import java.util.ArrayList;");
         w.println("import java.util.UUID;");
-        w.println("import java.util.concurrent.ConcurrentHashMap;");
+        w.println("import java.util.Map;");
         w.println("import java.util.function.BooleanSupplier;");
         w.println("import java.util.function.Supplier;");
         w.println("import io.grpc.stub.StreamObserver;");
@@ -105,19 +105,25 @@ public final class RecordMapImplGenerator {
         w.println("    // life of the instance.");
         w.println("    private final BooleanSupplier hotReadable;");
         w.println("    // query_id -> the registered query: the opening caller's filter PLUS the");
-        w.println("    // namespace the handle is pinned to.");
-        w.println("    private final ConcurrentHashMap<String, Handle> queries = new ConcurrentHashMap<>();");
+        w.println("    // namespace the handle is pinned to. The registry is a map EVERY stratum");
+        w.println("    // node shares (a Hazelcast map in production, StratumHandler supplies it):");
+        w.println("    // a client reaches stratum through a connection that fails over between");
+        w.println("    // nodes at any time, so a handle known to one node alone was a handle");
+        w.println("    // that vanished mid-query. Resolved per call, as the stores are.");
+        w.println("    private final Supplier<Map<String, Handle>> registry;");
         w.println("    // Held across the count-then-put in openHandle, so the per-namespace cap");
         w.println("    // is a bound and not a best effort. Never held across a store scan.");
         w.println("    private final Object openLock = new Object();");
         w.println();
         w.println("    public " + CLASS_NAME + "(Supplier<StratumEventStores> storesSupplier,");
-        w.println("            BooleanSupplier hotReadable) {");
+        w.println("            BooleanSupplier hotReadable, Supplier<Map<String, Handle>> registry) {");
         w.println("        this.storesSupplier = storesSupplier;");
         w.println("        this.hotReadable = hotReadable;");
+        w.println("        this.registry = registry;");
         w.println("    }");
         w.println();
         w.println("    private StratumEventStores stores() { return storesSupplier.get(); }");
+        w.println("    private Map<String, Handle> queries() { return registry.get(); }");
         w.println();
         w.println("    /**");
         w.println("     * Refuses a read until every reachable instance has replayed its redo log.");
@@ -145,13 +151,16 @@ public final class RecordMapImplGenerator {
         w.println("     * deliberately not a (spec.query_field): the boundary is not a predicate the");
         w.println("     * caller gets to write.");
         w.println("     */");
-        w.println("    private static final class Handle {");
+        w.println("    public static final class Handle implements java.io.Serializable {");
+        w.println("        private static final long serialVersionUID = 1L;");
+        w.println("        /** The record type the handle was opened over (its proto FQN). */");
+        w.println("        final String type;");
         w.println("        /** The opening caller's verified namespace claim. */");
         w.println("        final String namespace;");
         w.println("        /** False for a /system caller, which keeps this plane's fleet-wide read. */");
         w.println("        final boolean pinned;");
-        w.println("        /** The caller's typed filter, or Boolean.TRUE for a filterless record type. */");
-        w.println("        final Object filter;");
+        w.println("        /** The caller's typed filter, serialized; empty for a filterless record type. */");
+        w.println("        final byte[] filter;");
         w.println("        /**");
         w.println("         * The soft-delete escape hatch, off by default.");
         w.println("         *");
@@ -164,7 +173,8 @@ public final class RecordMapImplGenerator {
         w.println("         */");
         w.println("        final boolean includeDeleted;");
         w.println();
-        w.println("        Handle(String namespace, Object filter, boolean includeDeleted) {");
+        w.println("        Handle(String type, String namespace, byte[] filter, boolean includeDeleted) {");
+        w.println("            this.type = type;");
         w.println("            this.namespace = namespace;");
         w.println("            this.pinned = !namespace.startsWith(\"/system\");");
         w.println("            this.filter = filter;");
@@ -197,10 +207,10 @@ public final class RecordMapImplGenerator {
         w.println("     * across both caller surfaces, and answering \"exists, but not yours\" would");
         w.println("     * make the registry an existence oracle for other tenants' handles.");
         w.println("     */");
-        w.println("    private Handle requireQuery(Caller caller, String queryId) throws ProtoException {");
+        w.println("    private Handle requireQuery(Caller caller, String type, String queryId) throws ProtoException {");
         w.println("        String ns = callerNamespace(caller);");
-        w.println("        Handle h = queries.get(queryId);");
-        w.println("        if (h == null || !h.namespace.equals(ns)) {");
+        w.println("        Handle h = queries().get(queryId);");
+        w.println("        if (h == null || !h.type.equals(type) || !h.namespace.equals(ns)) {");
         w.println("            throw new ProtoException(ProtoException.NOT_FOUND, \"unknown query_id: \" + queryId);");
         w.println("        }");
         w.println("        return h;");
@@ -237,11 +247,12 @@ public final class RecordMapImplGenerator {
         w.println("     * approximation, since two concurrent opens that each read cap-1 would");
         w.println("     * otherwise both be admitted.");
         w.println("     */");
-        w.println("    private String openHandle(String ns, Object filter, boolean includeDeleted) throws ProtoException {");
+        w.println("    private String openHandle(String type, String ns, byte[] filter, boolean includeDeleted) throws ProtoException {");
         w.println("        String qid = UUID.randomUUID().toString();");
+        w.println("        // The lock bounds this node's opens; the count is over the shared registry.");
         w.println("        synchronized (openLock) {");
         w.println("            int open = 0;");
-        w.println("            for (Handle h : queries.values()) {");
+        w.println("            for (Handle h : queries().values()) {");
         w.println("                if (h.namespace.equals(ns)) {");
         w.println("                    open++;");
         w.println("                }");
@@ -252,7 +263,7 @@ public final class RecordMapImplGenerator {
         w.println("                                + \" handles, the maximum of \" + MAX_OPEN_QUERIES_PER_NAMESPACE");
         w.println("                                + \"; close one with delete<T>Query before opening another\");");
         w.println("            }");
-        w.println("            queries.put(qid, new Handle(ns, filter, includeDeleted));");
+        w.println("            queries().put(qid, new Handle(type, ns, filter, includeDeleted));");
         w.println("        }");
         w.println("        return qid;");
         w.println("    }");
@@ -275,6 +286,7 @@ public final class RecordMapImplGenerator {
             String nsGetter = "get" + pascal(e.storeNamespaceField);
             boolean hasFilter = !e.queryFields.isEmpty();
             String filterTy = msgs + "." + t + "Filter";
+            String parseFn = "parse" + t + "Filter";
             String matchFn = lower("Match" + t);
             // Java expressions for "does record ev match the handle's predicate".
             // The soft-delete exclusion. For a filterable type it rides INSIDE
@@ -373,8 +385,22 @@ public final class RecordMapImplGenerator {
             // not depend on the handle being valid.
             String gate = "        requireHotReadable();";
             String bindFilter = gate + "\n"
-                    + "        Handle h = requireQuery(caller, req.getQueryId());"
-                    + (hasFilter ? "\n        " + filterTy + " f = (" + filterTy + ") h.filter;" : "");
+                    + "        Handle h = requireQuery(caller, \"" + fqn + "\", req.getQueryId());"
+                    + (hasFilter ? "\n        " + filterTy + " f = " + parseFn + "(h);" : "");
+
+            // The handle's filter, typed again. A handle lives in a map every node
+            // shares, so its filter is bytes; a filter that will not parse is a
+            // registry entry this build did not write.
+            if (hasFilter) {
+                w.println();
+                w.println("    private static " + filterTy + " " + parseFn + "(Handle h) throws ProtoException {");
+                w.println("        try {");
+                w.println("            return " + filterTy + ".parseFrom(h.filter);");
+                w.println("        } catch (com.google.protobuf.InvalidProtocolBufferException ex) {");
+                w.println("            throw new ProtoException(ProtoException.INTERNAL, \"query handle filter: \" + ex.getMessage());");
+                w.println("        }");
+                w.println("    }");
+            }
 
             // create<T>Query — register the filter under a fresh handle.
             w.println();
@@ -382,8 +408,8 @@ public final class RecordMapImplGenerator {
             w.println("    public " + msgs + ".QueryHandle " + lower("Create" + t + "Query")
                     + "(Caller caller, " + msgs + ".Open" + t + "QueryRequest req) throws ProtoException {");
             w.println("        String ns = callerNamespace(caller);");
-            w.println("        String qid = openHandle(ns, "
-                    + (hasFilter ? "req.getFilter()" : "Boolean.TRUE") + ", req.getIncludeDeleted());");
+            w.println("        String qid = openHandle(\"" + fqn + "\", ns, "
+                    + (hasFilter ? "req.getFilter().toByteArray()" : "new byte[0]") + ", req.getIncludeDeleted());");
             w.println("        return " + msgs + ".QueryHandle.newBuilder().setQueryId(qid).build();");
             w.println("    }");
 
@@ -435,13 +461,43 @@ public final class RecordMapImplGenerator {
             w.println("        return StratumHandler.pageSorted(matches, page, ev -> java.util.List.of(ev." + keyGetter + "()));");
             w.println("    }");
 
+            // get<T>Rows — the DIRECT read: filter in, rows out, no handle and no
+            // state on any node. For one row or a handful; a result set is for
+            // large data. Rows sorted by record key, bounded by limit (default 100,
+            // at most 1000), with the total and whether the bound cut it.
+            w.println();
+            overrideUnlessPrivate(w, e);
+            w.println("    public " + msgs + ".Get" + t + "RowsResponse " + lower("Get" + t + "Rows")
+                    + "(Caller caller, " + msgs + ".Get" + t + "RowsRequest req) throws ProtoException {");
+            w.println(gate);
+            w.println("        String ns = callerNamespace(caller);");
+            w.println("        Handle h = new Handle(\"" + fqn + "\", ns, new byte[0], req.getIncludeDeleted());");
+            if (hasFilter) {
+                w.println("        " + filterTy + " f = req.getFilter();");
+            }
+            w.println("        java.util.List<" + fqn + "> matches = new ArrayList<>();");
+            w.println("        try {");
+            w.println(memoryMatchLeg);
+            w.println("        } catch (Exception ex) {");
+            w.println("            throw new ProtoException(ProtoException.INTERNAL, ex.getMessage());");
+            w.println("        }");
+            w.println("        matches.sort(java.util.Comparator.comparing(ev -> String.valueOf(ev." + keyGetter + "())));");
+            w.println("        int limit = req.getLimit() <= 0 ? 100 : Math.min(req.getLimit(), 1000);");
+            w.println("        int n = Math.min(limit, matches.size());");
+            w.println("        return " + msgs + ".Get" + t + "RowsResponse.newBuilder()");
+            w.println("                .addAllItems(matches.subList(0, n))");
+            w.println("                .setTotalCount(matches.size())");
+            w.println("                .setTruncated(n < matches.size())");
+            w.println("                .build();");
+            w.println("    }");
+
             // delete<T>Query — drop the handle.
             w.println();
             overrideUnlessPrivate(w, e);
             w.println("    public " + msgs + ".QueryStats " + lower("Delete" + t + "Query")
                     + "(Caller caller, " + msgs + ".QueryHandle req) throws ProtoException {");
-            w.println("        requireQuery(caller, req.getQueryId());");
-            w.println("        queries.remove(req.getQueryId());");
+            w.println("        requireQuery(caller, \"" + fqn + "\", req.getQueryId());");
+            w.println("        queries().remove(req.getQueryId());");
             w.println("        return " + msgs + ".QueryStats.newBuilder().setQueryId(req.getQueryId()).setSize(0).build();");
             w.println("    }");
 
@@ -454,13 +510,13 @@ public final class RecordMapImplGenerator {
                 w.println("    public " + msgs + ".QueryStats " + lower("Update" + t + "Query")
                         + "(Caller caller, " + msgs + ".Refine" + t + "Request req) throws ProtoException {");
                 w.println(gate);
-                w.println("        Handle h = requireQuery(caller, req.getQueryId());");
+                w.println("        Handle h = requireQuery(caller, \"" + fqn + "\", req.getQueryId());");
                 w.println("        " + filterTy + " f = req.getFilter();");
                 w.println("        // The namespace is the OPENING caller's and is carried over untouched:");
                 w.println("        // a refine replaces the predicate, never the boundary.");
                 w.println("        // include_deleted is replaced outright, like the filter it rides with:");
                 w.println("        // a refine restates the whole predicate.");
-                w.println("        queries.put(req.getQueryId(), new Handle(h.namespace, f, req.getIncludeDeleted()));");
+                w.println("        queries().put(req.getQueryId(), new Handle(h.type, h.namespace, f.toByteArray(), req.getIncludeDeleted()));");
                 w.println("        long n = 0;");
                 w.println("        try {");
                 w.println(memoryCountLeg);

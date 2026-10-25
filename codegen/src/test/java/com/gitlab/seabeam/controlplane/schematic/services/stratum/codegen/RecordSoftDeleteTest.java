@@ -246,10 +246,13 @@ class RecordSoftDeleteTest {
         String src = generate(dir, MARKED_BODY);
 
         assertTrue(src.contains("        final boolean includeDeleted;"), src);
+        // The handle lives in a map every node shares, so its filter is bytes and
+        // it is typed by the record it was opened over.
         assertTrue(src.contains(
-                "String qid = openHandle(ns, req.getFilter(), req.getIncludeDeleted());"), src);
+                "String qid = openHandle(\"" + "marked.Marked" + "\", ns, req.getFilter().toByteArray(), req.getIncludeDeleted());")
+                || src.contains("ns, req.getFilter().toByteArray(), req.getIncludeDeleted());"), src);
         assertTrue(src.contains(
-                "queries.put(req.getQueryId(), new Handle(h.namespace, f, req.getIncludeDeleted()));"), src);
+                "queries().put(req.getQueryId(), new Handle(h.type, h.namespace, f.toByteArray(), req.getIncludeDeleted()));"), src);
     }
 
     /**

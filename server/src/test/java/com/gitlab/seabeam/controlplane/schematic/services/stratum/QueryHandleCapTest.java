@@ -29,6 +29,9 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vs
  * can stay null and the test stays a unit test of the bound.
  */
 class QueryHandleCapTest {
+	/** The shared registry, in-process here; StratumHandler supplies a Hazelcast map. */
+	private final java.util.Map<String, StratumRecordMaps.Handle> registry = new java.util.concurrent.ConcurrentHashMap<>();
+
 
     private static final int CAP = StratumRecordMaps.MAX_OPEN_QUERIES_PER_NAMESPACE;
 
@@ -37,7 +40,7 @@ class QueryHandleCapTest {
     }
 
     private static StratumRecordMaps plane() {
-        return new StratumRecordMaps(() -> null, () -> true);
+        return new StratumRecordMaps(() -> null, () -> true, () -> registry);
     }
 
     private static String open(StratumRecordMaps plane, Caller c) throws ProtoException {

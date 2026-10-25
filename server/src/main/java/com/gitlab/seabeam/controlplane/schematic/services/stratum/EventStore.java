@@ -513,6 +513,9 @@ public class EventStore {
     /** The generated typed per-record hot stores — used by the RecordMap plane. */
     public StratumEventStores stores() { return stores; }
 
+    /** The member's Hazelcast instance, for the maps the record plane shares across nodes. */
+    public HazelcastInstance hazelcast() { return hz; }
+
     // -----------------------------------------------------------------------
     // Daily checkpoint
     // -----------------------------------------------------------------------

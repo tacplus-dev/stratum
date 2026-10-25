@@ -71,6 +71,9 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vs
  * slot, the claim extraction, the wrapper, the handler — is the shipped path.
  */
 class TwoTenantQueryScopeE2ETest {
+	/** The shared registry, in-process here; StratumHandler supplies a Hazelcast map. */
+	private final java.util.Map<String, StratumRecordMaps.Handle> registry = new java.util.concurrent.ConcurrentHashMap<>();
+
 
     private static final String TENANT_A = "/tenants/a";
     private static final String TENANT_B = "/tenants/b";
@@ -167,7 +170,7 @@ class TwoTenantQueryScopeE2ETest {
 
         server = NettyServerBuilder.forPort(0)
                 .addService(ServerInterceptors.intercept(
-                        new RecordMap(new StratumRecordMaps(() -> stores, () -> true),
+                        new RecordMap(new StratumRecordMaps(() -> stores, () -> true, () -> registry),
                                 authorizer),
                         Authorizer.headerCaptureInterceptor()))
                 .build()

@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Seabeam LLC. All rights reserved.
 package com.gitlab.seabeam.controlplane.schematic.services.stratum;
 
+import com.gitlab.seabeam.controlplane.schematic.services.stratum.hazelcast.StratumMapConfig;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -93,7 +95,11 @@ public class StratumHandler extends StratumVServiceBase {
                     () -> {
                         EventStore store = eventStore;
                         return store != null && store.hotReadable();
-                    });
+                    },
+                    // The query registry every node shares: a Hazelcast map, so a
+                    // handle opened on one node is served by whichever node the
+                    // client's connection fails over to.
+                    () -> eventStore.hazelcast().getMap(StratumMapConfig.RECORD_QUERIES_MAP));
         }
         return recordMaps;
     }

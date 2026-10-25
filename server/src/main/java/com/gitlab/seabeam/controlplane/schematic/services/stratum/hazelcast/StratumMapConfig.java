@@ -141,6 +141,9 @@ public final class StratumMapConfig {
      * @param seedMembers list of "host:port" addresses for TCP/IP join;
      *                    empty list → multicast (local dev only)
      */
+    /** The record query plane's open result sets, shared by every member (see StratumRecordMaps). */
+    public static final String RECORD_QUERIES_MAP = "stratum.record-queries";
+
     public static Config build(List<String> seedMembers) {
         return build(seedMembers, configuredMinDurableCopies() > 0
                 ? configuredMinDurableCopies()
@@ -277,6 +280,8 @@ public final class StratumMapConfig {
         // still recovering" could talk itself up to the floor on peers the majority
         // never saw finish.
         cfg.addMapConfig(coordinationMap(HotRestore.INFLIGHT_MAP, role));
+        // The record plane's open query handles: small, every node must see them.
+        cfg.addMapConfig(coordinationMap(RECORD_QUERIES_MAP, role));
 
         log.info("stratum member role={}; hot maps {}: deployment min_durable_copies={} counted over"
                 + " WRITER members, backupCount={} (memory redundancy, independent of durability),"
