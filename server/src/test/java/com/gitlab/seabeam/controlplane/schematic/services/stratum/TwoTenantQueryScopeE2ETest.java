@@ -72,7 +72,7 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vs
  */
 class TwoTenantQueryScopeE2ETest {
 	/** The shared registry, in-process here; StratumHandler supplies a Hazelcast map. */
-	private final java.util.Map<String, StratumRecordMaps.Handle> registry = new java.util.concurrent.ConcurrentHashMap<>();
+	private static final java.util.Map<String, StratumRecordMaps.Handle> registry = new java.util.concurrent.ConcurrentHashMap<>();
 
 
     private static final String TENANT_A = "/tenants/a";

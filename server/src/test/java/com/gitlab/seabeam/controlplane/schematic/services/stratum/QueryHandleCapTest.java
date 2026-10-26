@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.chassis.servicemanager.Caller;
@@ -29,9 +30,14 @@ import com.gitlab.seabeam.controlplane.schematic.services.stratum.model.types.vs
  * can stay null and the test stays a unit test of the bound.
  */
 class QueryHandleCapTest {
-	/** The shared registry, in-process here; StratumHandler supplies a Hazelcast map. */
-	private final java.util.Map<String, StratumRecordMaps.Handle> registry = new java.util.concurrent.ConcurrentHashMap<>();
+	/** The shared registry, in-process here; StratumHandler supplies a Hazelcast map. Static so the
+	 *  static plane() can hand it out; emptied before each test, since each fills a tenant to the cap. */
+	private static final java.util.Map<String, StratumRecordMaps.Handle> registry = new java.util.concurrent.ConcurrentHashMap<>();
 
+	@BeforeEach
+	void emptyRegistry() {
+		registry.clear();
+	}
 
     private static final int CAP = StratumRecordMaps.MAX_OPEN_QUERIES_PER_NAMESPACE;
 
