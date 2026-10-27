@@ -79,3 +79,6 @@
    `PERMISSION_DENIED: ... the caller presented no verified namespace claim` on a clean tree
    before this change and after it (identical failing set, 14 of 138). Left alone as out of scope.
    - **Question**: is that namespace-claim test fixture gap owned by someone already?
+   - **Update (2026-10-27, #13):** on main @ 5bac7e7 the full server suite passes (138 run, 0 failures,
+     8 skipped), `HotAgentEventE2ETest` and `PullAgentEventE2ETest` included: the failing set is gone, and
+     `just gates` now runs the tests.
