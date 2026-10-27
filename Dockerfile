@@ -18,7 +18,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.vendor="tacplus-dev" \
       org.opencontainers.image.title="stratum" \
-      org.opencontainers.image.description="Supervisor LLM stateful SQL workspace with Hazelcast and Apache Calcite"
+      org.opencontainers.image.description="Supervisor LLM stateful SQL workspace with Hazelcast"
 
 COPY --from=setup --chown=65532:65532 /var/lib/stratum /var/lib/stratum
 COPY server/target/stratum.jar /app/stratum.jar

@@ -7,7 +7,7 @@ import com.github.tacplusdev.stratum.model.s2sm.ServiceManager;
 /**
  * Entry point for the stratum service.
  * Supervisor LLM stateful SQL workspace — provides working-set maps,
- * a durable scratchpad, async job management, and a Calcite SQL engine.
+ * a durable scratchpad and async job management.
  */
 public class Main {
 

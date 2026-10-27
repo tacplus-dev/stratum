@@ -10,7 +10,7 @@
 	<artifactId>stratum-server</artifactId>
 	<packaging>jar</packaging>
 	<name>Stratum Server</name>
-	<description>Supervisor LLM stateful SQL workspace — Hazelcast + Apache Calcite + gRPC MCP tool surface</description>
+	<description>Supervisor LLM stateful SQL workspace — Hazelcast + gRPC MCP tool surface</description>
 	<dependencies>
 		<!-- Generated model code -->
 		<dependency>
@@ -21,10 +21,6 @@
 		<dependency>
 			<groupId>com.hazelcast</groupId>
 			<artifactId>hazelcast</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>org.apache.calcite</groupId>
-			<artifactId>calcite-core</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.apache.lucene</groupId>

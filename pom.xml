@@ -27,7 +27,6 @@
 		<shade-plugin.version>3.6.1</shade-plugin.version>
 		<exec-plugin.version>3.5.0</exec-plugin.version>
 		<hazelcast.version>5.5.0</hazelcast.version>
-		<calcite.version>1.37.0</calcite.version>
 		<lucene.version>10.2.1</lucene.version>
 		<google-cloud-storage.version>2.75.0</google-cloud-storage.version>
 		<jackson.version>2.18.12</jackson.version>
@@ -147,11 +146,6 @@
 				<version>${jackson.version}</version>
 				<type>pom</type>
 				<scope>import</scope>
-			</dependency>
-			<dependency>
-				<groupId>org.apache.calcite</groupId>
-				<artifactId>calcite-core</artifactId>
-				<version>${calcite.version}</version>
 			</dependency>
 			<!--
 			  The warm disk tier. lucene-core ALONE is the whole dependency: every

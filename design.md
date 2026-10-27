@@ -103,8 +103,7 @@ stratum provides the infrastructure for that persistence.
   - **Map-plane RPCs** (createMap, deleteMap, listMaps, getMapDetail,
     getMapSize, updateMapByIds, updateMapBySql, updateMapFilter, merge,
     executeMapQuery): delegated to `WorkingSetStore`, which manages
-    Hazelcast-backed working-set maps with idle TTL eviction. SQL filtering
-    and querying via `CalciteEngine`.
+    Hazelcast-backed working-set maps with idle TTL eviction.
 - **Events in**: record-bearing topics arrive via eventbus subscriptions;
   `handleEventStreamMessage` stores records and fans out AgentEvents to live
   session watchers. The 1.2-era RecordWatchHub fan-out is excised (no consumer).
