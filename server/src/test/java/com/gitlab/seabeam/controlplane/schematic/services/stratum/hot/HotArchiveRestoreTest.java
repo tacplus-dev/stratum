@@ -221,6 +221,8 @@ class HotArchiveRestoreTest {
 
     @Test
     void aRestoreLeavesAVolumeThatAlreadyHoldsALogAlone(@TempDir Path dir) throws Exception {
+        assumeFalse(StratumHotStores.datasets().isEmpty(),
+                "no record in this fleet declares (spec.store_epoch); the hot tier has nothing to log");
         HotDataset d = dataset();
         MemSink sink = new MemSink();
         hz = member("stratum-archive-nonempty");
