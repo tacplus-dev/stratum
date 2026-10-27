@@ -17,5 +17,16 @@ the looper then marks it `promoted` or `declined` here with the date.
   the nightly scan, not on the change that would have let them in. An audit step (OWASP dependency-check
   or `osv-scanner` over the resolved tree, failing on HIGH and above) would catch them before the push;
   #13's triage did not decide it, so it needs its own issue and a decision on the threshold.
+- **An image smoke test** (2026-10-27, #14): no gate builds the release image. #14 moved the base to
+  `java21-debian13` and was checked by hand: `docker build` with the real jar and launcher, then the
+  container started the same on debian12 and debian13 (gRPC health on the plaintext probe port 8444 answers
+  `NOT_SERVING`, 8443 is not up without a kernel state-store endpoint in the bootstrap config). A recipe that
+  builds the image and starts it against a stub state store until 8443 answers `SERVING` would turn that
+  into a check, and would cover the next base or JDK move (java25-debian13 is published).
+- **One SLF4J provider in the jar** (2026-10-27, #14): the server pulls in both logback and `slf4j-simple`
+  (root `pom.xml` dependencyManagement, `model/pom.xml`, `server/pom.xml`), so every start prints
+  `Class path contains multiple SLF4J providers`. Logback wins today, but the choice is classpath order. If
+  `slf4j-simple` is only there for tacplus's generated model, it should be test scope or excluded; check
+  what tacplus's dependency list expects first.
 
 ## Promoted / declined
