@@ -1,0 +1,250 @@
+= init
+> Bash gh issue view 3 --repo tacplus-dev/stratum --comments
+< (Bash completed with no output)
+> Bash gh issue view 3 --repo tacplus-dev/stratum --comments; echo "exit=$?"; gh issue view 3 --repo tacplus-dev/stratum --json title,body,state,labels,comments; echo "exit=$?"
+< exit=0 {"body":"Blocked-by: #1\n\n## What\n\nRelease this service by version, so fleets pin it by release line (tacplus-dev/tacplus#180), not by commit\n(Jody, 2026-10-27).\n\n- **Tags:** `vMAJOR.MINOR.PATCH` on main (and on `release/MAJOR.MINOR` branches for patches to an older\n  line). Start at *...
+> Bash gh issue view 1 --repo tacplus-dev/stratum --json title,body,state,comments,closedAt; ls; cat justfile tacplus.yaml; ls .github/workflows 2>/dev/null; git tag; git branch -a
+< {"body":"Blocked-by: tacplus-dev/tacplus#161\n\n## What\n\nDeclare this repository's tacplus floor: add `tacplus: \"2.4\"` to `tacplus.yaml`, regenerate with tacplus 2.4,\nand make the repository build and pass its gates on it.\n\n## Why\n\nThe repository loopers (github.com/tacplus-dev/looper) run ...
+= thinking_tokens
+= thinking_tokens
+> Bash cat Dockerfile; cat .gitlab-ci.yml; ls -a docs decisions; cat README.md | head -150; ls -a
+< # Stratum — Release Image # Distroless Java 21 base with no shell. # The launcher binary reads LAUNCH_CMD and supervises the java process.  # Pre-create /var/lib/stratum with correct ownership for nonroot (65532). FROM busybox AS setup RUN mkdir -p /var/lib/stratum/persistence  FROM gcr.io/distroles...
+= thinking_tokens
+= thinking_tokens
+> Bash gh issue view 180 --repo tacplus-dev/tacplus --json title,body,state,comments | head -c 8000; echo; gh repo list tacplus-dev --limit 50
+< {"body":"Blocked-by: #161\n\n## What\n\nFleets pin each service by **release line**, not by commit (Jody, 2026-10-27), the same rule as the tacplus\ncompiler floor (`MAJOR.MINOR`, always that line's latest patch).\n\n1. **`fleet.yaml` states intent:** each service names a line, e.g. `version: \"0.4\...
+I've read issue #3 and its blocker #1 (#1 is closed). Before writing anything, I'm checking whether a sibling service already has a release workflow I should follow.
+> Bash cd /tmp && for r in oauth mailbox kernel messaging llmproxy gateway eventbus registry operator opa letsencrypt kmaker blobstore launcher tenantecho people redo nsproxy coop pigeon doppelganger; do out=$(gh api repos/tacplus-dev/$r/contents/.github/workflows --jq '.[].name' 2>/dev/null); [ -n "$out" ...
+= task_started
+= task_notification
+< Exit code 1 oauth: {"message":"Not Found","documentation_url":"https://docs.github.com/rest/repos/contents#get-repository-content","status":"404"} mailbox: {"message":"Not Found","documentation_url":"https://docs.github.com/rest/repos/contents#get-repository-content","status":"404"} kernel: {"messag...
+= thinking_tokens
+= thinking_tokens
+llmproxy and nsproxy already have release workflows. Reading them now.
+> Bash cd /tmp && for r in llmproxy nsproxy; do echo "=== $r release.yml"; gh api repos/tacplus-dev/$r/contents/.github/workflows/release.yml --jq .content | base64 -d; echo "=== $r ci.yml"; gh api repos/tacplus-dev/$r/contents/.github/workflows/ci.yml --jq .content | base64 -d; done; gh api repos/tacplus-...
+< === llmproxy release.yml name: release  # On a version tag vX.Y.Z: run the gates on the tag, publish ghcr.io/tacplus-dev/llmproxy:X.Y.Z for linux/amd64 # and linux/arm64, move the line tag X.Y when this is the line's highest release (ci/release-tags.sh), and # create the GitHub release with the comm...
+= thinking_tokens
+= thinking_tokens
+llmproxy is the closest match: it runs `tacplus build`, uses the launcher, and has a tested release flow. Pulling its `ci/` scripts, Dockerfile, README release section and recent run results.
+> Bash cd /tmp && gh api repos/tacplus-dev/llmproxy/contents/ci --jq '.[].name'; for f in $(gh api repos/tacplus-dev/llmproxy/contents/ci --jq '.[].path'); do echo "=== $f"; gh api repos/tacplus-dev/llmproxy/contents/$f --jq .content | base64 -d; done; echo "=== Dockerfile"; gh api repos/tacplus-dev/llmpro...
+< release-image.sh release-notes.sh release-tags.sh tacplus.sh === ci/release-image.sh #!/usr/bin/env bash # Assembles the release image (.github/workflows/release.yml) from the Dockerfile, once per architecture, and # publishes the two as one multi-architecture image. # # Usage:  ci/release-image.sh ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n -A8 '<repositor\|<distributionManagement' pom.xml */pom.xml | head -60; cat .dockerignore .gitignore; ls archive-deps; gh api repos/tacplus-dev/llmproxy/contents/tests/release.rs --jq .content | base64 -d | head -150
+< pom.xml:34:	<repositories> pom.xml:35:		<repository> pom.xml-36-			<id>gitlab-maven</id> pom.xml-37-			<url>https://gitlab.com/api/v4/groups/131730651/-/packages/maven</url> pom.xml-38-		</repository> pom.xml-39-	</repositories> pom.xml:40:	<distributionManagement> pom.xml:41:		<repository> pom.xml-...
+= thinking_tokens
+= thinking_tokens
+> Bash ls ~/.m2 2>/dev/null; cat ~/.m2/settings.xml 2>/dev/null | sed 's/<password>.*</<password>REDACTED</'; ls ~/.m2/repository/com 2>/dev/null; find ~/.m2/repository -name '_remote.repositories' 2>/dev/null | xargs grep -l gitlab 2>/dev/null | head; which tacplus mvn java docker; env | grep -i -E 'tacpl...
+< /usr/local/bin/tacplus /usr/local/bin/mvn /opt/java/openjdk/bin/java /usr/local/bin/docker CI_PROJECT_NAMESPACE=… FF_USE_INIT_WITH_DOCKER_EXECUTOR=… CI_RUNNER_DESCRIPTION=… RUNNER_TEMP_PROJECT_DIR=… CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX=… CI_PROJECT_PATH=… CI_CONFIG_REF_URI=… CI_PROJECT_NAMESPACE_S...
+> Bash cat /usr/local/bin/tacplus | head -40; echo $TACPLUS_IMAGE
+< #!/usr/bin/env bash # Copyright (c) 2026 Jody Scott # SPDX-License-Identifier: Apache-2.0 # # tacplus, as the looper image provides it: not a binary, but the tacplus # compiler image for this repository's MAJOR.MINOR floor, always at that # line's latest patch (Jody 2026-10-26). The floor is the `ta...
+> Bash sed -n 40,200p /usr/local/bin/tacplus
+< cache="${LOOPER_WORK:-/work}/.tacplus-home" mkdir -p "$cache" tty=(); [[ -t 0 && -t 1 ]] && tty=(-t) exec docker run --rm -i "${tty[@]}" \   -u "$(id -u):$(id -g)" \   -e HOME="$cache" -e GH_TOKEN -e GITHUB_TOKEN \   -v "$root:$root" -v "$cache:$cache" -w "$PWD" \   "$image" tacplus "$@"
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash (just generate > /tmp/gen.log 2>&1; echo "rc=$?" >> /tmp/gen.log) ; tail -30 /tmp/gen.log
+= task_started
+= task_notification
+< 2026-10-27T16:20:07.019Z	DEBUG	Wrote Java library file	{"path": "x509/ImmutableCertChain.java"} 2026-10-27T16:20:07.019Z	DEBUG	Wrote Java library file	{"path": "x509/ImmutableCertChainTest.java"} 2026-10-27T16:20:07.019Z	DEBUG	Wrote Java library file	{"path": "x509/X509Helpers.java"} 2026-10-27T16:2...
+> Bash grep -i -E 'fetch|clone|github|registry|resolv|download|token' /tmp/gen.log | head -30; ls tacplus 2>/dev/null | head
+< 2026-10-27T16:19:23.383Z	INFO	loaded registry	{"path": "/builds/looper/stratum/checkout/proto/registry.yaml", "services": 1, "vservices": 1} 2026-10-27T16:19:23.383Z	INFO	using cached proto source	{"url": "https://github.com/tacplus-dev/registry.git", "cache": "/builds/looper/.tacplus-home/.tacplus/...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /tmp && gh api repos/tacplus-dev/llmproxy/contents/tacplus.yaml --jq .content | base64 -d; gh run view 40533843854 --repo tacplus-dev/llmproxy --log 2>/dev/null | grep -E 'proto source|resolved dependency|registry' | head; gh api orgs/tacplus-dev/actions/secrets --jq '.secrets[].name' 2>&1 | head...
+< tacplus: "2.4" language: rust # Rust crate is <last segment>-model, matching Cargo.toml (llmproxy-model). pkg: com.github.tacplusdev.llmproxy output-dir: target/generated-sources src: proto header: |   Copyright (c) 2026 Jody Scott   SPDX-License-Identifier: Apache-2.0 gates	Run ci/tacplus.sh build	...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /tmp && gh search issues --owner tacplus-dev "token private repos actions" --limit 15 --json repository,number,title,state 2>&1 | head -40; gh search code --owner tacplus-dev "secrets." --limit 20 --json repository,path 2>&1 | head -40
+< [] [] Shell cwd was reset to /builds/looper/stratum/checkout
+> Bash cd /tmp && for q in "GH_TOKEN" "release image" "Release: tag" "cross-repo" "TACPLUS_TOKEN"; do echo "== $q"; gh search issues --owner tacplus-dev "$q" --limit 15 --json repository,number,title,state --jq '.[] | "\(.repository.name)#\(.number) [\(.state)] \(.title)"' 2>&1; done
+= task_started
+= task_notification
+< == GH_TOKEN tacplus#191 [open] fetch layer: authenticate GitHub clones with GH_TOKEN (private registry), only to github.com looper#11 [open] tacplus wrapper: give the compiler container GitHub credentials (private registry clone fails) looper#10 [open] tacplus wrapper: compiler container cannot clon...
+= thinking_tokens
+= thinking_tokens
+The sibling release issues mailbox#2 and messaging#2 mention `GH_TOKEN`, so they may have hit this same problem. Reading them and tacplus#191.
+> Bash cd /tmp && for i in mailbox/2 messaging/2 tacplus/191; do echo "######## $i"; gh issue view ${i#*/} --repo tacplus-dev/${i%/*} --json body,labels,comments --jq '"LABELS: " + ([.labels[].name]|join(",")) + "\n" + .body + "\n---COMMENTS---\n" + ([.comments[] | .author.login + ": " + .body] | join("\n-...
+< ######## mailbox/2 LABELS: approved,needs-decision Blocked-by: #1  ## What  Release this service by version, so fleets pin it by release line (tacplus-dev/tacplus#180), not by commit (Jody, 2026-10-27).  - **Tags:** `vMAJOR.MINOR.PATCH` on main (and on `release/MAJOR.MINOR` branches for patches to a...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /tmp && gh issue view 6 --repo tacplus-dev/gateway --json labels,comments --jq '"LABELS: " + ([.labels[].name]|join(",")) + "\n" + ([.comments[] | .author.login + " " + .createdAt + ": " + .body] | join("\n-----\n"))' | tail -c 5000; gh api repos/tacplus-dev/stratum/actions/organization-secrets -...
+< LABELS: approved,needs-decision jodydadescott 2026-10-27T15:31:00Z: **Needs a decision before this can be built: the gateway's image is shaped by the fleet, so one release image can't serve every fleet as it stands.**  tacplus#180 item 4 says a fleet uses the service's published release image by dig...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash repo=$(mvn -q help:evaluate -Dexpression=settings.localRepository -DforceStdout 2>/dev/null); echo "local=$repo"; grep -rl 'gitlab-maven' "$repo" --include=_remote.repositories 2>/dev/null | head; grep -rh '<groupId>com.gitlab\|<groupId>com.seabeam' pom.xml */pom.xml | sort -u
+= task_started
+= task_notification
+< local=/root/.m2/repository 				<groupId>com.gitlab.seabeam.controlplane.schematic.services.stratum</groupId> 			<groupId>com.gitlab.seabeam.controlplane.schematic.services.stratum</groupId> 		<groupId>com.gitlab.seabeam.controlplane.schematic.services.stratum</groupId> 	<groupId>com.gitlab.seabeam.c...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cat > /tmp/comment.md <<'EOF' **Needs a decision before this can be built. I haven't committed or tagged anything.**  This is the same open question as mailbox#2, messaging#2 and gateway#6: **a CI credential that can read the private tacplus-dev repositories.**  ### Why stratum needs it Release CI h...
+< https://github.com/tacplus-dev/stratum/issues/3#issuecomment-6447338514 https://github.com/tacplus-dev/stratum/issues/3
+> Bash git status --short; /usr/local/bin/repo-looper --repo stratum --issue 3 --checkpoint "Stopped with needs-decision: release CI needs an org secret to read the private tacplus-dev repos that generation clones (same open question as mailbox#2, messaging#2, gateway#6). Nothing committed or tagged. Left ...
+< remote:      https://github.com/tacplus-dev/stratum/pull/new/looper/stratum-3         remote:  [2026-10-27T16:21:36Z] checkpoint of #3 (a step) pushed to looper/stratum-3:  2 files changed, 255 insertions(+)
+= thinking_tokens
+= thinking_tokens
+I stopped issue #3 without committing or tagging anything. It needs a decision only an org admin can make, so I commented on the issue and added the `needs-decision` label.
+
+**The blocker:** Release CI has to build the image from the tag, and the build first has to run `tacplus build`. When I ran it on main (tacplus 2.4.1), it cloned six private repos: `registry`, `eventbus`, `letsencrypt`, `kernel`, `stratum` and `opa`. In GitHub Actions the default `GITHUB_TOKEN` can only read stratum itself, and this repo has no other secret set. llmproxy's release works without one only because it has no private dependencies. mailbox#2, messaging#2 and gateway#6 are already waiting on this same question.
+
+**What I asked for:** one org secret (I suggested the name `TACPLUS_REGISTRY_TOKEN`). It would be a read-only token on the registry and the service repos that stratum generates from; because of `records: all`, that is in practice every service repo with a record. I asked what the secret should be called and whether this repo will be able to see it. The compiler fix that would let it use a token from the environment, tacplus#191, is also still open, so the workflow may need a git credential helper for now.
+
+**What I'll do once it exists:** follow llmproxy's working release flow, which my comment lists in full:
+- the gates in CI, plus a `just gates` recipe (the justfile has none);
+- the release workflow;
+- the scripts that pick the image tags and write the notes, with tests;
+- a "Releasing" section in the README;
+- then tag `v0.1.0` and dry-run `v0.1.1`.
+
+The build itself isn't the problem: none of stratum's Maven dependencies come from SeaBeam's GitLab package repository, which the pom still lists.
+
+I saved a checkpoint to `looper/stratum-3` saying what is done and what is left. It reported 2 files changed although the checkout had no changes, which I didn't look into. The issue is still open.
+= success: I stopped issue #3 without committing or tagging anything. It needs a decision only an org admin can make, so I commented on the issue and added the `needs-decision` label.
+
+**The blocker:** Release CI has to build the image from the tag, and the build first has to run `tacplus build`. When I ran it on main (tacplus 2.4.1), it cloned six private repos: `registry`, `eventbus`, `letsencrypt`, `kernel`, `stratum` and `opa`. In GitHub Actions the default `GITHUB_TOKEN` can only read stratum itself, and this repo has no other secret set. llmproxy's release works without one only because it has no private dependencies. mailbox#2, messaging#2 and gateway#6 are already waiting on this same question.
+
+**What I asked for:** one org secret (I suggested the name `TACPLUS_REGISTRY_TOKEN`). It would be a read-only token on the registry and the service repos that stratum generates from; because of `records: all`, that is in practice every service repo with a record. I asked what the secret should be called and whether this repo will be able to see it. The compiler fix that would let it use a token from the environment, tacplus#191, is also still open, so the workflow may need a git credential helper for now.
+
+**What I'll do once it exists:** follow llmproxy's working release flow, which my comment lists in full:
+- the gates in CI, plus a `just gates` recipe (the justfile has none);
+- the release workflow;
+- the scripts that pick the image tags and write the notes, with tests;
+- a "Releasing" section in the README;
+- then tag `v0.1.0` and dry-run `v0.1.1`.
+
+The build itself isn't the problem: none of stratum's Maven dependencies come from SeaBeam's GitLab package repository, which the pom still lists.
+
+I saved a checkpoint to `looper/stratum-3` saying what is done and what is left. It reported 2 files changed although the checkout had no changes, which I didn't look into. The issue is still open.
