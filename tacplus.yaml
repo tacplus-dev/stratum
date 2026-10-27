@@ -1,4 +1,5 @@
 language: java
+tacplus: "2.4"
 # pkg kept as copied so the hand-written code keeps compiling; moves with the packages later.
 pkg: com.gitlab.seabeam.controlplane.schematic.services.stratum
 output-dir: model/target/generated-sources
