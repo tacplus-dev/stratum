@@ -11,3 +11,5 @@ copy runs the launch fleet unchanged; new-design changes land here. Stratum stay
 
 Divergences: headers in tacplus.yaml (Jody Scott, Apache-2.0; LICENSE added); `src: proto` (this repo
 holds the service's own proto); `proto/registry.yaml` is a lock of github.com/tacplus-dev/registry.
+
+Ported through `864f70f247072405f78d703695dca06bcc2c220f` (the merge-base with SeaBeam `main`; `399b453` above is on SeaBeam's unpushed local branch `stratum-archive`, so the port scan cannot use it. Commits after the mark that the archive copy already carries are marked "already covered" on their port issue.)
