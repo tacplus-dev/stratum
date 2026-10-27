@@ -30,6 +30,7 @@
 		<calcite.version>1.37.0</calcite.version>
 		<lucene.version>10.2.1</lucene.version>
 		<google-cloud-storage.version>2.75.0</google-cloud-storage.version>
+		<jackson.version>2.18.12</jackson.version>
 	</properties>
 	<dependencyManagement>
 		<dependencies>
@@ -134,6 +135,18 @@
 				<groupId>com.google.cloud</groupId>
 				<artifactId>google-cloud-storage</artifactId>
 				<version>${google-cloud-storage.version}</version>
+			</dependency>
+			<!--
+			  google-cloud-storage brings jackson 2.18.3, which has HIGH advisories in
+			  jackson-core and jackson-databind. The BOM pins every jackson module on the
+			  latest patch of the same 2.18 line.
+			-->
+			<dependency>
+				<groupId>com.fasterxml.jackson</groupId>
+				<artifactId>jackson-bom</artifactId>
+				<version>${jackson.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
 			</dependency>
 			<dependency>
 				<groupId>org.apache.calcite</groupId>
