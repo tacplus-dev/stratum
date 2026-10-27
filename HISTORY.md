@@ -8,3 +8,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-10-27 looper issue No gates: justfile has no `gates` recipe (#13, c4b43c0)
 - 2026-10-27 looper issue Bouncy Castle 1.80 has 2 CRITICAL advisories: bump bcprov/bcpkix to 1.86 (#7)
 - 2026-10-27 looper issue Jackson 2.18.3 (via google-cloud-storage) has 9 HIGH advisories: pin jackson-bom 2.18.12 (#8)
+- 2026-10-27 looper issue Hazelcast 5.5.0: CRITICAL client-to-member memory access, fixed only in 5.7.0 (#10)
