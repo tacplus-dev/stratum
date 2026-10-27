@@ -5,7 +5,7 @@
 // declare (spec.record) with residency/mutability, and tacplus refuses to
 // generate a fleet in which a record declares those but "no (spec.trait) hosts
 // a record query plane, so nothing would read it". Deleting this file does not
-// simplify scotty; it stops the build.
+// simplify any product built on the fleet; it stops the build.
 //
 // It is a near-copy of schematic/testapp/proto/vservices/query.proto, which is
 // the platform's own reference declaration of this trait. The differences are
@@ -18,17 +18,16 @@
 // whom the gateway dials.
 //
 // The plane covers EVERY (spec.record) message in the fleet, not a list kept
-// here — so scotty.ScottyActivity joins the query surface by generation rather
+// here — so a product's own record joins the query surface by generation rather
 // than by hand. That is what makes §4's neutral auditor possible at all: it
-// reads the artifact plane through a surface Scotty did not write.
+// reads the artifact plane through a surface the product did not write.
 //
 // CAVEAT, worth knowing before anyone merges three proto sources: testapp
-// declares this same trait under this same name. A build of
-// `--src platform --src testapp --src scotty` would carry two `query`
-// traits and is expected to fail. scotty/build.sh does not do that — it
-// merges platform + scotty only — but deploying scotty ALONGSIDE the
-// testapp fleet on one cluster would, and that is a real sequencing question,
-// not a detail. See
+// declares this same trait under this same name. A build that merges testapp's
+// proto source with this one would carry two `query` traits and is expected to
+// fail. A product's build that leaves testapp out does not do that, but
+// deploying such a product ALONGSIDE the testapp fleet on one cluster would,
+// and that is a real sequencing question, not a detail. See
 // loopers/schematic/decisions/journeyman-deploy-alongside-testapp-open.md.
 
 syntax = "proto3";
@@ -63,8 +62,8 @@ option (spec.trait) = {
   // caller other than the record store that implements it. No service is
   // widened by this edit — the surface was already dead, authorized to a
   // service that had left the fleet on 2026-08-20 — and no auditor identity is
-  // invented. §4's constraint still holds and still forbids naming `scotty`
-  // here.
+  // invented. §4's constraint still holds and still forbids naming the audited
+  // product here.
   //
   // The door reopens when the per-service own-record read/write client lands
   // (loopers/schematic/decisions/big8-p1-own-record-read-write-mechanism-scoped-

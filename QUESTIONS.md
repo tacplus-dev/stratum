@@ -69,8 +69,8 @@
    It is a no-op on a volume with no legacy row and runs on every writer boot. To recognize
    legacy rows it builds (generated Java class name → proto full name) from the registry — the
    one remaining `getClass().getName()` in the module, used only to *match* old data, never
-   written. It also carries the `com.gitlab.secondstarcavalier.` → `com.gitlab.seabeam.` prefix
-   mapping, so pre-rename volumes migrate too.
+   written. It matches a class name by its part below the generated `model.types` package, so
+   volumes written under an earlier package (before an org rename) migrate too.
    - **Default taken**: keep it until every deployed volume has booted once on this build.
    - **Question**: who confirms that, and should the deletion be queued as a follow-up item?
 

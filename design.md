@@ -124,6 +124,6 @@ expand it with the storage-tier design it actually builds.
   record, and every write carrying a uniqueness invariant (mint an id, bind a mapping key or an
   issuer, claim a name) lands in Stratum first. That domain-level instance is **not yet in the
   quorum equation**. Separate huddle once the identity topic is thought out. The transaction primitive itself is already on the list:
-  "Transactions across maps (Jody, 2026-10-18)" in `sonar/backend/decisions/mvp-plan-2026-09-28.md`,
+  "Transactions across maps (Jody, 2026-10-18)", roadmap item `roadmap/items/stratum-transactions.md`,
   post-launch; the identity graph adds a unique index on mapping keys (conditional write), a revision per
   record and a change feed.

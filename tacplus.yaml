@@ -1,7 +1,6 @@
 language: java
 tacplus: "2.4"
-# pkg kept as copied so the hand-written code keeps compiling; moves with the packages later.
-pkg: com.gitlab.seabeam.controlplane.schematic.services.stratum
+pkg: com.github.tacplusdev.stratum
 output-dir: model/target/generated-sources
 src: proto
 # The record store subscribes to every (spec.record) in the fleet: its generated
