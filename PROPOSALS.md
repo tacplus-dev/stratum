@@ -28,5 +28,26 @@ the looper then marks it `promoted` or `declined` here with the date.
   `Class path contains multiple SLF4J providers`. Logback wins today, but the choice is classpath order. If
   `slf4j-simple` is only there for tacplus's generated model, it should be test scope or excluded; check
   what tacplus's dependency list expects first.
+- **The operator renders the per-tenant Stratum** (2026-10-28, #2): stratum.proto now declares
+  `tenant_owned: true` and holds no durable state. The operator (tacplus-dev/operator) has to run one
+  Stratum per tenant with no volume, set `STRATUM_SEED_MEMBERS` to that tenant's members, set
+  `STRATUM_ZONE` from the node's `topology.kubernetes.io/zone` (zone-aware backups), and size memory for
+  the tenant's whole dataset (nothing is evicted). The member count per tenant is the footprint knob; one
+  is allowed. Needs an operator issue.
+- **Purge soft-deleted rows again** (2026-10-28, #2): the daily checkpoint purged rows whose
+  `(spec.deleted_flag)` was set after `deleted_max_age_seconds`; it went with the disk path, and nothing
+  purges them now (docs/DURABILITY.md, Known gaps). A sweep on the sequencer that issues `Delete`
+  through the write path (so the redo logs it) would restore it; it needs a delete timestamp, which
+  `(spec.store_epoch)` gave.
+- **Drop google-cloud-storage** (2026-10-28, #2): `proto/dependencies.yaml` pins it only so tacplus
+  emits `GcsArchiveSink` for the hot redo archive, which #2 removed. Dropping it (and the jackson-bom
+  pin it needs, #8) removes a dependency tree with a history of HIGH advisories. Check that nothing in
+  the generated model still needs it first.
+- **Split brain** (2026-10-28, #2): the redo's strict seq keeps the log single-writer, so a split
+  cannot fork the database; but a minority side keeps answering reads from what it holds. Hazelcast
+  split-brain protection on reads (or refusing reads without the sequencer) would close that.
+- **tacplus#205: a depends cycle merges the project's published proto** (2026-10-28, #2): letsencrypt
+  depends on stratum, so stratum cannot generate a proto change before it is on `main`. #2 was verified
+  with an explicit `--src` merge and the gates re-run after the push.
 
 ## Promoted / declined

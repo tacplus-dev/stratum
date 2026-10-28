@@ -170,8 +170,8 @@ class RecordPlaneTraitTest {
         Path protoRoot = traitTree(dir);
         VServiceDiscovery.RecordPlane plane =
                 VServiceDiscovery.discoverRecordPlane(protoRoot, "stratum");
-        List<EventTopicDiscovery.TopicEvent> records =
-                EventTopicDiscovery.discover(protoRoot).stream().filter(e -> e.isRecord).toList();
+        List<RecordDiscovery.RecordDecl> records =
+                RecordDiscovery.discover(protoRoot);
         assertEquals(1, records.size());
 
         RecordMapImplGenerator.generate(out, plane.s2s, records);

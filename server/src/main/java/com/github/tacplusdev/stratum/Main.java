@@ -5,9 +5,8 @@ package com.github.tacplusdev.stratum;
 import com.github.tacplusdev.stratum.model.s2sm.ServiceManager;
 
 /**
- * Entry point for the stratum service.
- * Supervisor LLM stateful SQL workspace — provides working-set maps,
- * a durable scratchpad and async job management.
+ * Entry point for the stratum service: a tenant's in-memory record store,
+ * made durable by the redo service (see design.md).
  */
 public class Main {
 

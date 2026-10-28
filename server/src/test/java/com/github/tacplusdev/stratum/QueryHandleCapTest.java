@@ -47,7 +47,7 @@ class QueryHandleCapTest {
     }
 
     private static StratumRecordMaps plane() {
-        return new StratumRecordMaps(() -> null, () -> true, () -> registry);
+        return new StratumRecordMaps(() -> null, () -> null, () -> registry);
     }
 
     private static String open(StratumRecordMaps plane, Caller c) throws ProtoException {

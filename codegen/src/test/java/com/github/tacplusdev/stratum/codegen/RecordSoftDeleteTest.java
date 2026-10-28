@@ -81,9 +81,9 @@ class RecordSoftDeleteTest {
         return dir;
     }
 
-    private static EventTopicDiscovery.TopicEvent discover(Path dir, String eventBody) throws IOException {
-        List<EventTopicDiscovery.TopicEvent> records =
-                EventTopicDiscovery.discover(tree(dir.resolve("proto"), eventBody));
+    private static RecordDiscovery.RecordDecl discover(Path dir, String eventBody) throws IOException {
+        List<RecordDiscovery.RecordDecl> records =
+                RecordDiscovery.discover(tree(dir.resolve("proto"), eventBody));
         assertEquals(1, records.size(), "expected exactly one record, got " + records);
         return records.get(0);
     }
@@ -91,7 +91,7 @@ class RecordSoftDeleteTest {
     private static String generate(Path dir, String eventBody) throws IOException {
         Path protoRoot = tree(dir.resolve("proto"), eventBody);
         VServiceDiscovery.RecordPlane plane = VServiceDiscovery.discoverRecordPlane(protoRoot, "stratum");
-        List<EventTopicDiscovery.TopicEvent> records = EventTopicDiscovery.discover(protoRoot);
+        List<RecordDiscovery.RecordDecl> records = RecordDiscovery.discover(protoRoot);
         assertEquals(1, records.size(), "expected exactly one record, got " + records);
 
         Path out = dir.resolve("out");

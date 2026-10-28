@@ -12,7 +12,6 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -74,69 +73,49 @@ public class StratumCodegenMojo extends AbstractMojo {
                     : "Discovered record query plane: " + plane);
 
             Path out = outputDir.toPath();
+            // Everything under the output dir is this generator's: clear it, so a
+            // class an earlier build generated and this one no longer does is gone
+            // rather than compiled against types that no longer exist.
+            deleteTree(out);
             VServiceWiringGenerator.generate(out, services, plane);
             getLog().info("Generated StratumVServiceBase.java");
 
-            List<EventTopicDiscovery.TopicEvent> allEvents =
-                    EventTopicDiscovery.discover(protoRoot);
-            // The event store and the query plane operate on record types —
-            // messages declaring (spec.record). Plain EventBus topics (e.g.
-            // TaskEvent) are consumed by other subscribers but are not stored or
-            // queryable via stratum.
-            //
-            // The test is the annotation's PRESENCE, matching tacplus: it emits the
-            // plane's RPC family for every (spec.record) message and defaults a
-            // missing key: to event_id. Requiring a declared key here dropped such a
-            // record from the impl while its RPCs stayed in the generated interface,
-            // which is an abstract-method gap javac rejects.
-            List<EventTopicDiscovery.TopicEvent> events = new ArrayList<>();
-            for (EventTopicDiscovery.TopicEvent ev : allEvents) {
-                if (ev.isRecord) {
-                    events.add(ev);
-                }
+            List<RecordDiscovery.RecordDecl> records = RecordDiscovery.discover(protoRoot);
+            getLog().info("Discovered " + records.size() + " record type(s):");
+            for (RecordDiscovery.RecordDecl r : records) {
+                getLog().info("  " + r);
             }
-            getLog().info("Discovered " + events.size() + " record type(s) of "
-                    + allEvents.size() + " EventBus topic(s):");
-            for (EventTopicDiscovery.TopicEvent ev : events) {
-                getLog().info("  " + ev);
-            }
-            EventStoreGenerator.generate(out, events);
-            getLog().info("Generated StratumEventStores.java");
-
-            // The hot tier's redo-log descriptors. Only record types carrying
-            // (spec.store_epoch) get one — a per-node log with no epoch cannot be
-            // unioned back across nodes at restore — and with none declared the
-            // list is empty and the hot tier writes no log, keeping its in-memory
-            // replication and its quorum gate.
-            HotStoreGenerator.generate(out, events);
-            getLog().info("Generated StratumHotStores.java");
+            RecordStoreGenerator.generate(out, records);
+            getLog().info("Generated StratumStores.java and StratumRecordTypes.java");
 
             if (plane != null) {
                 // The s2s half is backed by the same record types the hot store
                 // holds, so it reuses the record-type list.
-                RecordMapImplGenerator.generate(out, plane.s2s, events);
+                RecordMapImplGenerator.generate(out, plane.s2s, records);
                 getLog().info("Generated StratumRecordMaps.java");
 
                 if (plane.c2s != null) {
                     // The c2s half is the same lifecycle under governed verbs, so
                     // its impl is a delegation shim onto the s2s one.
-                    RecordQueryImplGenerator.generate(out, plane.c2s, events);
+                    RecordQueryImplGenerator.generate(out, plane.c2s, records);
                     getLog().info("Generated StratumRecordQueries.java");
-                } else {
-                    // build-fleet.sh never mvn cleans this module, so a stale
-                    // StratumRecordQueries.java from an earlier build (compiled
-                    // against a different record catalog) would otherwise linger
-                    // and fail to compile against the current generated classes.
-                    Path stale = out.resolve(RecordQueryImplGenerator.HOST_PKG.replace('.', '/'))
-                            .resolve(RecordQueryImplGenerator.CLASS_NAME + ".java");
-                    if (Files.deleteIfExists(stale)) {
-                        getLog().info("Deleted stale StratumRecordQueries.java (no c2s plane)");
-                    }
                 }
             }
 
         } catch (IOException e) {
             throw new MojoExecutionException("Stratum codegen failed", e);
+        }
+    }
+
+    /** Removes a directory tree; absent is fine. */
+    private static void deleteTree(Path dir) throws IOException {
+        if (!Files.exists(dir)) {
+            return;
+        }
+        try (java.util.stream.Stream<Path> walk = Files.walk(dir)) {
+            for (Path p : walk.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                Files.delete(p);
+            }
         }
     }
 }

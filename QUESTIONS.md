@@ -82,3 +82,10 @@
    - **Update (2026-10-27, #13):** on main @ 5bac7e7 the full server suite passes (138 run, 0 failures,
      8 skipped), `HotAgentEventE2ETest` and `PullAgentEventE2ETest` included: the failing set is gone, and
      `just gates` now runs the tests.
+
+## Overtaken by the per-tenant rebuild (stratum#2, 2026-10-28)
+
+Questions 3, 4, 5 and 6 are moot: the event-bus replay, `ClassNameMigration`, the durable format on
+volumes and the bus-fed E2E tests they ask about were removed with the disk path and bus ingest. A
+rollout of #2 is a full restart in any case (the Hazelcast cluster name, the maps and the serialized
+forms all changed), and the store replays from the redo service on start.

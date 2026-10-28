@@ -20,8 +20,7 @@ import com.hazelcast.nio.serialization.HazelcastSerializationException;
 
 import org.junit.jupiter.api.Test;
 
-import com.github.tacplusdev.stratum.StratumEventStores;
-import com.github.tacplusdev.stratum.hot.RecordPersistTask;
+import com.github.tacplusdev.stratum.StratumRecordTypes;
 import com.github.tacplusdev.stratum.model.types.services.letsencrypt.Letsencrypt;
 
 /**
@@ -34,7 +33,7 @@ class ProtoMessageSerializerTest {
     /** The serialization service the stratum Config actually configures. */
     private static InternalSerializationService service() {
         return new DefaultSerializationServiceBuilder()
-                .setConfig(StratumMapConfig.build(List.of(), 1).getSerializationConfig())
+                .setConfig(StratumMapConfig.build(List.of(), 1, null).getSerializationConfig())
                 .build();
     }
 
@@ -63,22 +62,11 @@ class ProtoMessageSerializerTest {
     @Test
     void everyRecordTypeRoundtripsByItsOwnFullName() {
         InternalSerializationService ss = service();
-        for (String name : StratumEventStores.mapNames()) {
-            Message defaultInstance = StratumEventStores.defaultInstance(name);
+        for (String name : StratumRecordTypes.mapNames()) {
+            Message defaultInstance = StratumRecordTypes.defaultInstance(name);
             assertEquals(name, defaultInstance.getDescriptorForType().getFullName());
             assertEquals(defaultInstance, ss.toObject(ss.toData(defaultInstance)));
         }
-    }
-
-    @Test
-    void aRecordInsideAPersistTaskTravelsByFullName() {
-        InternalSerializationService ss = service();
-        Data data = ss.toData(new RecordPersistTask("letsencrypt.LetsEncryptCert", "e1", event(), null, 42));
-
-        String wire = wire(data);
-        assertTrue(wire.contains("letsencrypt.LetsEncryptCert"), wire);
-        assertFalse(wire.contains("Letsencrypt$LetsEncryptCert"), "the record must not be Java-serialized:\n" + wire);
-        assertEquals(42, ss.<RecordPersistTask>toObject(data).epoch());
     }
 
     @Test

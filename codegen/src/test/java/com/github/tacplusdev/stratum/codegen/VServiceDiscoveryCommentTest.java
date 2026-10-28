@@ -17,7 +17,7 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * Commented-out proto does not declare a service.
  *
- * <p>{@link EventTopicDiscovery} strips {@code //} comments before it parses a
+ * <p>{@link RecordDiscovery} strips {@code //} comments before it parses a
  * record; {@link VServiceDiscovery} used to parse the raw lines, so the same text
  * meant one thing to one discovery tool and another to its sibling. What that
  * bought was a PHANTOM PROVIDER: a service whose surface option is commented out

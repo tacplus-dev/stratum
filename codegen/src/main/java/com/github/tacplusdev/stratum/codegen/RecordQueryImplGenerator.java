@@ -58,7 +58,7 @@ public final class RecordQueryImplGenerator {
      * @param records the record types the plane serves
      */
     public static void generate(Path outputDir, VServiceDiscovery.HostedVService plane,
-                                List<EventTopicDiscovery.TopicEvent> records)
+                                List<RecordDiscovery.RecordDecl> records)
             throws IOException {
         Path pkgDir = outputDir.resolve(HOST_PKG.replace('.', '/'));
         Files.createDirectories(pkgDir);
@@ -69,7 +69,7 @@ public final class RecordQueryImplGenerator {
     }
 
     private static void writeFile(PrintWriter w, VServiceDiscovery.HostedVService plane,
-                                  List<EventTopicDiscovery.TopicEvent> records) {
+                                  List<RecordDiscovery.RecordDecl> records) {
         String iface = plane.serviceName;
         String msgs = plane.outerClassName;
         w.println("// Copyright (c) 2026 Jody Scott");
@@ -104,8 +104,8 @@ public final class RecordQueryImplGenerator {
         w.println("        this.delegate = java.util.Objects.requireNonNull(delegate);");
         w.println("    }");
 
-        for (EventTopicDiscovery.TopicEvent e : records) {
-            String t = e.eventType;
+        for (RecordDiscovery.RecordDecl e : records) {
+            String t = e.typeName;
             String fqn = fqn(e);
             boolean hasFilter = !e.queryFields.isEmpty();
 
@@ -160,7 +160,7 @@ public final class RecordQueryImplGenerator {
         return Character.toLowerCase(s.charAt(0)) + s.substring(1);
     }
 
-    private static String fqn(EventTopicDiscovery.TopicEvent e) {
-        return e.javaPackage + "." + e.outerClassName + "." + e.eventType;
+    private static String fqn(RecordDiscovery.RecordDecl e) {
+        return e.javaPackage + "." + e.outerClassName + "." + e.typeName;
     }
 }

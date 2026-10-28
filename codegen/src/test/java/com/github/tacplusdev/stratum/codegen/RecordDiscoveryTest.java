@@ -1,0 +1,253 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+package com.github.tacplusdev.stratum.codegen;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+/**
+ * Pins stratum's regex parser to tacplus's descriptor-based behaviour. The two
+ * sides have to agree about what a record is and what its key is: tacplus emits
+ * the query plane's RPC family from its answer and stratum implements the family
+ * from this one, so any disagreement is an abstract-method gap javac rejects.
+ */
+class RecordDiscoveryTest {
+
+    /** Writes one vservice proto declaring an eventbus topic over a message `body`. */
+    private static Path proto(Path dir, String eventBody) throws IOException {
+        Path vservices = dir.resolve("vservices");
+        Files.createDirectories(vservices);
+        Files.writeString(vservices.resolve("demo.proto"), """
+                syntax = "proto3";
+                package demo;
+                option java_package = "com.example.demo";
+                option java_outer_classname = "Demo";
+
+                message DemoBus {
+                  option (spec.service_event) = {label: "eventbus"};
+                  DemoEvent event_stream = 1 [(spec.topic) = true];
+                }
+
+                message DemoEvent {
+                """ + eventBody + """
+                }
+                """);
+        return dir;
+    }
+
+    private static RecordDiscovery.RecordDecl only(Path dir) throws IOException {
+        List<RecordDiscovery.RecordDecl> records = RecordDiscovery.discover(dir);
+        assertEquals(1, records.size(), "expected exactly one record, got " + records);
+        return records.get(0);
+    }
+
+    /**
+     * F2 — a record that omits `key:` is still a record. tacplus keys the plane
+     * off the annotation's presence and defaults the key to event_id
+     * (model.DefaultRecordKeyField), so stratum must default it identically
+     * rather than treat the record as absent.
+     */
+    @Test
+    void recordWithoutDeclaredKeyDefaultsToEventId(@TempDir Path dir) throws IOException {
+        RecordDiscovery.RecordDecl ev = only(proto(dir, """
+                  option (spec.record) = {owner: "owner_id"};
+                  string event_id = 1;
+                  string owner_id = 2;
+                """));
+
+        assertEquals("event_id", ev.recordKey);
+    }
+
+    /** A message declaring no (spec.record) is not a record, topic or not. */
+    @Test
+    void plainTopicIsNotARecord(@TempDir Path dir) throws IOException {
+        assertEquals(List.of(), RecordDiscovery.discover(proto(dir, """
+                  string event_id = 1;
+                """)));
+    }
+
+    /**
+     * A record needs no event-bus topic: the store holds every (spec.record),
+     * written through its own write surface (stratum#2).
+     */
+    @Test
+    void aRecordWithNoTopicIsDiscovered(@TempDir Path dir) throws IOException {
+        Path services = dir.resolve("services");
+        Files.createDirectories(services);
+        Files.writeString(services.resolve("people.proto"), """
+                syntax = "proto3";
+                package people;
+                option java_package = "com.example.people";
+                option java_outer_classname = "People";
+
+                message Xid {
+                  option (spec.record) = {key: "xid", durability: DURABILITY_REMOTE};
+                  string xid = 1;
+                  string namespace = 2 [(spec.store_namespace) = true];
+                }
+
+                message Counter {
+                  option (spec.record) = {key: "n", durability: DURABILITY_MEMORY};
+                  uint64 n = 1;
+                  string namespace = 2 [(spec.store_namespace) = true];
+                }
+
+                message NotARecord {
+                  string x = 1;
+                }
+                """);
+        List<RecordDiscovery.RecordDecl> records = RecordDiscovery.discover(dir);
+        assertEquals(List.of("people.Xid", "people.Counter"), records.stream().map(r -> r.fullName()).toList());
+        assertEquals("DURABILITY_REMOTE", records.get(0).durability);
+        assertEquals("string", records.get(0).keyProtoType);
+        assertEquals("namespace", records.get(0).storeNamespaceField);
+        assertEquals("DURABILITY_MEMORY", records.get(1).durability);
+        assertEquals("uint64", records.get(1).keyProtoType);
+    }
+
+    /** Undeclared durability is tacplus's default, LOCAL; so is UNSPECIFIED. */
+    @Test
+    void undeclaredDurabilityIsLocal(@TempDir Path dir) throws IOException {
+        assertEquals("DURABILITY_LOCAL", only(proto(dir, """
+                  option (spec.record) = {key: "event_id"};
+                  string event_id = 1;
+                """)).durability);
+        assertEquals("DURABILITY_LOCAL", RecordDiscovery.parseDurability("{durability: DURABILITY_UNSPECIFIED}"));
+    }
+
+    /**
+     * F3 — a commented-out annotation is not a declaration. Left unstripped, the
+     * commented (spec.query_field) below produced a filter field on stratum's
+     * side that tacplus's descriptor-based side never emits.
+     */
+    @Test
+    void commentedOutAnnotationsAreNotParsed(@TempDir Path dir) throws IOException {
+        RecordDiscovery.RecordDecl ev = only(proto(dir, """
+                  option (spec.record) = {key: "event_id", s2s_read: {auth_services: ["demo"]}};
+                  string event_id = 1;
+                  // string spiffe_id = 2 [(spec.query_field) = {op: QUERY_OP_EQ}];
+                  int64 timestamp_ms = 3 [(spec.query_field) = {op: QUERY_OP_RANGE}];
+                """));
+
+        // event_id (the record's own key) is folded in as an implicit EQ
+        // criterion even though it carries no (spec.query_field) of its own —
+        // see RecordDiscovery.withKeyCriterion.
+        assertEquals(List.of("timestamp_ms", "event_id"), ev.queryFields.stream().map(f -> f.name).toList());
+    }
+
+    /**
+     * F4 — `key:` is read only from inside the record option's own braces, and
+     * only as a whole field name.
+     *
+     * The old DOTALL regex anchored at "(spec.record) = {" scanned past that
+     * literal's closing brace for any later `key:`, and matched the tail of
+     * sort_key: as well. Here both traps are present: the record option declares
+     * no key of its own but does declare sort_key:, and a later message declares
+     * key: "wrong_field".
+     */
+    @Test
+    void recordKeyIgnoresSuffixedFieldsAndLaterMessages(@TempDir Path dir) throws IOException {
+        Path vservices = dir.resolve("vservices");
+        Files.createDirectories(vservices);
+        Files.writeString(vservices.resolve("demo.proto"), """
+                syntax = "proto3";
+                package demo;
+                option java_package = "com.example.demo";
+                option java_outer_classname = "Demo";
+
+                message DemoBus {
+                  option (spec.service_event) = {label: "eventbus"};
+                  DemoEvent event_stream = 1 [(spec.topic) = true];
+                }
+
+                message DemoEvent {
+                  option (spec.record) = {owner: "owner_id", sort_key: "occurred_at_ms"};
+                  string event_id = 1;
+                  string owner_id = 2;
+                  int64 occurred_at_ms = 3;
+                }
+
+                message OtherRecord {
+                  option (spec.record) = {key: "wrong_field"};
+                  string wrong_field = 1;
+                }
+                """);
+
+        // Both are records now (a record needs no topic); each keeps its own key.
+        List<RecordDiscovery.RecordDecl> records = RecordDiscovery.discover(dir);
+        assertEquals("event_id", records.get(0).recordKey);
+        assertEquals("wrong_field", records.get(1).recordKey);
+    }
+
+    /**
+     * A record's key is folded in as an implicit EQ query field only when the
+     * record also declares (spec.record).s2s_read — the same gate tacplus's
+     * own record_map.go applies (declaresRead) before appendKeyFilterCriterion,
+     * because a record with no reader has no <T>Filter message for the key to
+     * land in. Without the gate, RecordMapImplGenerator's match<T>() checks a
+     * key criterion that never exists in the generated Filter type, which is
+     * the symbol javac rejects.
+     */
+    @Test
+    void recordKeyIsImplicitQueryFieldWhenS2sReadIsDeclared(@TempDir Path dir) throws IOException {
+        RecordDiscovery.RecordDecl ev = only(proto(dir, """
+                  option (spec.record) = {key: "spiffe_id", s2s_read: {auth_services: ["demo"]}};
+                  string spiffe_id = 1;
+                  string owner_id = 2;
+                """));
+
+        List<RecordDiscovery.QueryField> fields = ev.queryFields;
+        assertEquals(1, fields.size(), "expected only the folded-in key: " + fields.stream().map(f -> f.name).toList());
+        assertEquals("spiffe_id", fields.get(0).name);
+        assertEquals("string", fields.get(0).protoType);
+        assertTrue(!fields.get(0).range, "the key criterion is EQ, not RANGE");
+    }
+
+    /**
+     * A record with no s2s_read grant has no <T>Filter message at all on
+     * tacplus's side, so stratum must not fold the key in either — this is
+     * the bug big8-p4's fourth attempt hit: folding it in unconditionally
+     * produced a hasXxxId() check against a Filter type that was never
+     * generated with that field.
+     */
+    @Test
+    void recordKeyIsNotFoldedInWithoutS2sRead(@TempDir Path dir) throws IOException {
+        RecordDiscovery.RecordDecl ev = only(proto(dir, """
+                  option (spec.record) = {key: "spiffe_id"};
+                  string spiffe_id = 1;
+                  string owner_id = 2;
+                """));
+
+        assertTrue(ev.queryFields.isEmpty(), "a record with no s2s_read must not get a folded-in key criterion: " + ev.queryFields.stream().map(f -> f.name).toList());
+    }
+
+    /** An explicit (spec.query_field) on the key is not duplicated by the fold. */
+    @Test
+    void explicitQueryFieldOnKeyIsNotDuplicated(@TempDir Path dir) throws IOException {
+        RecordDiscovery.RecordDecl ev = only(proto(dir, """
+                  option (spec.record) = {key: "spiffe_id", s2s_read: {auth_services: ["demo"]}};
+                  string spiffe_id = 1 [(spec.query_field) = {op: QUERY_OP_EQ}];
+                """));
+
+        assertEquals(List.of("spiffe_id"), ev.queryFields.stream().map(f -> f.name).toList());
+    }
+
+    /** A repeated or map-typed key cannot be an EQ criterion, so it is skipped. */
+    @Test
+    void repeatedKeyIsNotFoldedIn(@TempDir Path dir) throws IOException {
+        RecordDiscovery.RecordDecl ev = only(proto(dir, """
+                  option (spec.record) = {key: "tags", s2s_read: {auth_services: ["demo"]}};
+                  repeated string tags = 1;
+                """));
+
+        assertTrue(ev.queryFields.isEmpty(), "a repeated key must not become a filter criterion: " + ev.queryFields.stream().map(f -> f.name).toList());
+    }
+}

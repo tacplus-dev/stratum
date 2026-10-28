@@ -208,14 +208,14 @@ public class VServiceDiscovery {
             throws IOException {
         List<String> raw = Files.readAllLines(proto);
         // Everything except the sentinel is read off the COMMENT-STRIPPED text, the
-        // same text EventTopicDiscovery parses records out of. Reading the raw lines
+        // same text RecordDiscovery parses records out of. Reading the raw lines
         // made commented-out proto declare things: a service whose surface option is
         // commented out still matched SERVICE_S2S and registered a provider for a
         // service that declares no surface, and a "}" inside a comment closed the
         // block early and dropped a real service instead. The sentinel is the one
         // comment that IS a declaration (tacplus writes it as one), so it alone is
         // still read from the raw line.
-        List<String> lines = EventTopicDiscovery.stripLineComments(raw);
+        List<String> lines = RecordDiscovery.stripLineComments(raw);
         String relPath = protoRoot.relativize(proto).toString();
         int slash = relPath.indexOf('/');
         String parentDir = slash > 0 ? relPath.substring(0, slash) : "";

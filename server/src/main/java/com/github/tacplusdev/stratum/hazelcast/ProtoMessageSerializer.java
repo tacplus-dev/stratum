@@ -10,7 +10,7 @@ import com.hazelcast.nio.ObjectDataOutput;
 import com.hazelcast.nio.serialization.HazelcastSerializationException;
 import com.hazelcast.nio.serialization.StreamSerializer;
 
-import com.github.tacplusdev.stratum.StratumEventStores;
+import com.github.tacplusdev.stratum.StratumRecordTypes;
 
 /**
  * Hazelcast's wire form for every protobuf record: the message's protobuf full
@@ -18,11 +18,10 @@ import com.github.tacplusdev.stratum.StratumEventStores;
  *
  * <p>Without this a record reached Hazelcast as a {@link java.io.Serializable}, and
  * protobuf's own Java serialization writes the generated class's Java name and
- * resolves it again with {@code Class.forName} — the same package-layout coupling
- * the disk legs used to have, and the reason an org rename broke deserialization.
- * The full name resolves through the generated registry
- * ({@link StratumEventStores#defaultInstance}) the disk legs use, and a name that
- * is not a record type this build declares is refused rather than guessed at.
+ * resolves it again with {@code Class.forName} — a package-layout coupling, and
+ * the reason an org rename broke deserialization. The full name resolves through
+ * the generated registry ({@link StratumRecordTypes#defaultInstance}), and a name
+ * that is not a record type this build declares is refused rather than guessed at.
  */
 public final class ProtoMessageSerializer implements StreamSerializer<Message> {
 
@@ -43,7 +42,7 @@ public final class ProtoMessageSerializer implements StreamSerializer<Message> {
     @Override
     public Message read(ObjectDataInput in) throws IOException {
         String type = in.readString();
-        Message defaultInstance = StratumEventStores.defaultInstance(type);
+        Message defaultInstance = StratumRecordTypes.defaultInstance(type);
         if (defaultInstance == null) {
             throw new HazelcastSerializationException("a Hazelcast value names " + type
                     + ", which is not a record type this build declares; refusing to deserialize it");

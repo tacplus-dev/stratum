@@ -32,7 +32,8 @@ import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.MetadataUtils;
 
-import com.github.tacplusdev.stratum.hot.HotWrites;
+import com.github.tacplusdev.stratum.store.InMemoryRedoLog;
+import com.github.tacplusdev.stratum.store.RecordStore;
 import com.github.tacplusdev.stratum.model.chassis.grpcserver.Authorizer;
 import com.github.tacplusdev.stratum.model.chassis.servicemanager.Auth;
 import com.github.tacplusdev.stratum.model.chassis.token.TokenWrapper;
@@ -81,7 +82,8 @@ class TwoTenantQueryScopeE2ETest {
     private static final String SYSTEM = "/system";
 
     private static HazelcastInstance hz;
-    private static StratumEventStores stores;
+    private static StratumStores stores;
+    private static RecordStore store;
     private static Server server;
     private static ManagedChannel channel;
 
@@ -143,15 +145,16 @@ class TwoTenantQueryScopeE2ETest {
         cfg.getNetworkConfig().getJoin().getTcpIpConfig().setEnabled(false);
         hz = Hazelcast.newHazelcastInstance(cfg);
 
-        stores = new StratumEventStores();
-        stores.init(hz, new HotWrites(hz, 1));
-        stores.store(cert("a-1", TENANT_A, 1000));
-        stores.store(cert("a-2", TENANT_A, 2000));
-        stores.store(cert("b-1", TENANT_B, 3000));
-        stores.store(cert("b-2", TENANT_B, 4000));
-        stores.store(cert("b-3", TENANT_B, 5000));
-        assertEquals(5, stores.totalCount(),
-                "a fixture failed the generated LetsEncryptCert validation and was dropped");
+        stores = new StratumStores(hz);
+        store = new RecordStore(hz, new StratumRecordTypes(), new InMemoryRedoLog(), java.time.Duration.ofSeconds(5));
+        store.catchUp();
+        for (LetsEncryptCert c : List.of(cert("a-1", TENANT_A, 1000), cert("a-2", TENANT_A, 2000),
+                cert("b-1", TENANT_B, 3000), cert("b-2", TENANT_B, 4000), cert("b-3", TENANT_B, 5000))) {
+            store.apply(Query.RecordApplyRequest.newBuilder().addOps(Query.RecordOp.newBuilder()
+                    .setPutLetsEncryptCert(Query.PutLetsEncryptCertRequest.newBuilder().setItem(c))).build());
+        }
+        assertEquals(5, store.rowCount(),
+                "a fixture write was refused");
 
         // Verifies nothing; records whatever bearer token the call carried into the
         // slot the real Authorizer fills after it HAS verified one. A call with no
@@ -171,7 +174,7 @@ class TwoTenantQueryScopeE2ETest {
 
         server = NettyServerBuilder.forPort(0)
                 .addService(ServerInterceptors.intercept(
-                        new RecordMap(new StratumRecordMaps(() -> stores, () -> true, () -> registry),
+                        new RecordMap(new StratumRecordMaps(() -> stores, () -> store, () -> registry),
                                 authorizer),
                         Authorizer.headerCaptureInterceptor()))
                 .build()

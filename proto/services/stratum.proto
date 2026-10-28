@@ -1,17 +1,13 @@
-// Stratum — hot event store and S2S data master.
+// Stratum — the record store, one per tenant.
 //
-// Stratum is the canonical source of truth for all SensorEvents.
-// It subscribes to EventBus and persists every SensorEvent into a
-// Hazelcast IMap<event_id, SensorEvent> hot store with Apache Calcite
-// SQL indexes. There is no cold storage — all data is hot.
-//
-// The agentsensor vservice (vservices/sensor-query.proto) defines the
-// S2S gRPC surface that Stratum implements:
-//   - StratumQuery: working-set maps, operator queries, live-session streaming
-//
-// TimeDB and Dgraph hold lightweight projections of Stratum data,
-// linked by the same event_id / session_id / agent_id keys.
-// Stratum federates into them for aggregation and graph traversal queries.
+// Stratum holds a tenant's (spec.record) rows in memory (Hazelcast, members
+// spread across zones with zone-aware backups: availability, not durability)
+// and serves the generated record plane over them: the query plane, the write
+// surface (Put, InsertIfAbsent, ReplaceIfUnchanged, Delete, Apply), Get and
+// Watch<T>Changes. It holds no durable state. Durability is the redo service:
+// a write is applied only once the redo has acked it at the level its record
+// type declares, and every start replays the tenant from the redo. See
+// docs/DURABILITY.md and design.md.
 //
 syntax = "proto3";
 
@@ -20,7 +16,12 @@ package stratum;
 import "sys/spec.proto";
 import "sys/healthreport.proto";
 
-option (spec.service) = {};
+option (spec.service) = {tenant_owned: true};
+
+// Every write is appended to the redo service (the log is the database) before
+// it is applied, and every start replays the tenant from it: redolog.Redo, the
+// sys contract tacplus defines and the redo service hosts.
+option (spec.grpc_s2s_client) = {service: "redolog.Redo"};
 option (spec.int_const) = {name: "DEFAULT_PORT", value: 8443};
 
 // Stratum used to declare s2s clients against agentsensor.TimedbQuery and
@@ -29,8 +30,10 @@ option (spec.int_const) = {name: "DEFAULT_PORT", value: 8443};
 // the federation model was already superseded by the 2026-08-23 "client calls,
 // NOT federation" ruling. Stratum now reaches no other store.
 
-// Stratum subscribes to EventBus and ingests SensorEvents into the hot store.
-option (spec.record_store) = {};
+// Stratum is the record store. Records are written through its own generated
+// write surface and never ingested from the event bus (decisions:
+// tacplus-dev/roadmap stratum-per-tenant-2026-10-25.md, item 3).
+option (spec.record_store) = {no_bus_ingest: true};
 
 // ============================================================================
 // Config
@@ -42,34 +45,17 @@ message Config {
   // hazelcast_memory_mb is the Hazelcast cluster memory limit in MB. Default: 2048.
   int32 hazelcast_memory_mb = 1 [(spec.default_int) = 2048, (spec.assert_ge) = 256];
 
-  // map_idle_ttl_seconds evicts idle working-set maps. Default: 7200 (2h).
-  int32 map_idle_ttl_seconds = 2 [(spec.default_int) = 7200, (spec.assert_ge) = 60];
+  // write_ack_timeout_ms bounds how long a write waits for the redo service's
+  // ack at the level it is owed. A write not acked in time is refused
+  // (UNAVAILABLE) and not applied. Default: 10000. Min: 100.
+  int32 write_ack_timeout_ms = 9 [(spec.default_int) = 10000, (spec.assert_ge) = 100];
 
-  // max_maps limits concurrent working-set maps. Default: 20.
-  int32 max_maps = 4 [(spec.default_int) = 20, (spec.assert_ge) = 1];
-
-  // retention_days is the number of days to retain hot events. Default: 90.
-  int32 retention_days = 5 [(spec.default_int) = 90, (spec.assert_ge) = 1];
-
-  // cleanup_interval_seconds is how often the retention cleanup job runs. Default: 3600.
-  int64 cleanup_interval_seconds = 6 [(spec.default_int) = 3600, (spec.assert_ge) = 60];
-
-  // active_session_idle_seconds is the idle threshold for ListActiveSessions.
-  // A session is considered active if its last event was within this window.
-  // Default: 900 (15 min). Min: 30.
-  int32 active_session_idle_seconds = 7 [(spec.default_int) = 900, (spec.assert_ge) = 30];
-
-  // warm_window_seconds is the memory-residency window for warm-tiered records:
-  // rows younger than this are served from memory, rows older than it are served
-  // from the on-disk warm tier. It is the default applied to a record type that
-  // declares the warm residency preset without a window_seconds of its own.
-  //
-  // It must be SHORTER than retention_days or the disk tier is never reached:
-  // retention deletes a row before it is ever old enough to age out of memory,
-  // and the "still queryable, only slower" promise the disk tier exists to keep
-  // never applies to anything. Default: 604800 (7 days), which leaves rows aged
-  // 7-90 days served from disk under the 90-day retention default. Min: 60.
-  int64 warm_window_seconds = 8 [(spec.default_int) = 604800, (spec.assert_ge) = 60];
+  // Fields 2 and 4-8 configured working-set maps, the retention sweep, the
+  // daily checkpoint and the warm tier, all removed with the per-tenant,
+  // in-memory rebuild (stratum#2).
+  reserved 2, 4, 5, 6, 7, 8;
+  reserved "map_idle_ttl_seconds", "max_maps", "retention_days", "cleanup_interval_seconds",
+      "active_session_idle_seconds", "warm_window_seconds";
 }
 
 // ============================================================================
@@ -93,11 +79,12 @@ message StratumServiceHealth {
   // Timestamp of this snapshot.
   int64 timestamp_ms = 2;
 
-  // Hot event store stats.
+  // Record store stats: rows held across every record type.
   int64 event_count                  = 3;
   int64 hazelcast_memory_used_bytes  = 4;
   int64 hazelcast_memory_total_bytes = 5;
 
-  // Working-set maps in use.
-  int32 active_maps = 6;
+  // Field 6 counted working-set maps, removed with stratum#2.
+  reserved 6;
+  reserved "active_maps";
 }

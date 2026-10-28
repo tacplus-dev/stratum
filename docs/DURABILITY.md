@@ -1,325 +1,195 @@
 # Stratum durability contract
 
-## What stratum is
+Decision: tacplus-dev/roadmap `decisions/stratum-per-tenant-2026-10-25.md`. Issue: stratum#2.
 
-Stratum is a **record store with three durability legs**, not the single in-memory
-map this document used to describe. A record stratum holds is recoverable from:
+## What is durable, and where
 
-1. **In-memory replication.** Every record map is a Hazelcast `IMap<key, Message>`
-   with `backupCount` synchronous replicas and split-brain protection. A write is
-   acked once the primary and those replicas hold it.
-2. **The writers' volumes.** A checkpoint, a redo log and a per-type record index,
-   per **writer** member, under `<dataRoot>` — the subject of the rest of this
-   document. A write is refused unless `min_durable_copies` writers are in the
-   cluster to receive it (`HotWrites`).
-3. **The event log.** Records are event-sourced: they are written only by republish
-   on the record's bus, and the record plane is read-only. A pod with no volume and
-   no peers rebuilds from offset zero (`ColdStartRebuilder`).
+**The redo service is durability. Memory is availability.**
 
-The write path is unchanged by any of this: nothing below ever writes a record, and
-a read never restamps `store_epoch`, never appends to the event log and never
-touches disk.
+- A tenant's Stratum holds its rows in memory only: one Hazelcast `IMap` per record type, each
+  entry's revision in `stratum.revisions`, and the store's place in the log in `stratum.meta`
+  (`server/src/main/java/com/github/tacplusdev/stratum/store/RecordStore.java`). Nothing is written to
+  disk. There are no volumes, no member roles, no checkpoint, no disk index and no idle eviction.
+- Every write that is owed LOCAL or REMOTE is appended to the redo service and acked there **before**
+  it is applied in memory. The log is the database: every start rebuilds memory from it.
+- The redo service runs in the reserved `restore` tenant (`00000002`). Stratum reaches it through the
+  generated client for `redolog.Redo`, as a tenant-to-tenant call whose route field names `00000002`
+  (`store/GrpcRedoLog.java`, tacplus-dev/tacplus#170). The tenant a write belongs to is never a request
+  field: the redo reads it off Stratum's identity, and keeps one log per tenant. The contract is
+  `sys/redo.proto` (generated into `model/target/generated-sources/model/proto/sys/redo.proto`).
+- The redo log is one sequence per tenant. An append is refused unless its seq is exactly one more than
+  the last seq the log holds. Replay is therefore exact.
 
-## Members, partitions and queries
+## Durability levels
 
-Every record map is a **partitioned** Hazelcast `IMap`: each entry has one primary
-and `backupCount` backups on other members, and primaries are spread nearly evenly.
-No member holds the whole dataset in memory, and **a predicate query — `List`,
-`Count`, a watch's fan-in — is a scatter-gather across ALL members in parallel whose
-results are merged**. Adding a member rebalances partitions onto it and adds that
-much query parallelism.
+Declared per record type in the proto, as `(spec.record).durability`. Unset is LOCAL.
 
-## Member roles: writer and search
-
-Every member holds partitions and answers that scatter-gather. The **role** says what
-a member does besides, and the whole of the difference is disk. It travels as the
-Hazelcast member attribute `stratum.role` (`hazelcast/StratumRole`), declared per pod
-by `STRATUM_MEMBER_ROLE`; a member with no attribute reads as a **writer**, the
-direction that cannot invent durability.
-
-| | **writer** | **search** |
+| Level | Acked when | Survives |
 |---|---|---|
-| partitions, queries | yes | yes |
-| volume | yes | **no** |
-| redo log, record index, checkpoint | yes | **no** |
-| counted for `min_durable_copies` | yes | **never** |
-| restore-barrier contributor | yes | **never** |
-| idle-clock eviction | yes | no — nothing to reload from |
-| count | static, sized for durability (2 or 3) | dynamic, sized for query throughput |
-| operator field | `stratum_nodes` | `stratum_search_nodes` (default 0) |
+| `DURABILITY_MEMORY` | applied in memory on the members; **not appended** | a member loss (with backups); not a full restart |
+| `DURABILITY_LOCAL` (default) | the local redo has it on disk (a regional disk, replicated across two zones) | a full restart, a zone loss |
+| `DURABILITY_REMOTE` | the local redo and the second site have it | a region loss |
 
-**A writer holds the full dataset on disk.** Every write is sent to every writer —
-`RecordPersistTask`, submitted to `StratumRole.writers` — regardless of which member
-owns the partition, so a writer's redo log and record index cover the whole store and
-a writer can restore it alone. That is what makes durability independent of where
-Hazelcast happened to put a partition, and it is what lets a volume-less member own
-one safely.
+- A write may ask for a higher level than its type declares, never a lower one. Asking lower is not an
+  error; the type's level wins.
+- An `Apply` over several entries is owed the highest level of its types and of what it asked for. It is
+  one append, kept by the log all or nothing.
+- The log is a prefix: waiting for REMOTE on one write makes every earlier write remote too.
+- The answer carries the level the write was acked at (`RecordWriteResult.durability`).
+- **REMOTE today:** the redo's second-site step (redo#1 step 2, waiting on tacplus-dev/tacplus#204) has
+  not landed. Until it does the redo refuses a REMOTE append with FAILED_PRECONDITION, and Stratum passes
+  that code through to the caller. Nothing is applied.
 
-**`backupCount` is memory redundancy and nothing else** (`STRATUM_BACKUP_COUNT`,
-default 1). Until the roles landed it was `min_durable_copies - 1`, because the
-durable copies WERE the partition's replicas: the append rode the replication onto the
-owner and its synchronous backups. Tying them together is also what made search
-members impossible — a partition whose primary and backup both landed on volume-less
-members would have been acked with no durable copy at all.
+## The write path
 
-**Search members are a query-throughput knob, not a durability one.** The write gate
-counts writers (`HotWrites.durableCopies`), the split-brain minimum counts writers
-(`hazelcast/WriterCountProtection`), the cluster-formation wait counts writers
-(`StratumMapConfig.withWriterQuorum`) and the hot-restore barrier counts
-writers (`HotRestore.awaitClusterReplay`). So one writer plus five search members with
-`min_durable_copies = 2` **refuses writes**, and scaling search members from 0 to 4
-and back changes nothing durable — it rebalances partitions and nothing else.
+All writes (`Put`, `InsertIfAbsent`, `ReplaceIfUnchanged`, `Delete`, and `Apply` of several) run on one
+member, the **sequencer**: the oldest member of the Hazelcast cluster. Another member forwards the write
+to it (`RecordStore.SequencerCall`, executor `stratum.sequencer`). The log has one writer, so the entry
+locks are plain JVM locks in the sequencer (`store/EntryLocks.java`).
 
-A search member does still wait at the cluster-formation and hot-restore barriers: it
-is handed partitions the moment it joins, and answering a query off a half-recovered
-store is the silent incompleteness those barriers exist to refuse. It files no report
-of its own on the way through.
+1. **Locks.** Take the lock of every entry the operation touches, including entries that do not exist
+   yet, in the canonical order (record type full name, then key; `store/EntryId.java`). Every operation
+   uses that order, so two operations over the same entries queue rather than deadlock. Each entry
+   may appear once per operation.
+2. **Conditions.** Check every op against the stored rows. One failure refuses the whole operation and
+   nothing is written.
+3. **Append.** Assign the revisions and the next seq, and append the operation to the redo at the level
+   it is owed. A MEMORY operation is not appended and takes no seq.
+4. **Ack.** Wait for the redo's ack at that level, up to `write_ack_timeout_ms` (default 10000).
+5. **Apply.** Write the maps. Operations are applied in the order they took their seq (a ticket per
+   operation), so revisions are applied in increasing order.
+6. **Publish.** Publish the applied changes to the change feed.
+7. **Answer.** Return the revision and the acked level per op.
 
-A search member's record maps carry **neither the idle clock nor the read-through
-loader**. The two are wired together so a map cannot get the clock without the leg
-that answers for what the clock evicts, and on a member with no volume the pair is
-neither — the clock alone would make eviction a deletion. A search member therefore
-holds its partitions resident for as long as it is a member, which is what its memory
-request is sized for.
+Nothing can read or watch a write before its ack, because nothing is in the maps or the feed before it.
 
-## The daily checkpoint (per writer, one transaction)
+### The answers
 
-Each **writer** runs one transaction on the existing `cleanup_interval_seconds`
-cadence (`DailyCheckpoint`). It is **not** leader-gated — it writes this pod's own
-volume, and one pod doing it for the cluster would leave every other writer with no
-baseline. A search member runs no cycle at all: nothing to dump, nothing to truncate,
-no tombstone log to purge into.
+| Answer | When |
+|---|---|
+| `ALREADY_EXISTS` | `InsertIfAbsent` on a present entry |
+| `ABORTED` | `ReplaceIfUnchanged` on an entry whose revision (or stored row) is not the expected one |
+| `NOT_FOUND` | `ReplaceIfUnchanged` or `Delete` on an absent entry, or on one held to another namespace |
+| `PERMISSION_DENIED` | `Put` over an entry held to another namespace |
+| `INVALID_ARGUMENT` | an empty operation, or one naming an entry twice |
+| `FAILED_PRECONDITION` | a REMOTE write the redo refuses (see above) |
+| `UNAVAILABLE` | the redo did not ack in time, refused, or is unreachable; the store has not replayed yet; the sequencer did not answer a forwarded call |
 
-1. **Purge.** Every row whose `(spec.deleted_flag)` field is true and whose delete
-   `(spec.store_epoch)` is older than the deleted-max-age is appended to the pod's
-   tombstone log and then removed from memory **and from this pod's record
-   index**. Removing it from memory alone would leave the index's copy for step 2
-   to dump straight back into the next checkpoint — tombstoned and resurrected,
-   every day, forever.
-   The tombstone line is written **before** the removal: a crash between the two
-   leaves a line for a row that is still present, which the next sweep writes again
-   and which is harmless, while the other order can lose the row with no trace.
-2. **Dump.** Every row that survived step 1 is written to
-   `<dataRoot>/checkpoint/<ts>`. The rows are the **union of this pod's record
-   indexes and its resident memory** (`DurableRows`), never memory alone: a row
-   evicted on its idle clock is off-heap, and a dump taken from memory would omit
-   it and then have step 3 truncate the redo entries that still named it — the
-   failure that hotfixed the idle clock off on 2026-09-21. Disk alone is not the
-   answer either, because the index write is queued off the ack path, so a row
-   written moments before the sweep is in memory and not yet indexed. The dump is
-   staged as a fsync'd sibling temp and committed by
-   one atomic rename (`FsUtil.writeTemp` + `FsUtil.promote`). `current`, a pointer
-   file naming that checkpoint, is then rewritten by the same atomic-rename
-   primitive.
-3. **Truncate.** Only once that rename has succeeded, every redo log is rolled to
-   an empty baseline (`HotRedoLogs.truncateToCheckpoint`). The checkpoint file IS
-   the baseline now; what has to survive the roll is exactly the tail, and that is
-   what `RedoLog.roll` folds back in.
+**UNAVAILABLE after an append means the outcome is unknown.** The append may be in the log. It is not
+applied now, but if it is in the log it is applied at the next replay. So a retry can see its own earlier
+attempt: a retried `InsertIfAbsent` can answer `ALREADY_EXISTS`, and a retried `ReplaceIfUnchanged`
+can answer `ABORTED`. A caller that retries should read the entry back when that matters.
 
-**Failure at any step leaves the previous checkpoint plus an un-truncated redo log,
-which is a complete recovery set.** The transaction does not roll back and has
-nothing to roll back: it aborts, and the outcome of an aborted run is "try again on
-the next tick", never data loss. That holds only while the truncate is strictly
-last. The sweep is idempotent for the same reason — a row purged in a partial run
-and seen again on retry is simply purged again.
+### While the redo is unreachable
 
-### Layout
+Writes owed LOCAL or REMOTE are refused (UNAVAILABLE). After a failed ack the sequencer drops its append
+stream and marks itself out of sync; it does not write again until it has replayed. The keeper thread in
+`StratumHandler` retries the replay with backoff (1 s, doubling to 30 s). Reads of what is already in
+memory keep working. MEMORY writes are refused too while the sequencer is out of sync.
 
-```
-<dataRoot>/checkpoint/<ts>              one dump, NDJSON, one line per row
-<dataRoot>/checkpoint/current           a text file holding one <ts>
-<dataRoot>/hot/…/<map>.log              this pod's redo log, the tail since <ts>
-<dataRoot>/records/<pkg>.<Type>/        this pod's Lucene index for one record type
-<dataRoot>/tombstones/<yyyy-MM-dd>.jsonl   every row this pod has purged, UTC days
-```
+## Start: replay
 
-`current` is a **pointer file, not a symlink**. Both are updated by the same atomic
-rename, so they are equally safe; a regular file is readable by anything that can
-read the directory, including an offline collector working off a volume snapshot
-where a symlink's target may not have come along.
+Every start replays the tenant from the redo (`RecordStore.catchUp`): first the compacted snapshot (one
+PUT per live entry), then the tail behind it in seq order. A full restart, a start on another cluster
+and a restore after a region loss are the same operation. Restore is to the latest state.
 
-The tombstone log is **write-only**. Nothing in the platform reads it. It is a
-historical record that can be shipped offline; each line carries the record type,
-the key, the tenant, the principal, the delete's `store_epoch`, the purge time and
-the full payload as protobuf JSON, so it is readable without the `.proto`.
+Until the first replay finishes, reads and writes answer UNAVAILABLE (`RecordStore.readable()`, checked
+by every generated read, write and watch). The flag lives in `stratum.meta`, so it is raised once per
+cluster lifetime and not lowered by a later takeover.
 
-## Cold start
+Each entry's revision is restored from the log, and the next revision continues past the highest seen.
 
-Cold start is **the checkpoint plus the redo tail**, not a replay from offset zero:
+### Sequencer takeover
 
-- `EventStore.init` loads `checkpoint/current` into the maps before the redo
-  replay, and only on a cold boot — the gate is `ColdStartRebuilder.shouldReplay`,
-  i.e. the store is empty cluster-wide. A member restarting alongside live peers
-  gets its partitions back from them, and loading a stale local dump over that
-  would be one pod overwriting the cluster's newer rows with its own older ones.
-- `HotRestore.replay` then applies the redo tail on top, resolved per key by
-  highest `store_epoch`, so a row rewritten after the dump wins over the dump's copy.
-- The full event-log replay is not removed; it is simply no longer reached by a pod
-  that has a checkpoint, because the store is no longer empty by the time
-  `StratumHandler` asks. A pod with no checkpoint — a first boot, a replaced volume
-  — still replays, which is what should happen.
-- What each pod reports to the restore ledger is **its checkpoint's row count plus
-  the redo records it read**, not the redo records alone. The durability floor in
-  `HotRestore.awaitClusterReplay` counts a pod as a contributor when that number is
-  non-zero, so a pod sitting just after its own truncate still counts: its rows
-  moved from the tail into the dump, and reading it as an empty volume refused
-  restarts that had lost nothing
-  (`decisions/2026-09-21-stratum0-checkpoint-quorum-crashloop.md`).
+When the sequencer leaves, the next oldest member becomes the sequencer. It does not know the log's tail,
+so it replays before it writes, and it applies **only seq > applied** (`applied_seq` in `stratum.meta`,
+which survives in memory with the backups). A write the old sequencer appended but never applied is
+therefore applied now, not lost. Writes in the meantime answer UNAVAILABLE; the caller retries.
 
-Recovery therefore costs the size of the data plus one cycle of writes, not the
-size of the history. **A purged row can never come back**: it is absent from the
-dump, and the redo tail that still mentioned it was discarded by the same
-transaction's truncate.
+If the redo's snapshot already folds in seqs past `applied` (the store fell behind compaction), the
+snapshot replaces the maps: any entry it does not carry is removed. Every open watch is then ended, on
+every member, so watchers start again from a snapshot.
 
-## Memory residency
+A cluster merge can make another member the oldest. The member that stops being the sequencer marks
+itself out of sync, and replays if it ever becomes the sequencer again.
 
-One clock per record type, and Hazelcast runs it: per-entry **max-idle** set from
-`(spec.record).residency.idle_seconds` (`StratumMapConfig`, from the generated
-`StratumEventStores.idleSeconds`). A row stays resident while it is read or
-written and leaves memory once it has gone `idle_seconds` with neither. A read
-resets the clock without restamping `(spec.store_epoch)`, appending to the redo
-log or touching disk.
+### Two sequencers
 
-This replaced, on 2026-09-20:
+A split brain gives each half its own oldest member, and so two sequencers. The redo's strict seq is the
+fence: an append succeeds only if it follows the log's last seq exactly. The half that appends second is
+refused, replays (taking in the other half's writes), and checks conditions again against the whole log.
+So the log stays one sequence and no condition is decided against a state the log has moved past. Reads
+in either half can be stale while the split lasts.
 
-- **The HOT/WARM/COLD residency classes** and the per-query residency boundary
-  (`WarmResidency`) that partitioned a warm type's memory and disk legs. There is
-  one leg now, so there is nothing to partition and nothing to deduplicate.
-- **`WarmEviction`**, the periodic sweep that dropped rows whose `store_epoch` had
-  aged past that boundary. It measured a WRITE clock on a sweep interval; max-idle
-  measures reads and writes, per entry, continuously.
-- **The `retention_days` sweep** (`EventStore.runRetentionCleanup`, the generated
-  `StratumEventStores.runRetention`). It measured each record's declared
-  `(spec.record).retention.timestamp_field`, an annotation retired with the same
-  decision — no proto declares one, so the sweep had become a no-op before it was
-  removed.
-- **The node-local Lucene tier** (`WarmStore`/`WarmIndex`), which was keyed on the
-  retired `residency: {window: RESIDENCY_WARM}` preset and generated an empty
-  dataset list once no proto declared it.
+## Members, zones, footprint
 
-### The disk leg under the clock
+- Every member is the same: it holds partitions (primaries and backups) of every record map and answers
+  queries over them (`hazelcast/StratumMapConfig.java`). A query (`List`, `Count`) is a scatter-gather
+  across the members. A point `Get` is read on the sequencer with the entry locked, so it sees a write
+  as soon as the write is answered.
+- `STRATUM_BACKUP_COUNT` (default 1) synchronous backups per map. Backups are memory, for availability.
+- `STRATUM_ZONE` (set by the operator from the node's `topology.kubernetes.io/zone`) makes backups
+  zone-aware: a partition's backup is never in its primary's zone, so a zone loss costs no row while
+  another zone holds a member. Unset, backups are not zone-aware.
+- No eviction. Each tenant's whole dataset stays resident, and the memory request is sized for it
+  (`hazelcast_memory_mb`).
+- **A single member is allowed.** It trades availability, not durability: a restart is downtime until
+  the replay finishes, and nothing acked at LOCAL or REMOTE is lost. MEMORY writes are lost on any full
+  restart, whatever the member count.
+- Members are found through `STRATUM_SEED_MEMBERS`, rendered by the operator.
 
-Eviction is a **cache miss, not a deletion**, because every record map has a
-read-through leg beneath it:
+## Watch
 
-- **One Lucene index per record type**, on this pod's volume, under
-  `<dataRoot>/records/<pkg>.<Type>/` (`disk/RecordIndex`). Keyed by the record key,
-  holding the record's protobuf full name (e.g. `accountingrecord.AccountingRecord`)
-  and its protobuf bytes — the same line shape the checkpoint uses, and for the same
-  reason: the full name resolves through the generated registry
-  (`StratumEventStores.defaultInstance`), so a row comes back as the type the maps and
-  the query plane expect. No Java class name is stored, on disk or on the Hazelcast
-  wire (`hazelcast/ProtoMessageSerializer`); volumes written in the older class-name
-  format are rewritten once at boot by `disk/ClassNameMigration`.
-- **Every write lands on every writer's index as well as in memory.** The index write
-  rides `RecordPersistTask`, the same task that queues the redo append, so it runs on
-  every writer member and each writer's index holds the whole store. It is queued to
-  one node-local thread and is **not** on the ack path, exactly like the redo append.
-  Because each writer is reached over its own connection, two writes to one key can
-  arrive in either order, so `RecordDisk.writeAsync` refuses a row whose
-  `store_epoch` is older than the one the index already holds. The redo log needs no
-  such guard — `HotRestore` resolves its records by the same epoch on the way in.
-- **A memory miss loads from it.** Each record map on a WRITER carries a Hazelcast
-  `MapLoader` (`disk/RecordDiskLoader`), wired in `StratumMapConfig.durableMap` in the
-  same branch that applies the max-idle clock, so a map cannot get the clock without
-  the leg — and a search member, having no leg, gets neither. `loadAllKeys()` answers null: this is read-through only, and preloading the
-  index would both start from the wrong file and undo eviction every time a map is
-  opened.
-- **A dead row is not loadable.** A flagged-deleted row past its deleted-max-age
-  answers null even while the index still holds it, because the decision is explicit
-  that such a row is never loaded into Hazelcast again; it is on disk only because
-  the next sweep has not reached it.
+`Watch<T>Changes` exists on every record type (`ChangeFeed.java`, and the watch method emitted by
+`RecordMapImplGenerator.writeSurface`).
 
-This is **not** the warm tier returning. `WarmStore`/`WarmIndex` were the WARM/HOT
-model's disk half — monthly slices, per-slice searchers, epoch intervals so a query
-could prune legs, and an indexed Lucene field per `(spec.query_field)` so disk could
-evaluate predicates. None of that is here: there are no tiers to partition against
-and no disk-side query plane. This is a key/value store that happens to be Lucene.
+- **Only applied writes.** The feed is fed with what the sequencer applied, which is only what the redo
+  acked at the level owed. A refused write is never delivered.
+- **Revision order.** The sequencer publishes each applied operation once, in commit order, on a
+  Hazelcast reliable topic (`stratum.changes`); every member delivers it to its own watchers.
+- **Snapshot, then changes.** A watch from 0 sends the rows in memory, then the changes after the feed
+  revision read before the scan. A change made during the scan can appear both in the snapshot and as a
+  change; applying it again is a no-op.
+- **Resume.** Each member keeps the last 4096 changes per record type (`ChangeFeed.HISTORY`). A watch
+  resuming from a revision inside that history gets every change after it. One older than that is
+  answered `OUT_OF_RANGE`, and the caller re-watches from 0.
+- **Watches end** (UNAVAILABLE, "watch again") when a member misses changes on the topic (a gap in the
+  topic's sequence; the ring buffer holds 65536 operations), when the store is rebuilt from a snapshot
+  (above), and when the store shuts down. The member's history is cleared at the same time.
+- A watch is held to the caller's namespace; a fleet-wide (`/system`) caller sees every namespace.
 
-The redo log is **still** the crash-recovery record and is not replaced by this. It
-is ordered, append-only and epoch-stamped, and `HotRestore` merges on that epoch;
-the index is an unordered latest-value store per key. Neither can stand in for the
-other.
+## Tenant deletion
 
-### Open: `List`/`Watch` do not see an evicted row
+Decision: `decisions/tenant-deletion-2026-10-27.md`. Deleting a tenant deletes all its data. Its
+Stratum, and so its in-memory rows, go with its namespace (`tac-<deployment>-<tid>`), and the redo
+service deletes its log at both sites (redo#1). Stratum itself does nothing on deletion: it holds nothing
+that outlives its pods.
 
-The read-through leg answers a **point read**. It does not, and with Hazelcast
-cannot, extend to a scan: the generated query plane (`StratumRecordMaps`) iterates
-`IMap.values()`, and `values()` — like `size()` — runs over the resident entries
-only. So with the clock live:
+## Known gaps
 
-- a `Get` by key returns an idle-evicted row (the loader fires);
-- `List`/`Watch` do not return it, and `Count` does not count it, until something
-  `Get`s it back into memory.
-
-For `Count` that is the decision's own rule ("a dashboard counting a dataset" must
-not keep it hot). For `List`/`Watch` it is a real behaviour change at
-`idle_seconds`, and closing it would mean giving the generated scan a second,
-disk-side leg — structurally the two-leg scan that was deleted with the warm model.
-Raised for decision in `looper/schematic/inbox.md` (2026-09-22); not blocking, and
-stated here rather than left to be discovered.
-
-### Cold start keeps its event-log fallback
-
-`ColdStartRebuilder` is retained deliberately; see "Cold start" above. The
-checkpoint makes it unreachable for a pod that has one, which is the cutover the
-decision asked for. A pod with no checkpoint — a first boot, a replaced volume —
-still replays, and deleting that path would leave such a pod with no recovery route
-when the `stratum` consumer group's offsets have already advanced past the history.
-
-## What stratum does NOT guarantee
-
-- **It is not the system of record.** A record's presence in stratum is not proof
-  it happened, and its absence is not proof it did not. The event log is the truth.
-- **It does not survive a lost event log AND lost volumes.** With every checkpoint
-  and every redo log gone, the recoverable history is whatever the broker still
-  holds — and stratum's effective history is then
-  `min(what was ever published, broker retention)`.
-- **A redo append is queued, not awaited.** The ack is the in-memory replication.
-  A process killed inside that window loses that append; the row survives on the
-  other writers that queued the same append, and a simultaneous loss of every writer
-  inside that window is the named, accepted cost of acking on replication rather
-  than on the disk write. The persist now crosses a network hop before it is queued,
-  so the window is one hop wider than it was when the append rode the replication.
-- **N writers write N identical dumps**, and since every writer holds the whole store
-  they are now identical in full. That is the accepted cost until the "collect from
-  one pod and compress" process exists (Jody, 2026-09-20).
+- **Soft-deleted rows are not purged.** A row with `(spec.deleted_flag)` set stays in memory, and in the
+  redo's snapshot, until someone deletes it. The daily checkpoint used to purge such rows after
+  `deleted_max_age`; it was removed with the rest of the disk path and nothing replaces it yet. Queries
+  still exclude flagged rows unless `include_deleted` is set.
+- **Revisions are store-assigned**, one int64 counter across all record types, not the redo seq. A MEMORY
+  write takes a revision but no seq, and one operation takes one seq but a revision per op. The revision
+  is kept in the log (`RedoChange.revision`) so a replay restores it exactly.
+- **MEMORY writes are per cluster lifetime.** They are not in the log, so a full restart loses them by
+  definition.
+- **Point-in-time restore** is done by editing the redo log by hand.
+- **REMOTE** is refused until redo#1 step 2 lands (above).
 
 ## Verification
 
-- `DailyCheckpointTest` — the tombstone log's contents, the dump's
-  one-rename commit, a failed dump leaving the previous checkpoint still named by
-  `current`, truncate running only after that commit, and the sweep's idempotence.
-- `CheckpointColdStartTest` — a cold start that loads `checkpoint/current` and
-  replays only the tail, and a purged row that nothing left on the volume can bring
-  back.
-- `disk/IdleEvictionDurabilityTest` — the three properties the leg exists for,
-  each against a control that is the pre-leg wiring: an idle-evicted row is still
-  readable, it still appears in the next checkpoint dump, and it survives a cold
-  start built on that dump.
-- `StratumMapConfigDurabilityTest.everyRecordMapCarriesItsDeclaredIdleClock` — every
-  record map carries its declared clock AND the loader behind it, asserted together
-  so neither can be applied without the other.
-- `RecordAnnotationsTest` — the markers resolved off the descriptor, including a
-  real generated type's `(spec.store_epoch)`.
-- `HotRedoRestoreTest`, `HotRestoreLedgerTest` — the redo leg and the cross-node
-  restore barrier. `ColdStartRebuilderTest` — the event-log replay decision.
-- `HotRestoreDurabilityFloorTest` — a recovery under the floor refuses rather than
-  logs; `HotRestoreCheckpointContributorTest` — a peer whose log is empty because
-  its checkpoint just truncated it still counts toward that floor, and a peer with
-  neither a tail nor a dump still does not.
-- `hot/HotWritesWriterCountTest` — one writer and five search members refuse a write
-  needing two copies, the same write is acked once a second writer joins, and a
-  member with no role attribute counts as a writer.
-- `hot/SearchMemberRoleTest` — the persist goes to every writer and no search member
-  (including to a writer that owns nothing of the key, which is the property the old
-  partition-scoped append did not have); the restore barrier expects writers only and
-  search members file nothing; search members take partitions, answer the query, and
-  give them back losslessly.
-- `hazelcast/StratumMapConfigDurabilityTest` — `backupCount` does not move with
-  `min_durable_copies` and a record's own declaration does not move it either; the
-  protection counts writers; a search member's maps carry neither the clock nor the
-  loader.
-- `StratumMapConfigDurabilityTest.everyRecordMapCarriesItsDeclaredIdleClock` — every
-  record map is configured with its declared clock; `IdleResidencyEvictionTest` —
-  that the clock actually evicts, and that a read resets it without writing.
+- `server/src/test/java/com/github/tacplusdev/stratum/store/RecordStoreTest.java`: the write answers,
+  Apply all or nothing, lock order (canonical, UTF-8 byte order) and no deadlock between opposed
+  multi-entry writes, apply-after-ack, a write whose ack never comes (refused, applied only by the next
+  replay), refusal while the redo is unreachable, REMOTE refused, reads refused until the replay, replay
+  of snapshot and tail at start, a full restart, forwarding to the sequencer, a takeover that applies its
+  predecessor's tail, and Watch delivering only acked writes on the sequencer and on another member.
+- `.../store/EntryLocksTest.java`: lock order and map locks excluding their entries.
+- `.../RecordWriteSurfaceE2ETest.java`: the same answers over gRPC through the generated wrapper, Get's
+  revision, Apply, and `Watch<T>Changes` (snapshot, then only acked writes).
+
+The redo service is an in-memory log with the redo's rules (`store/InMemoryRedoLog.java`); no test runs
+against a deployed redo.

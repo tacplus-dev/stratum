@@ -214,7 +214,7 @@ class RecordGetByKeyTest {
     private static String generate(Path dir, String eventBody) throws IOException {
         Path protoRoot = tree(dir.resolve("proto"), eventBody);
         VServiceDiscovery.RecordPlane plane = VServiceDiscovery.discoverRecordPlane(protoRoot, "stratum");
-        List<EventTopicDiscovery.TopicEvent> records = EventTopicDiscovery.discover(protoRoot);
+        List<RecordDiscovery.RecordDecl> records = RecordDiscovery.discover(protoRoot);
         assertEquals(1, records.size(), "expected exactly one record, got " + records);
 
         Path out = dir.resolve("out");

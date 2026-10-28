@@ -1,7 +1,8 @@
 # stratum
 
-Stratum is the platform's record store: it hosts the tacplus-declared records (`option (spec.record)`)
-of the whole fleet and serves the record query plane built on them. See [design.md](design.md),
+Stratum is the platform's record store: one per tenant, it holds that tenant's tacplus-declared records
+(`option (spec.record)`) in memory, serves the generated record plane over them (writes, Get, queries,
+Watch), and makes every write durable through the redo service before applying it. See [design.md](design.md),
 [RECORD_EVENT_ARCHITECTURE.md](RECORD_EVENT_ARCHITECTURE.md) and [docs/DURABILITY.md](docs/DURABILITY.md).
 
 ## Build

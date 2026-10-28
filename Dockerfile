@@ -2,9 +2,8 @@
 # Distroless Java 21 base with no shell.
 # The launcher binary reads LAUNCH_CMD and supervises the java process.
 
-# Pre-create /var/lib/stratum with correct ownership for nonroot (65532).
-FROM busybox AS setup
-RUN mkdir -p /var/lib/stratum/persistence
+# Stratum holds no durable state (the redo service is its durability), so the
+# image has no volume.
 
 FROM gcr.io/distroless/java21-debian13
 
@@ -18,9 +17,8 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.vendor="tacplus-dev" \
       org.opencontainers.image.title="stratum" \
-      org.opencontainers.image.description="Supervisor LLM stateful SQL workspace with Hazelcast"
+      org.opencontainers.image.description="Per-tenant, in-memory record store (Hazelcast); durability through the redo service"
 
-COPY --from=setup --chown=65532:65532 /var/lib/stratum /var/lib/stratum
 COPY server/target/stratum.jar /app/stratum.jar
 
 ARG TARGETARCH
@@ -31,8 +29,5 @@ USER nonroot
 # Extra JVM flags can be appended via JAVA_TOOL_OPTIONS (automatically read by the JVM).
 ENV LAUNCH_CMD="java -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:MinRAMPercentage=50.0 -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/stratum-heapdump.hprof -Djava.net.preferIPv4Stack=true -Dio.netty.recycler.maxCapacityPerThread=0 -jar /app/stratum.jar"
 ENV HEALTH_PORT=8443
-
-# Hazelcast Hot Restart persistence directory for the scratchpad map.
-VOLUME /var/lib/stratum/persistence
 
 ENTRYPOINT ["launcher"]

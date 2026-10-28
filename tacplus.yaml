@@ -1,14 +1,11 @@
 language: java
-tacplus: "2.4"
+tacplus: "2.5"
 pkg: com.github.tacplusdev.stratum
 output-dir: model/target/generated-sources
 src: proto
 # The record store subscribes to every (spec.record) in the fleet: its generated
 # handler surface is derived from them all.
 records: all
-# ColdStartRebuilder and the codegen's EventTopicDiscovery read eventbus types.
-depends:
-  - eventbus
 # The server tests exercise the record plane over letsencrypt's record
 # (LetsEncryptCert): a test-time need, not the contract.
 test-depends:
