@@ -12,3 +12,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-10-27 looper issue Base image gcr.io/distroless/java21-debian12 is not on the latest Debian line: use java21-debian13 (#14, af1db81)
 - 2026-10-28 looper issue Guava 33.5.0-android (via grpc-protobuf) has a HIGH deserialization advisory: pin 33.7.2 (#15, 5b9c2ef)
 - 2026-10-29 looper issue Per-tenant, in-memory Stratum: no event bus, durability through the redo service (#2, 206a973)
+- 2026-10-29 looper issue Per-tenant Hazelcast cluster name (stratum-<tid>) and never multicast join (#18, f1da30e)
