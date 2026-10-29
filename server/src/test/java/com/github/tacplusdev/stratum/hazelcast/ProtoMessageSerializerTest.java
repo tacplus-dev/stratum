@@ -33,7 +33,7 @@ class ProtoMessageSerializerTest {
     /** The serialization service the stratum Config actually configures. */
     private static InternalSerializationService service() {
         return new DefaultSerializationServiceBuilder()
-                .setConfig(StratumMapConfig.build(List.of(), 1, null).getSerializationConfig())
+                .setConfig(StratumMapConfig.build("acme0001", List.of("127.0.0.1"), 1, null).getSerializationConfig())
                 .build();
     }
 

@@ -136,7 +136,13 @@ in either half can be stale while the split lasts.
 - **A single member is allowed.** It trades availability, not durability: a restart is downtime until
   the replay finishes, and nothing acked at LOCAL or REMOTE is lost. MEMORY writes are lost on any full
   restart, whatever the member count.
-- Members are found through `STRATUM_SEED_MEMBERS`, rendered by the operator.
+- Members are found through `STRATUM_SEED_MEMBERS`, rendered by the operator, and only through it: the
+  join is TCP/IP to those addresses, never multicast. Without seed members a member refuses to start; a
+  single member or a dev run sets `127.0.0.1`.
+- The cluster name is `stratum-<tid>`, the tid taken from the instance's own SPIFFE identity
+  (`/tenants/<tid>/services/stratum`), never from config. Two tenants' members that reach each other's
+  port never form one cluster (#18). This keeps accidental joins apart; it is not admission: a member
+  that knows the name still gets in, and member traffic is plaintext (#17).
 
 ## Watch
 

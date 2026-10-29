@@ -92,10 +92,9 @@ class RecordWriteSurfaceE2ETest {
 
     @BeforeAll
     static void up() throws Exception {
-        Config cfg = StratumMapConfig.build(List.of(), 1, null);
+        Config cfg = StratumMapConfig.build("acme0001", List.of("127.0.0.1"), 1, null);
         cfg.setClusterName("stratum-write-e2e-" + UUID.randomUUID());
         cfg.getNetworkConfig().setPort(5851).setPortAutoIncrement(true);
-        cfg.getNetworkConfig().getJoin().getMulticastConfig().setEnabled(false);
         hz = Hazelcast.newHazelcastInstance(cfg);
         redo = new InMemoryRedoLog();
         store = new RecordStore(hz, new StratumRecordTypes(), redo, Duration.ofSeconds(2));

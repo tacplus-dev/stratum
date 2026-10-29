@@ -30,7 +30,7 @@ the looper then marks it `promoted` or `declined` here with the date.
   what tacplus's dependency list expects first.
 - **The operator renders the per-tenant Stratum** (2026-10-28, #2): stratum.proto now declares
   `tenant_owned: true` and holds no durable state. The operator (tacplus-dev/operator) has to run one
-  Stratum per tenant with no volume, set `STRATUM_SEED_MEMBERS` to that tenant's members, set
+  Stratum per tenant with no volume, set `STRATUM_SEED_MEMBERS` to that tenant's members (required since #18: a member without seeds refuses to start, and there is no multicast fallback; a one-member tenant names itself), set
   `STRATUM_ZONE` from the node's `topology.kubernetes.io/zone` (zone-aware backups), and size memory for
   the tenant's whole dataset (nothing is evicted). The member count per tenant is the footprint knob; one
   is allowed. Needs an operator issue.

@@ -21,6 +21,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.github.tacplusdev.stratum.StratumRecordTypes;
+import com.github.tacplusdev.stratum.model.chassis.spiffe.Spiffe;
 import com.github.tacplusdev.stratum.store.RecordStore;
 
 /**
@@ -59,7 +60,18 @@ public final class StratumMapConfig {
      */
     public static final String ZONE_ENV = "STRATUM_ZONE";
 
-    public static final String CLUSTER_NAME = "stratum";
+    /**
+     * The cluster name is this prefix and the tenant's id: two tenants' members
+     * that reach each other's ports still never form one cluster. It keeps
+     * accidental joins apart; it is not admission (stratum#17).
+     */
+    public static final String CLUSTER_NAME_PREFIX = "stratum-";
+
+    /** The env the operator renders the tenant's member addresses into. */
+    public static final String SEED_MEMBERS_ENV = "STRATUM_SEED_MEMBERS";
+
+    /** The service segment of a tenant's Stratum identity, /tenants/&lt;tid&gt;/services/stratum. */
+    static final String SERVICE_NAME = "stratum";
 
     /** The record query plane's open result sets, shared by every member (see StratumRecordMaps). */
     public static final String RECORD_QUERIES_MAP = "stratum.record-queries";
@@ -97,18 +109,48 @@ public final class StratumMapConfig {
     }
 
     /**
-     * @param seedMembers "host:port" addresses for TCP/IP join; empty for
-     *                    multicast (local development only)
+     * The tenant of this instance, from its own SPIFFE identity, which must be
+     * {@code spiffe://<td>/tenants/<tid>/services/stratum}: the identity the fleet
+     * minted, never a value a caller configures. Anything else names no tenant.
+     */
+    public static String tenantOf(String spiffeId) {
+        Spiffe.ParsedSpiffeId id = Spiffe.parseSpiffeId(spiffeId);
+        List<String> ns = List.of(id.namespace.substring(1).split("/"));
+        if (id.subjectKind != Spiffe.SubjectKind.SERVICE || !SERVICE_NAME.equals(id.subjectPath)
+                || ns.size() != 2 || !Spiffe.TENANTS_SEGMENT.equals(ns.get(0))) {
+            throw new IllegalArgumentException("not a tenant's Stratum identity (want spiffe://<td>/"
+                    + Spiffe.TENANTS_SEGMENT + "/<tid>/services/" + SERVICE_NAME + "): " + spiffeId);
+        }
+        return ns.get(1);
+    }
+
+    /**
+     * @param tenant      this instance's tenant id ({@link #tenantOf}); the cluster
+     *                    is {@code stratum-<tenant>}
+     * @param seedMembers "host:port" addresses for TCP/IP join, at least one; a
+     *                    single member or a dev run names itself (127.0.0.1).
+     *                    There is no multicast fallback: a member any host on the
+     *                    network can find is one any tenant's member can join.
      * @param backupCount synchronous backups per map
      * @param zone        this member's availability zone, or null
+     * @throws IllegalArgumentException with no tenant or no seed members: the
+     *                    member refuses to start
      */
-    public static Config build(List<String> seedMembers, int backupCount, String zone) {
+    public static Config build(String tenant, List<String> seedMembers, int backupCount, String zone) {
+        if (tenant == null || tenant.isBlank()) {
+            throw new IllegalArgumentException("no tenant: a Stratum member joins only its own tenant's cluster");
+        }
+        if (seedMembers == null || seedMembers.isEmpty()) {
+            throw new IllegalArgumentException(SEED_MEMBERS_ENV + " is empty: a member refuses to start "
+                    + "without its tenant's seed members (multicast join is never used; "
+                    + "a single member or a dev run sets it to 127.0.0.1)");
+        }
         Config cfg = new Config();
         // Records travel as (proto full name, proto bytes), never as a Java class name.
         cfg.getSerializationConfig().addSerializerConfig(new SerializerConfig()
                 .setTypeClass(Message.class)
                 .setImplementation(new ProtoMessageSerializer()));
-        cfg.setClusterName(CLUSTER_NAME);
+        cfg.setClusterName(CLUSTER_NAME_PREFIX + tenant);
         cfg.setInstanceName("stratum-" + UUID.randomUUID().toString().substring(0, 8));
         cfg.setProperty("hazelcast.phone.home.enabled", "false");
 
@@ -119,15 +161,11 @@ public final class StratumMapConfig {
         NetworkConfig net = cfg.getNetworkConfig();
         net.setPort(HAZELCAST_PORT);
         net.setPortAutoIncrement(false);
-        if (seedMembers == null || seedMembers.isEmpty()) {
-            net.getJoin().getMulticastConfig().setEnabled(true);
-            net.getJoin().getTcpIpConfig().setEnabled(false);
-        } else {
-            net.getJoin().getMulticastConfig().setEnabled(false);
-            net.getJoin().getTcpIpConfig().setEnabled(true);
-            for (String member : seedMembers) {
-                net.getJoin().getTcpIpConfig().addMember(member);
-            }
+        net.getJoin().getMulticastConfig().setEnabled(false);
+        net.getJoin().getAutoDetectionConfig().setEnabled(false);
+        net.getJoin().getTcpIpConfig().setEnabled(true);
+        for (String member : seedMembers) {
+            net.getJoin().getTcpIpConfig().addMember(member);
         }
 
         if (zone != null) {
@@ -150,6 +188,7 @@ public final class StratumMapConfig {
                 .setTopicOverloadPolicy(TopicOverloadPolicy.DISCARD_OLDEST));
         cfg.addExecutorConfig(new ExecutorConfig(RecordStore.SEQUENCER_EXECUTOR, SEQUENCER_THREADS));
 
+        log.info("stratum cluster {}, seed members {}", cfg.getClusterName(), seedMembers);
         log.info("stratum record maps {}: backupCount={}, zone={}, all resident (no eviction)",
                 StratumRecordTypes.mapNames(), backupCount, zone == null ? "unset (backups not zone-aware)" : zone);
         return cfg;

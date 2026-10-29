@@ -58,11 +58,9 @@ class RecordStoreTest {
     }
 
     private HazelcastInstance member() {
-        Config cfg = StratumMapConfig.build(List.of(), 1, null);
+        Config cfg = StratumMapConfig.build("acme0001", List.of("127.0.0.1"), 1, null);
         cfg.setClusterName(cluster);
         cfg.getNetworkConfig().setPort(5801).setPortAutoIncrement(true);
-        cfg.getNetworkConfig().getJoin().getMulticastConfig().setEnabled(false);
-        cfg.getNetworkConfig().getJoin().getTcpIpConfig().setEnabled(true).addMember("127.0.0.1");
         HazelcastInstance hz = Hazelcast.newHazelcastInstance(cfg);
         members.add(hz);
         return hz;

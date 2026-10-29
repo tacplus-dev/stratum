@@ -63,13 +63,13 @@ Stratum's hand-written code names no record type.
 | `server/.../store/WriteOp.java`, `RecordType.java`, `RecordTypes.java` | One decoded write; what the store knows of a record type. |
 | `server/.../store/RedoLog.java`, `GrpcRedoLog.java` | The redo service through its generated client: one `Append` stream per store, a `Replay` per catch-up, route tenant `00000002`. |
 | `server/.../store/ChangeFeed.java` | Each member's view of committed changes: what Watch serves, with 4096 changes of history per type. |
-| `server/.../hazelcast/StratumMapConfig.java` | Hazelcast config: one map per record type, backups, zone-aware grouping, the change topic, the sequencer executor. No eviction. |
+| `server/.../hazelcast/StratumMapConfig.java` | Hazelcast config: cluster `stratum-<tid>` (the tid from the instance's own SPIFFE identity), TCP/IP join to the seed members only (never multicast), one map per record type, backups, zone-aware grouping, the change topic, the sequencer executor. No eviction. |
 | `server/.../hazelcast/ProtoMessageSerializer.java` | Rows travel as (proto full name, proto bytes), never as a Java class name. |
 | `proto/services/stratum.proto` | Config (`hazelcast_memory_mb`, `write_ack_timeout_ms`), state, health, and the `redolog.Redo` client declaration. |
 
 `server/...` is `server/src/main/java/com/github/tacplusdev/stratum`.
 
-Environment: `STRATUM_SEED_MEMBERS` (Hazelcast join), `STRATUM_BACKUP_COUNT` (default 1), `STRATUM_ZONE`.
+Environment: `STRATUM_SEED_MEMBERS` (Hazelcast join; required, a single member or a dev run sets `127.0.0.1`), `STRATUM_BACKUP_COUNT` (default 1), `STRATUM_ZONE`.
 
 ## What was removed (stratum#2)
 

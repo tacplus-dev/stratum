@@ -24,6 +24,7 @@ import com.github.tacplusdev.stratum.model.chassis.collection.CollectionRuntime;
 import com.github.tacplusdev.stratum.model.types.services.stratum.Stratum;
 import com.github.tacplusdev.stratum.model.types.services.stratum.Helpers;
 import com.github.tacplusdev.stratum.model.chassis.servicemanager.Caller;
+import com.github.tacplusdev.stratum.model.chassis.token.TokenWrapper;
 import com.github.tacplusdev.stratum.model.types.sys.errors.ProtoException;
 import com.github.tacplusdev.stratum.model.types.sys.x509.X509;
 
@@ -135,13 +136,13 @@ public class StratumHandler extends StratumVServiceBase {
     /**
      * Hazelcast seed members, from STRATUM_SEED_MEMBERS: one "host:5001" entry per
      * member of this tenant's store, rendered by the operator from the
-     * StatefulSet's stable per-pod DNS. Empty (a plain local run) falls back to
-     * multicast, which in Kubernetes would leave every member in a cluster of one.
+     * StatefulSet's stable per-pod DNS. A single member or a dev run names itself
+     * (127.0.0.1). Empty, the member refuses to start ({@link StratumMapConfig#build}):
+     * there is no multicast fallback.
      */
     private static List<String> seedMembers() {
-        String raw = System.getenv("STRATUM_SEED_MEMBERS");
+        String raw = System.getenv(StratumMapConfig.SEED_MEMBERS_ENV);
         if (raw == null || raw.isBlank()) {
-            log.info("STRATUM_SEED_MEMBERS unset — Hazelcast will use multicast (single-node/dev)");
             return List.of();
         }
         List<String> members = Arrays.stream(raw.split(","))
@@ -150,6 +151,21 @@ public class StratumHandler extends StratumVServiceBase {
                 .toList();
         log.info("Hazelcast seed members: {}", members);
         return members;
+    }
+
+    /**
+     * This instance's tenant, from the subject of its own service token (the
+     * SPIFFE identity the fleet minted, /tenants/&lt;tid&gt;/services/stratum), never
+     * from config: it names the only cluster this member may join.
+     */
+    private String tenant() {
+        String subject;
+        try {
+            subject = TokenWrapper.parse(sm.getToken()).getSubject();
+        } catch (Exception e) {
+            throw new IllegalStateException("no service identity to take the tenant from: " + e.getMessage(), e);
+        }
+        return StratumMapConfig.tenantOf(subject);
     }
 
     /**
@@ -170,7 +186,7 @@ public class StratumHandler extends StratumVServiceBase {
         }
         log.info("config: hazelcast_memory_mb={}, write_ack_timeout_ms={}",
                 cfg.getHazelcastMemoryMb(), cfg.getWriteAckTimeoutMs());
-        HazelcastInstance hz = Hazelcast.newHazelcastInstance(StratumMapConfig.build(
+        HazelcastInstance hz = Hazelcast.newHazelcastInstance(StratumMapConfig.build(tenant(),
                 seedMembers(), StratumMapConfig.configuredBackupCount(), StratumMapConfig.configuredZone()));
         try {
             RecordStore s = new RecordStore(hz, new StratumRecordTypes(),
