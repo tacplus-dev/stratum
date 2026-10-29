@@ -41,8 +41,8 @@ the looper then marks it `promoted` or `declined` here with the date.
   `(spec.store_epoch)` gave.
 - **Drop google-cloud-storage** (2026-10-28, #2): `proto/dependencies.yaml` pins it only so tacplus
   emits `GcsArchiveSink` for the hot redo archive, which #2 removed. Dropping it (and the jackson-bom
-  pin it needs, #8) removes a dependency tree with a history of HIGH advisories. Check that nothing in
-  the generated model still needs it first.
+  and opentelemetry-bom pins it needs, #8 and #19) removes a dependency tree with a history of HIGH
+  advisories. Check that nothing in the generated model still needs it first.
 - **Split brain** (2026-10-28, #2): the redo's strict seq keeps the log single-writer, so a split
   cannot fork the database; but a minority side keeps answering reads from what it holds. Hazelcast
   split-brain protection on reads (or refusing reads without the sequencer) would close that.

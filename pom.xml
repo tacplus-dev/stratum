@@ -31,6 +31,7 @@
 		<lucene.version>10.2.1</lucene.version>
 		<google-cloud-storage.version>2.75.0</google-cloud-storage.version>
 		<jackson.version>2.18.12</jackson.version>
+		<opentelemetry.version>1.67.0</opentelemetry.version>
 	</properties>
 	<dependencyManagement>
 		<dependencies>
@@ -156,6 +157,19 @@
 				<groupId>com.fasterxml.jackson</groupId>
 				<artifactId>jackson-bom</artifactId>
 				<version>${jackson.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+			<!--
+			  google-cloud-storage brings opentelemetry 1.62.0, whose
+			  W3CTraceContextPropagator spends quadratic CPU on a crafted tracestate
+			  header (GHSA-ccrj-gw8r-854m, MODERATE). The BOM moves every core
+			  opentelemetry module to the release that fixes it, on one version.
+			-->
+			<dependency>
+				<groupId>io.opentelemetry</groupId>
+				<artifactId>opentelemetry-bom</artifactId>
+				<version>${opentelemetry.version}</version>
 				<type>pom</type>
 				<scope>import</scope>
 			</dependency>
