@@ -49,5 +49,13 @@ the looper then marks it `promoted` or `declined` here with the date.
 - **tacplus#205: a depends cycle merges the project's published proto** (2026-10-28, #2): letsencrypt
   depends on stratum, so stratum cannot generate a proto change before it is on `main`. #2 was verified
   with an explicit `--src` merge and the gates re-run after the push.
+- **Pin the exact tacplus version (`tacplus.lock`)** (2026-10-30, nightly scan, #20): `tacplus.yaml` names only
+  the `2.5` line, and `just generate` runs whatever `tacplus` is on the PATH. So tacplus v2.5.3 (tacplus#207)
+  broke `just gates` on main overnight, with no stratum commit. The decision tacplus-dev/roadmap
+  decisions/deterministic-builds-2026-10-27.md says a build is fully determined by its commit: the repository pins
+  the exact tacplus version and build-image digest, and moving the pin is a commit. tacplus#193 defines the pin
+  (`tacplus.lock`, `tacplus pin`), and it ships in 2.6.0 (tacplus#213). After that, stratum should commit a
+  `tacplus.lock` and have the justfile run the pinned binary. A new patch then reaches main as a looper commit
+  that passes the gates, not as a red nightly.
 
 ## Promoted / declined
