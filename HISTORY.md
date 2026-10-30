@@ -14,3 +14,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-10-29 looper issue Per-tenant, in-memory Stratum: no event bus, durability through the redo service (#2, 206a973)
 - 2026-10-29 looper issue Per-tenant Hazelcast cluster name (stratum-<tid>) and never multicast join (#18, f1da30e)
 - 2026-10-29 looper issue opentelemetry-api 1.62.0 (via google-cloud-storage) has GHSA-ccrj-gw8r-854m: pin opentelemetry-bom 1.67.0 (#19, 58f0549)
+- 2026-10-30 looper issue just gates fails on main: tacplus v2.5.3 routes the record plane by target_tenant (tacplus#207), and the E2E tests send none (#20, dedf848)
