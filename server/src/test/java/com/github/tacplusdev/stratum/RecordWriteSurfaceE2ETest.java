@@ -57,12 +57,15 @@ import com.github.tacplusdev.stratum.store.RecordStore;
  * writes the redo acked.
  *
  * <p>Auth is stubbed at the signature check only, as in
- * {@link TwoTenantQueryScopeE2ETest}; the claim handling and the wrapper's
- * tenant pins are the shipped path.
+ * {@link TenantQueryScopeE2ETest}; the claim handling and the wrapper's
+ * tenant pins are the shipped path. The server serves tenant {@value #TID}, as
+ * the instance does in production (its own identity's namespace, #18), and
+ * every request is routed to it by target_tenant (tacplus#207).
  */
 class RecordWriteSurfaceE2ETest {
 
-    private static final String TENANT = "/tenants/acme0001";
+    private static final String TID = "acme0001";
+    private static final String TENANT = "/tenants/" + TID;
 
     private static HazelcastInstance hz;
     private static InMemoryRedoLog redo;
@@ -92,7 +95,7 @@ class RecordWriteSurfaceE2ETest {
 
     @BeforeAll
     static void up() throws Exception {
-        Config cfg = StratumMapConfig.build("acme0001", List.of("127.0.0.1"), 1, null);
+        Config cfg = StratumMapConfig.build(TID, List.of("127.0.0.1"), 1, null);
         cfg.setClusterName("stratum-write-e2e-" + UUID.randomUUID());
         cfg.getNetworkConfig().setPort(5851).setPortAutoIncrement(true);
         hz = Hazelcast.newHazelcastInstance(cfg);
@@ -113,6 +116,7 @@ class RecordWriteSurfaceE2ETest {
                 return tw;
             }
         };
+        authorizer.setHostNamespace(TENANT);
         java.util.Map<String, StratumRecordMaps.Handle> registry = new java.util.concurrent.ConcurrentHashMap<>();
         server = NettyServerBuilder.forPort(0)
                 .addService(ServerInterceptors.intercept(
@@ -139,57 +143,77 @@ class RecordWriteSurfaceE2ETest {
         return assertThrows(StatusRuntimeException.class, call::run).getStatus().getCode();
     }
 
+    /** The route is checked before the handler: nothing is written. */
+    @Test
+    void aWriteWithNoTargetTenantIsRefusedAsInvalid() {
+        assertEquals(Status.Code.INVALID_ARGUMENT, code(() -> tenant.putLetsEncryptCert(
+                Query.PutLetsEncryptCertRequest.newBuilder().setItem(cert("unrouted", 1)).build())));
+        assertEquals(Status.Code.NOT_FOUND, code(() -> tenant.getLetsEncryptCert(
+                Query.GetLetsEncryptCertRequest.newBuilder().setTargetTenant(TID).setCertSetId("unrouted").build())));
+    }
+
+    /** A write routed to another tenant is refused before the handler: this instance serves {@value #TID} only. */
+    @Test
+    void aWriteRoutedToAnotherTenantIsRefused() {
+        assertEquals(Status.Code.PERMISSION_DENIED, code(() -> tenant.putLetsEncryptCert(
+                Query.PutLetsEncryptCertRequest.newBuilder().setTargetTenant("other001").setItem(cert("misrouted", 1)).build())));
+        assertEquals(Status.Code.PERMISSION_DENIED, code(() -> tenant.getLetsEncryptCert(
+                Query.GetLetsEncryptCertRequest.newBuilder().setTargetTenant("other001").setCertSetId("misrouted").build())));
+        assertEquals(Status.Code.NOT_FOUND, code(() -> tenant.getLetsEncryptCert(
+                Query.GetLetsEncryptCertRequest.newBuilder().setTargetTenant(TID).setCertSetId("misrouted").build())));
+    }
+
     @Test
     void theWriteAnswersArriveAsStatuses() {
         Query.RecordWriteResult first = tenant.insertIfAbsentLetsEncryptCert(
-                Query.InsertIfAbsentLetsEncryptCertRequest.newBuilder().setItem(cert("w1", 1)).build());
+                Query.InsertIfAbsentLetsEncryptCertRequest.newBuilder().setTargetTenant(TID).setItem(cert("w1", 1)).build());
         assertTrue(first.getRevision() > 0);
         assertEquals(Query.RecordDurability.RECORD_DURABILITY_LOCAL, first.getDurability(),
                 "LetsEncryptCert declares no durability: LOCAL, acked by the redo");
 
         assertEquals(Status.Code.ALREADY_EXISTS, code(() -> tenant.insertIfAbsentLetsEncryptCert(
-                Query.InsertIfAbsentLetsEncryptCertRequest.newBuilder().setItem(cert("w1", 2)).build())));
+                Query.InsertIfAbsentLetsEncryptCertRequest.newBuilder().setTargetTenant(TID).setItem(cert("w1", 2)).build())));
         assertEquals(Status.Code.ABORTED, code(() -> tenant.replaceIfUnchangedLetsEncryptCert(
-                Query.ReplaceIfUnchangedLetsEncryptCertRequest.newBuilder().setItem(cert("w1", 3))
+                Query.ReplaceIfUnchangedLetsEncryptCertRequest.newBuilder().setTargetTenant(TID).setItem(cert("w1", 3))
                         .setExpectedRevision(first.getRevision() + 1000).build())));
         assertEquals(Status.Code.NOT_FOUND, code(() -> tenant.deleteLetsEncryptCert(
-                Query.DeleteLetsEncryptCertRequest.newBuilder().setCertSetId("absent").build())));
+                Query.DeleteLetsEncryptCertRequest.newBuilder().setTargetTenant(TID).setCertSetId("absent").build())));
 
         Query.RecordWriteResult replaced = tenant.replaceIfUnchangedLetsEncryptCert(
-                Query.ReplaceIfUnchangedLetsEncryptCertRequest.newBuilder().setItem(cert("w1", 4))
+                Query.ReplaceIfUnchangedLetsEncryptCertRequest.newBuilder().setTargetTenant(TID).setItem(cert("w1", 4))
                         .setExpectedRevision(first.getRevision()).build());
         Query.GetLetsEncryptCertResponse got = tenant.getLetsEncryptCert(
-                Query.GetLetsEncryptCertRequest.newBuilder().setCertSetId("w1").build());
+                Query.GetLetsEncryptCertRequest.newBuilder().setTargetTenant(TID).setCertSetId("w1").build());
         assertEquals(4, got.getItem().getExpiresAt());
         assertEquals(replaced.getRevision(), got.getRevision());
 
-        tenant.deleteLetsEncryptCert(Query.DeleteLetsEncryptCertRequest.newBuilder().setCertSetId("w1").build());
+        tenant.deleteLetsEncryptCert(Query.DeleteLetsEncryptCertRequest.newBuilder().setTargetTenant(TID).setCertSetId("w1").build());
         assertEquals(Status.Code.NOT_FOUND, code(() -> tenant.getLetsEncryptCert(
-                Query.GetLetsEncryptCertRequest.newBuilder().setCertSetId("w1").build())));
+                Query.GetLetsEncryptCertRequest.newBuilder().setTargetTenant(TID).setCertSetId("w1").build())));
     }
 
     @Test
     void applyIsAllOrNothingOverTheWire() {
-        tenant.putLetsEncryptCert(Query.PutLetsEncryptCertRequest.newBuilder().setItem(cert("ap-b", 1)).build());
+        tenant.putLetsEncryptCert(Query.PutLetsEncryptCertRequest.newBuilder().setTargetTenant(TID).setItem(cert("ap-b", 1)).build());
         // Canonical order (the wrapper refuses any other): ap-a before ap-b.
-        assertEquals(Status.Code.ALREADY_EXISTS, code(() -> tenant.apply(Query.RecordApplyRequest.newBuilder()
+        assertEquals(Status.Code.ALREADY_EXISTS, code(() -> tenant.apply(Query.RecordApplyRequest.newBuilder().setTargetTenant(TID)
                 .addOps(Query.RecordOp.newBuilder().setInsertIfAbsentLetsEncryptCert(
-                        Query.InsertIfAbsentLetsEncryptCertRequest.newBuilder().setItem(cert("ap-a", 1))))
+                        Query.InsertIfAbsentLetsEncryptCertRequest.newBuilder().setTargetTenant(TID).setItem(cert("ap-a", 1))))
                 .addOps(Query.RecordOp.newBuilder().setInsertIfAbsentLetsEncryptCert(
-                        Query.InsertIfAbsentLetsEncryptCertRequest.newBuilder().setItem(cert("ap-b", 2))))
+                        Query.InsertIfAbsentLetsEncryptCertRequest.newBuilder().setTargetTenant(TID).setItem(cert("ap-b", 2))))
                 .build())));
         assertEquals(Status.Code.NOT_FOUND, code(() -> tenant.getLetsEncryptCert(
-                Query.GetLetsEncryptCertRequest.newBuilder().setCertSetId("ap-a").build())));
+                Query.GetLetsEncryptCertRequest.newBuilder().setTargetTenant(TID).setCertSetId("ap-a").build())));
     }
 
     @Test
     void watchChangesStreamsTheSnapshotThenOnlyAckedWrites() throws Exception {
-        tenant.putLetsEncryptCert(Query.PutLetsEncryptCertRequest.newBuilder().setItem(cert("wa-1", 1)).build());
+        tenant.putLetsEncryptCert(Query.PutLetsEncryptCertRequest.newBuilder().setTargetTenant(TID).setItem(cert("wa-1", 1)).build());
 
         Context.CancellableContext ctx = Context.current().withCancellation();
         try {
             Iterator<Query.LetsEncryptCertWatchEvent> events = ctx.call(() -> tenant.watchLetsEncryptCertChanges(
-                    Query.WatchLetsEncryptCertChangesRequest.newBuilder().build()));
+                    Query.WatchLetsEncryptCertChangesRequest.newBuilder().setTargetTenant(TID).build()));
             boolean sawSnapshotRow = false;
             Query.LetsEncryptCertWatchEvent e;
             while (!(e = events.next()).hasSnapshotDone()) {
@@ -200,10 +224,10 @@ class RecordWriteSurfaceE2ETest {
             // A write the redo refuses is never seen; the next acked one is.
             redo.setReachable(false);
             assertEquals(Status.Code.UNAVAILABLE, code(() -> tenant.putLetsEncryptCert(
-                    Query.PutLetsEncryptCertRequest.newBuilder().setItem(cert("wa-refused", 1)).build())));
+                    Query.PutLetsEncryptCertRequest.newBuilder().setTargetTenant(TID).setItem(cert("wa-refused", 1)).build())));
             redo.setReachable(true);
             Query.RecordWriteResult acked = tenant.putLetsEncryptCert(
-                    Query.PutLetsEncryptCertRequest.newBuilder().setItem(cert("wa-2", 2)).build());
+                    Query.PutLetsEncryptCertRequest.newBuilder().setTargetTenant(TID).setItem(cert("wa-2", 2)).build());
 
             CompletableFuture<Query.LetsEncryptCertWatchChange> delta = CompletableFuture.supplyAsync(() -> {
                 while (true) {

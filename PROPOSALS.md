@@ -57,5 +57,10 @@ the looper then marks it `promoted` or `declined` here with the date.
   (`tacplus.lock`, `tacplus pin`), and it ships in 2.6.0 (tacplus#213). After that, stratum should commit a
   `tacplus.lock` and have the justfile run the pinned binary. A new patch then reaches main as a looper commit
   that passes the gates, not as a red nightly.
+- **E2E tests through the instance's tenant door** (2026-10-30, #20): `TenantQueryScopeE2ETest` and
+  `RecordWriteSurfaceE2ETest` stub `Authorizer.authorize` whole to skip the token signature check, so the door that
+  refuses another tenant's caller on a tenant-owned instance (`setHostNamespace`, tacplus#207) is never exercised over
+  the wire here; only the route check and the handle check behind it are. Signing the test tokens with a test JWK
+  source instead would put the shipped `authorize` on the path.
 
 ## Promoted / declined
