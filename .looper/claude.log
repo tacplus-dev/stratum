@@ -1,0 +1,72 @@
+= init
+> Bash gh issue view 24 --repo tacplus-dev/stratum --comments | tail -40; ls; cat STATE.md | head -80; cat justfile
+< author:	jodydadescott association:	member edited:	false status:	none -- Note: Stratum's ingest and writes of accounting records emit **no** accounting themselves (the recursion rule in tacplus-dev/tacplus#273). -- Dockerfile HISTORY.md LICENSE PROPOSALS.md PROVENANCE.md QUESTIONS.md README.md RECORD...
+= thinking_tokens
+= thinking_tokens
+> Bash cat ROADMAP.md; cat PROPOSALS.md; ls decisions docs; git ls-files | grep -v '^proto' | head -100; wc -l design.md RECORD_EVENT_ARCHITECTURE.md QUESTIONS.md
+< # Roadmap: stratum  Owned by Jody; changed only by an agent at Jody's request. Loopers propose in PROPOSALS.md.  ## Now Stratum is the platform's record store: it hosts the tacplus-declared records (`(spec.record)`) and serves the record query plane. Unreleased; tacplus floor 2.4 (#1). The code is s...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash gh api repos/tacplus-dev/roadmap/contents/decisions/stratum-per-tenant-2026-10-25.md -H 'Accept: application/vnd.github.raw'; echo ======; gh api repos/tacplus-dev/roadmap/contents/decisions -q '.[].name' | grep -iE 'skipper|account|stratum|issue-flow'
+< # Stratum: per tenant, in memory, no eventbus; the redo service is durability — DECIDED 2026-10-25  Huddle Jody + the kernel identity session, evening of 2026-10-25. Started from the identity work: a `people` tenant need not live on the cluster that is minting, so the identity graph cannot be kernel...
+= thinking_tokens
+= thinking_tokens
+> Bash gh issue view 273 --repo tacplus-dev/tacplus --json state,title,labels,body -q '.state, .title, .body' | head -80; echo =====; gh api repos/tacplus-dev/roadmap/contents/decisions/skipper-and-admiral-2026-11-01.md -H 'Accept: application/vnd.github.raw' | grep -n -iE 'account|stratum|lucene' 
+< OPEN Accounting: typed outcome (permitted/denied/failed) and typed metrics (e.g. records returned), no data ever (free text removed, gate), stored in the tenant's own Stratum ## What (Jody, 2026-11-01)  Accounting is distinct from trace: "User x made y call to service s and it was denied, permitted,...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash grep -rn -i 'lucene\|eventbus\|kafka' --include=pom.xml --include=*.java --include=*.proto --include=*.yaml . | grep -v target | head; git log --oneline | grep -iE 'lucene|ingest|search' | head
+< ./pom.xml:31:		<lucene.version>10.2.1</lucene.version> ./pom.xml:177:			  The warm disk tier. lucene-core ALONE is the whole dependency: every ./pom.xml:179:			  nothing is analysed and lucene-analysis-common is not needed. Lucene 10 ./pom.xml:183:				<groupId>org.apache.lucene</groupId> ./pom.xml:1...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Reading the issue against the decision record it rests on: it conflicts with what's decided, so I'm writing up the question rather than coding.
+> Bash gh label list --repo tacplus-dev/stratum | grep -i decision; gh api repos/tacplus-dev/tacplus/contents/proto/sys/accounting.proto -q .path 2>&1 | head -2; gh search code --repo tacplus-dev/tacplus accounting.proto -L 3 --json path -q '.[].path' 2>&1|head
+< needs-decision	The looper needs a decision it may not make	#5319E7 {"message":"Not Found","documentation_url":"https://docs.github.com/rest/repos/contents#get-repository-content","status":"404"}gh: Not Found (HTTP 404)
+> Bash cat > /tmp/c24.md <<'EOF' Looper, run on 2026-11-01: **stopped before changing anything.** This issue asks for things that `decisions/stratum-per-tenant-2026-10-25.md` (tacplus-dev/roadmap) and this repository's ROADMAP.md rule out, and it depends on contracts no one has settled yet. A looper may no...
+< https://github.com/tacplus-dev/stratum/issues/24#issuecomment-6565815302 https://github.com/tacplus-dev/stratum/issues/24
+I stopped without changing anything: the issue asks for two things a decided record and ROADMAP.md rule out, so it needs Jody's decision first. I posted the question with my recommendation on #24 and added the `needs-decision` label. Nothing was committed or pushed.
+
+**Conflicts with what is decided** (`decisions/stratum-per-tenant-2026-10-25.md` and ROADMAP.md's *Not doing*):
+- **Event-bus ingest:** the decision says Stratum has no dependency on the event bus, and ROADMAP.md lists bus ingest under *Not doing*. The "existing" ingest the issue mentions was removed in #2.
+- **A Lucene index on search members:** the decision rules out search roles, volumes and a disk index, and ROADMAP.md lists them under *Not doing*. #2 removed the old Lucene tier; only an unused `lucene-core` version pin is left in `pom.xml`.
+
+**Still open even with an exception:**
+- **Record shape:** tacplus#273, which defines what an accounting record contains, is still open, so there are no fields to index yet.
+- **Tenant attribution:** Stratum has to know whose event it is from something the bus vouches for, not a field the sender fills in. That's needed for "a tenant's records never land in another tenant's Stratum".
+- **Query interface:** the Skipper's query is a new public RPC that nothing defines yet.
+- **Durability:** whether hot records go through the redo service, or are lost on a full restart.
+
+**My recommendation, as posted:**
+- Add an addendum to the decision making accounting the one exception: Stratum ingests it from the bus, it skips the redo service, and it lives in a disk Lucene index with retention. Update ROADMAP.md's two *Not doing* entries to match.
+- Have the bus stamp each event with the sender's tenant.
+- Add a hand-written query RPC to `stratum.proto`.
+- After that, this issue waits on tacplus#273.
+= success: I stopped without changing anything: the issue asks for two things a decided record and ROADMAP.md rule out, so it needs Jody's decision first. I posted the question with my recommendation on #24 and added the `needs-decision` label. Nothing was committed or pushed.
+
+**Conflicts with what is decided** (`decisions/stratum-per-tenant-2026-10-25.md` and ROADMAP.md's *Not doing*):
+- **Event-bus ingest:** the decision says Stratum has no dependency on the event bus, and ROADMAP.md lists bus ingest under *Not doing*. The "existing" ingest the issue mentions was removed in #2.
+- **A Lucene index on search members:** the decision rules out search roles, volumes and a disk index, and ROADMAP.md lists them under *Not doing*. #2 removed the old Lucene tier; only an unused `lucene-core` version pin is left in `pom.xml`.
+
+**Still open even with an exception:**
+- **Record shape:** tacplus#273, which defines what an accounting record contains, is still open, so there are no fields to index yet.
+- **Tenant attribution:** Stratum has to know whose event it is from something the bus vouches for, not a field the sender fills in. That's needed for "a tenant's records never land in another tenant's Stratum".
+- **Query interface:** the Skipper's query is a new public RPC that nothing defines yet.
+- **Durability:** whether hot records go through the redo service, or are lost on a full restart.
+
+**My recommendation, as posted:**
+- Add an addendum to the decision making accounting the one exception: Stratum ingests it from the bus, it skips the redo service, and it lives in a disk Lucene index with retention. Update ROADMAP.md's two *Not doing* entries to match.
+- Have the bus stamp each event with the sender's tenant.
+- Add a hand-written query RPC to `stratum.proto`.
+- After that, this issue waits on tacplus#273.
