@@ -50,6 +50,18 @@ message Config {
   // (UNAVAILABLE) and not applied. Default: 10000. Min: 100.
   int32 write_ack_timeout_ms = 9 [(spec.default_int) = 10000, (spec.assert_ge) = 100];
 
+  // seed_members are this tenant's Hazelcast members, one "host:port" each
+  // (stratum-<i>.stratum:5001), for the TCP/IP join: the operator renders them
+  // from the uni-config and the StatefulSet's stable per-pod DNS (operator#17).
+  // The join is to these addresses only, never multicast, so a Config without
+  // them is invalid and a member refuses to start; a single member or a dev run
+  // names itself (127.0.0.1). At most 64 members. Applies at the next start.
+  //
+  // There is one cluster per tenant and no member roles (stratum#2), so the
+  // working-set seeds and the member role the operator used to render as
+  // STRATUM_WS_SEED_MEMBERS and STRATUM_MEMBER_ROLE have no field.
+  repeated string seed_members = 10 [(spec.assert_required) = true, (spec.assert_max_size) = 64];
+
   // Fields 2 and 4-8 configured working-set maps, the retention sweep, the
   // daily checkpoint and the warm tier, all removed with the per-tenant,
   // in-memory rebuild (stratum#2).

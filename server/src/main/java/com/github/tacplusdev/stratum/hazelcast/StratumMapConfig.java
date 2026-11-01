@@ -67,9 +67,6 @@ public final class StratumMapConfig {
      */
     public static final String CLUSTER_NAME_PREFIX = "stratum-";
 
-    /** The env the operator renders the tenant's member addresses into. */
-    public static final String SEED_MEMBERS_ENV = "STRATUM_SEED_MEMBERS";
-
     /** The service segment of a tenant's Stratum identity, /tenants/&lt;tid&gt;/services/stratum. */
     static final String SERVICE_NAME = "stratum";
 
@@ -141,7 +138,7 @@ public final class StratumMapConfig {
             throw new IllegalArgumentException("no tenant: a Stratum member joins only its own tenant's cluster");
         }
         if (seedMembers == null || seedMembers.isEmpty()) {
-            throw new IllegalArgumentException(SEED_MEMBERS_ENV + " is empty: a member refuses to start "
+            throw new IllegalArgumentException("Config.seed_members is empty: a member refuses to start "
                     + "without its tenant's seed members (multicast join is never used; "
                     + "a single member or a dev run sets it to 127.0.0.1)");
         }

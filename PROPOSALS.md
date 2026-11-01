@@ -30,7 +30,7 @@ the looper then marks it `promoted` or `declined` here with the date.
   what tacplus's dependency list expects first.
 - **The operator renders the per-tenant Stratum** (2026-10-28, #2): stratum.proto now declares
   `tenant_owned: true` and holds no durable state. The operator (tacplus-dev/operator) has to run one
-  Stratum per tenant with no volume, set `STRATUM_SEED_MEMBERS` to that tenant's members (required since #18: a member without seeds refuses to start, and there is no multicast fallback; a one-member tenant names itself), set
+  Stratum per tenant with no volume, set `Config.seed_members` to that tenant's members (#23; required since #18: a member without seeds refuses to start, and there is no multicast fallback; a one-member tenant names itself), set
   `STRATUM_ZONE` from the node's `topology.kubernetes.io/zone` (zone-aware backups), and size memory for
   the tenant's whole dataset (nothing is evicted). The member count per tenant is the footprint knob; one
   is allowed. Needs an operator issue.
@@ -62,5 +62,13 @@ the looper then marks it `promoted` or `declined` here with the date.
   refuses another tenant's caller on a tenant-owned instance (`setHostNamespace`, tacplus#207) is never exercised over
   the wire here; only the route check and the handle check behind it are. Signing the test tokens with a test JWK
   source instead would put the shipped `authorize` on the path.
+- **`STRATUM_BACKUP_COUNT` and `STRATUM_ZONE` out of env too** (2026-11-01, #23): #23 moved the seed
+  members into `Config.seed_members`; stratum still reads these two from env
+  (`StratumMapConfig.configuredBackupCount`, `configuredZone`). Under the uni-config's interim rule
+  (tacplus-dev/operator#17: no env but downward-API pod identity) both have to go: `backup_count` fits
+  `Config`; the zone is per-node, so it is either node identity (allowed with `NODE_NAME`, if stratum
+  looks the zone up itself) or a downward-API value Jody has to add to the allowlist. Also: the operator
+  still renders `STRATUM_WS_SEED_MEMBERS` and `STRATUM_MEMBER_ROLE`, which nothing has read since #2;
+  operator#17 can drop them now, and `STRATUM_SEED_MEMBERS` once it renders `seed_members`.
 
 ## Promoted / declined

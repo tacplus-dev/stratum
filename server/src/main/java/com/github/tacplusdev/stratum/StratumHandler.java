@@ -4,7 +4,6 @@ package com.github.tacplusdev.stratum;
 
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.function.Function;
 
@@ -42,7 +41,7 @@ import com.github.tacplusdev.stratum.model.types.sys.x509.X509;
  *
  * <p>A later config never rebuilds the store: its rows are memory, and tearing
  * the member down would turn a config change into a replay. The ack timeout
- * applies at once; hazelcast_memory_mb at the next start.
+ * applies at once; hazelcast_memory_mb and seed_members at the next start.
  */
 public class StratumHandler extends StratumVServiceBase {
 
@@ -134,18 +133,14 @@ public class StratumHandler extends StratumVServiceBase {
     }
 
     /**
-     * Hazelcast seed members, from STRATUM_SEED_MEMBERS: one "host:5001" entry per
+     * Hazelcast seed members, from Config.seed_members: one "host:5001" entry per
      * member of this tenant's store, rendered by the operator from the
      * StatefulSet's stable per-pod DNS. A single member or a dev run names itself
      * (127.0.0.1). Empty, the member refuses to start ({@link StratumMapConfig#build}):
      * there is no multicast fallback.
      */
-    private static List<String> seedMembers() {
-        String raw = System.getenv(StratumMapConfig.SEED_MEMBERS_ENV);
-        if (raw == null || raw.isBlank()) {
-            return List.of();
-        }
-        List<String> members = Arrays.stream(raw.split(","))
+    static List<String> seedMembers(Stratum.Config cfg) {
+        List<String> members = cfg.getSeedMembersList().stream()
                 .map(String::trim)
                 .filter(m -> !m.isEmpty())
                 .toList();
@@ -180,14 +175,14 @@ public class StratumHandler extends StratumVServiceBase {
         if (store != null) {
             store.setAckTimeout(ackTimeout);
             this.config = cfg;
-            log.info("config: write_ack_timeout_ms={} (hazelcast_memory_mb={} applies at the next start)",
-                    cfg.getWriteAckTimeoutMs(), cfg.getHazelcastMemoryMb());
+            log.info("config: write_ack_timeout_ms={} (hazelcast_memory_mb={} and seed_members {} apply at the next start)",
+                    cfg.getWriteAckTimeoutMs(), cfg.getHazelcastMemoryMb(), cfg.getSeedMembersList());
             return;
         }
         log.info("config: hazelcast_memory_mb={}, write_ack_timeout_ms={}",
                 cfg.getHazelcastMemoryMb(), cfg.getWriteAckTimeoutMs());
         HazelcastInstance hz = Hazelcast.newHazelcastInstance(StratumMapConfig.build(tenant(),
-                seedMembers(), StratumMapConfig.configuredBackupCount(), StratumMapConfig.configuredZone()));
+                seedMembers(cfg), StratumMapConfig.configuredBackupCount(), StratumMapConfig.configuredZone()));
         try {
             RecordStore s = new RecordStore(hz, new StratumRecordTypes(),
                     new GrpcRedoLog(sm.getGrpcClients().sys().redo()), ackTimeout);

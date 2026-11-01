@@ -71,7 +71,7 @@ class TenantClusterIsolationTest {
     void aMemberWithoutSeedsRefusesToStart() {
         IllegalArgumentException none = assertThrows(IllegalArgumentException.class,
                 () -> StratumMapConfig.build("acme0001", List.of(), 1, null));
-        assertTrue(none.getMessage().contains("STRATUM_SEED_MEMBERS"), none.getMessage());
+        assertTrue(none.getMessage().contains("seed_members"), none.getMessage());
         assertThrows(IllegalArgumentException.class,
                 () -> StratumMapConfig.build("acme0001", null, 1, null));
     }
