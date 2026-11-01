@@ -8,6 +8,7 @@ Unreleased; tacplus floor 2.4 (#1). The code is still the pre-2026-10-25 design 
 The platform's highest priority: the per-tenant, in-memory rebuild (#2), on the path tacplus#163 → redo#1 → #2.
 
 ## Next
+- Accounting store: ingest accounting events per tenant, hot in memory for a window, then the Lucene index on se (#24) (Jody, 2026-11-01)
 - Seed members and member role in Config, not env (uni-config, operator#17) (#23) (Jody, 2026-11-01)
 - Add a `just gates` recipe (#13)
 - Bump logback to 1.5.38 (#12)
