@@ -8,6 +8,7 @@ Unreleased; tacplus floor 2.4 (#1). The code is still the pre-2026-10-25 design 
 The platform's highest priority: the per-tenant, in-memory rebuild (#2), on the path tacplus#163 → redo#1 → #2.
 
 ## Next
+- Seed members and member role in Config, not env (uni-config, operator#17) (#23) (Jody, 2026-11-01)
 - Add a `just gates` recipe (#13)
 - Bump logback to 1.5.38 (#12)
 - Javalin 6.7.0 / Jetty 11 advisories: drop Javalin or move to Javalin 7 (#11)
