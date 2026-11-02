@@ -202,4 +202,28 @@
 			</dependency>
 		</dependencies>
 	</dependencyManagement>
+	<build>
+		<pluginManagement>
+			<plugins>
+				<!--
+				  Reaches model's and server's shade, merged with their executions. Drop the
+				  override once a shade release asks for plexus-utils 3.6.1 or later and
+				  fleet-dev pins it (#25).
+				-->
+				<plugin>
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-shade-plugin</artifactId>
+					<version>${shade-plugin.version}</version>
+					<dependencies>
+						<!-- GHSA-6fmv-xxpf-w3cw: shade 3.6.1 asks for plexus-utils 3.5.1 (fleet-dev docs/java-plugins.md) -->
+						<dependency>
+							<groupId>org.codehaus.plexus</groupId>
+							<artifactId>plexus-utils</artifactId>
+							<version>3.6.1</version>
+						</dependency>
+					</dependencies>
+				</plugin>
+			</plugins>
+		</pluginManagement>
+	</build>
 </project>

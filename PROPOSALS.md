@@ -70,5 +70,11 @@ the looper then marks it `promoted` or `declined` here with the date.
   looks the zone up itself) or a downward-API value Jody has to add to the allowlist. Also: the operator
   still renders `STRATUM_WS_SEED_MEMBERS` and `STRATUM_MEMBER_ROLE`, which nothing has read since #2;
   operator#17 can drop them now, and `STRATUM_SEED_MEMBERS` once it renders `seed_members`.
+- **A gate on the plugins' own classpath** (2026-11-02, #25): the OSV check covers the project's resolved tree,
+  not the realms Maven runs plugins in, so maven-shade-plugin on plexus-utils 3.5.1 (GHSA-6fmv-xxpf-w3cw) was
+  found by hand, and nothing here would catch the root pom's override being dropped while shade still asks
+  for an affected plexus-utils. A check reading the `Populating class realm plugin>...` blocks of
+  `mvn -X package`, like fleet-dev's `checks/shade.sh` (tacplus-dev/fleet-dev#17), or scanning those realms'
+  jars, would; it costs another package build per gates run unless it reads the gates' own build log.
 
 ## Promoted / declined
