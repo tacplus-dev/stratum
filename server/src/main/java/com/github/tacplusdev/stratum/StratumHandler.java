@@ -209,6 +209,7 @@ public class StratumHandler extends StratumVServiceBase {
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 if (s.isSequencer() && !s.inSync()) {
+                    // trace: unrelated: the keeper's replay is background work no request causes
                     s.catchUp();
                 }
                 backoff = 1_000;

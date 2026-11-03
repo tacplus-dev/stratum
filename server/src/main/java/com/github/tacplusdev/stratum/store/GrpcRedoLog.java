@@ -80,6 +80,8 @@ public final class GrpcRedoLog implements RedoLog {
     }
 
     private StreamObserver<RedoAppend> open(long gen) {
+        // trace: unrelated: one stream carries every write's append; each write's
+        // trace belongs on its own RedoAppend, not on the stream's opening
         return client.append(REDO_TENANT, new StreamObserver<RedoAck>() {
             @Override
             public void onNext(RedoAck ack) {

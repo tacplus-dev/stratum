@@ -108,5 +108,21 @@ the looper then marks it `promoted` or `declined` here with the date.
   commit, like the tacplus patch did (#20). That is the point of the audit, but a land blocked by an advisory
   in an unrelated jar may want a looper rule: whether a newly red audit blocks unrelated lands, or is
   triaged as its own bug first.
+- **Stored rows keep the write's `trace_id`** (2026-11-03, #29): the trace decision
+  (tacplus-dev/roadmap decisions/trace-propagation-2026-11-03.md) clears field 200 on every store, the record
+  plane and redo included. Records already carry it (`LetsEncryptCert.trace_id = 200`), and
+  `RecordStore.commit` puts `op.item` into the map and its bytes into the `RedoChange` value as they came.
+  tacplus-dev/tacplus#313 clears it on generated storage paths. Once it lands, check with a raw map read
+  and a redo tail whether the generated query plane clears it before the `RecordOp`. If it doesn't,
+  `commit` (and `Replay.apply`, for rows logged before) should clear it, with a test.
+- **Does a watch event carry the write's trace?** (2026-11-03, #29): a commit publishes
+  `ChangeFeed.Committed` (a Java object with no trace) on the Hazelcast topic, and each watcher turns it
+  into a `...WatchEvent`, which has field 200. That event is caused by the write but sent on the watcher's
+  stream. The decision doesn't say whose trace it carries: the write's (copy it through `Committed`), the
+  watch request's, or none. It needs a ruling before stratum sets it.
+- **A forwarded Get drops its `trace_id`** (2026-11-03, #29): `RecordStore.get` forwards to the sequencer
+  as `SequencerCall.get(type, key, namespace)`, and the trace isn't in it. That's harmless today, because
+  the sequencer's `getHere` makes no further call. If it ever does, carry the request's `trace_id` in the
+  call, the way `SequencerCall.apply` carries the whole request.
 
 ## Promoted / declined
