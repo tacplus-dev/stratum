@@ -89,10 +89,24 @@ the looper then marks it `promoted` or `declined` here with the date.
 - **Audit the release jar, and publish the result** (2026-11-03, nightly scan, #28): an OSV check of the
   resolved pom tree came back clean (164 packages, every scope), while `trivy rootfs` over `server/target/stratum.jar`
   found jackson 2.21.2 and 3.1.2 with HIGH advisories shaded inside Hazelcast 5.7.0 (`com.hazelcast.shaded.*`),
-  which no tree can show. The audit in the gates (above) should scan the built jar (and, with the image smoke test,
-  the image), not only the tree. And CI runs only `planning-files`, so there is no security report for the
+  which no tree can show. #28 put the jar scan in the gates (`just audit-jar`); the image (with the image smoke
+  test) is still not scanned. And CI runs only `planning-files`, so there is no security report for the
   nightly scan to read: the README has no "Security checks" section and code scanning has no analysis. A workflow
   that runs that audit on push and uploads SARIF (or a README section that says where the report lives) would
   give the scan one to read.
+- **Bump Hazelcast when it re-shades a fixed jackson** (2026-11-03, #28): the eight jackson advisories shaded in
+  Hazelcast 5.7.0 are accepted as unreachable until 2026-12-03 (`.trivyignore.yaml`,
+  decisions/2026-11-03-shaded-jackson-in-hazelcast.md). Hazelcast ships no OSS patch releases, so the fix comes
+  with its next minor; asked on hazelcast/hazelcast#26597. When it ships: bump `hazelcast.version`, delete the
+  entries, and keep `ShadedJacksonReachabilityTest` while any shaded jackson remains. If it has not shipped by
+  2026-12-03, `just gates` fails on main, and the exception needs re-examining, with the test still green, or
+  another route: an unaffiliated fork that re-shades jackson 2.21.7 / 3.1.7 ("Opencast", its own Maven
+  repository) is advertised in those threads, and taking it would change the provenance of the store's core
+  dependency, which is Jody's call.
+- **Gates that depend on the advisory database** (2026-11-03, #28): `just audit-jar` runs trivy against its
+  current database, so a new advisory turns `just gates` red on main, and on every land, with no stratum
+  commit, like the tacplus patch did (#20). That is the point of the audit, but a land blocked by an advisory
+  in an unrelated jar may want a looper rule: whether a newly red audit blocks unrelated lands, or is
+  triaged as its own bug first.
 
 ## Promoted / declined

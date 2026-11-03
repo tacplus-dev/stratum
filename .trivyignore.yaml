@@ -1,0 +1,65 @@
+# Accepted advisories in the release jar, read by `just audit-jar` (trivy over
+# server/target/stratum.jar). Every entry names the exact package it covers
+# (purls) and expires: on expiry trivy reports the advisory again and the
+# gates fail, so an exception is re-examined, never silently kept.
+#
+# The jackson in Hazelcast 5.7.0 (#28): jackson-core and -databind 2.21.2 and
+# 3.1.2, shaded as com.hazelcast.shaded.*. 5.7.0 is the latest Hazelcast and none
+# re-shades a fixed jackson; the request to Hazelcast is linked in
+# decisions/2026-11-03-shaded-jackson-in-hazelcast.md, which has the reasoning.
+# In short: no Hazelcast class references either databind or jackson-core 2.x, and
+# Hazelcast uses jackson-core 3.x only through the blocking parsers, none of which
+# is where its advisories are. ShadedJacksonReachabilityTest fails if that changes.
+# The unshaded jackson 2.18.12 (the jackson-bom pin, #8) is not covered here.
+
+vulnerabilities:
+  # jackson-core
+  - id: CVE-2026-68494
+    purls:
+      - pkg:maven/com.fasterxml.jackson.core/jackson-core@2.21.2
+      - pkg:maven/tools.jackson.core/jackson-core@3.1.2
+    statement: "In the non-blocking (async) parser. Shaded in Hazelcast 5.7.0: 2.21.2 is dead code, and Hazelcast creates no non-blocking parser from 3.1.2 (#28)."
+    expired_at: 2026-12-03
+  - id: CVE-2026-89407
+    purls:
+      - pkg:maven/com.fasterxml.jackson.core/jackson-core@2.21.2
+      - pkg:maven/tools.jackson.core/jackson-core@3.1.2
+    statement: "In NumberInput.looksLikeValidNumber, reached through databind's string-to-number coercion. Shaded in Hazelcast 5.7.0: nothing references either databind, and nothing outside it calls that method (#28)."
+    expired_at: 2026-12-03
+  - id: CVE-2026-89425
+    purls:
+      - pkg:maven/com.fasterxml.jackson.core/jackson-core@2.21.2
+      - pkg:maven/tools.jackson.core/jackson-core@3.1.2
+    statement: "In UTF8DataInputJsonParser, created only by createParser(DataInput). Shaded in Hazelcast 5.7.0: 2.21.2 is dead code, and Hazelcast parses only byte[], String, Reader and InputStream with 3.1.2 (#28)."
+    expired_at: 2026-12-03
+  # jackson-databind
+  - id: CVE-2026-54512
+    purls:
+      - pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.21.2
+      - pkg:maven/tools.jackson.core/jackson-databind@3.1.2
+    statement: "Shaded in Hazelcast 5.7.0, where no class outside the databind references it: dead code (#28)."
+    expired_at: 2026-12-03
+  - id: CVE-2026-54513
+    purls:
+      - pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.21.2
+      - pkg:maven/tools.jackson.core/jackson-databind@3.1.2
+    statement: "Shaded in Hazelcast 5.7.0, where no class outside the databind references it: dead code (#28)."
+    expired_at: 2026-12-03
+  - id: CVE-2026-68497
+    purls:
+      - pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.21.2
+      - pkg:maven/tools.jackson.core/jackson-databind@3.1.2
+    statement: "Shaded in Hazelcast 5.7.0, where no class outside the databind references it: dead code (#28)."
+    expired_at: 2026-12-03
+  - id: CVE-2026-91776
+    purls:
+      - pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.21.2
+      - pkg:maven/tools.jackson.core/jackson-databind@3.1.2
+    statement: "Shaded in Hazelcast 5.7.0, where no class outside the databind references it: dead code (#28)."
+    expired_at: 2026-12-03
+  - id: CVE-2026-91777
+    purls:
+      - pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.21.2
+      - pkg:maven/tools.jackson.core/jackson-databind@3.1.2
+    statement: "Shaded in Hazelcast 5.7.0, where no class outside the databind references it: dead code (#28)."
+    expired_at: 2026-12-03
