@@ -76,6 +76,16 @@ the looper then marks it `promoted` or `declined` here with the date.
   for an affected plexus-utils. A check reading the `Populating class realm plugin>...` blocks of
   `mvn -X package`, like fleet-dev's `checks/shade.sh` (tacplus-dev/fleet-dev#17), or scanning those realms'
   jars, would; it costs another package build per gates run unless it reads the gates' own build log.
+  #30 added antrun's override (plexus-utils 4.0.3) and moved exec and build-helper to clean releases, found
+  the same way (tacplus-dev/fleet-dev#18, whose `checks/plugins.sh` is the model for those three realms).
+  exec-maven-plugin has no execution in the gates' build, so its realm only shows up under a goal run
+  directly (`mvn -X -pl model exec:help`).
+- **model's antrun step and `just generate` run different compilers** (2026-11-03, #30): `just generate`
+  runs `tacplus build --tag latest`, while model's antrun target runs plain `tacplus build` when the
+  generated sources are missing (a bare `mvn install`). Running that target produced different sources
+  from the gates' (eventbus and kernel gRPC stubs, `annotations/` missing), so a bare `mvn install` from
+  a clean checkout does not build what the gates build. Passing `--tag latest` there too, or failing
+  with "run just generate", would close the gap.
 - **Audit the release jar, and publish the result** (2026-11-03, nightly scan, #28): an OSV check of the
   resolved pom tree came back clean (164 packages, every scope), while `trivy rootfs` over `server/target/stratum.jar`
   found jackson 2.21.2 and 3.1.2 with HIGH advisories shaded inside Hazelcast 5.7.0 (`com.hazelcast.shaded.*`),

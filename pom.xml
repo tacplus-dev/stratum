@@ -26,7 +26,9 @@
 		<junit.version>6.0.2</junit.version>
 		<maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
 		<shade-plugin.version>3.6.1</shade-plugin.version>
-		<exec-plugin.version>3.5.0</exec-plugin.version>
+		<exec-plugin.version>3.6.4</exec-plugin.version>
+		<build-helper-plugin.version>3.6.2</build-helper-plugin.version>
+		<antrun-plugin.version>3.2.0</antrun-plugin.version>
 		<hazelcast.version>5.7.0</hazelcast.version>
 		<lucene.version>10.2.1</lucene.version>
 		<google-cloud-storage.version>2.75.0</google-cloud-storage.version>
@@ -220,6 +222,38 @@
 							<groupId>org.codehaus.plexus</groupId>
 							<artifactId>plexus-utils</artifactId>
 							<version>3.6.1</version>
+						</dependency>
+					</dependencies>
+				</plugin>
+				<!--
+				  exec 3.6.4 and build-helper 3.6.2, fleet-dev's pins, run on plexus-utils 4.1.0
+				  (build-helper on commons-io 2.19.0): no override (#30). The modules take their
+				  versions from here.
+				-->
+				<plugin>
+					<groupId>org.codehaus.mojo</groupId>
+					<artifactId>exec-maven-plugin</artifactId>
+					<version>${exec-plugin.version}</version>
+				</plugin>
+				<plugin>
+					<groupId>org.codehaus.mojo</groupId>
+					<artifactId>build-helper-maven-plugin</artifactId>
+					<version>${build-helper-plugin.version}</version>
+				</plugin>
+				<!--
+				  Reaches model's antrun (the generated-sources step). Drop the override once an
+				  antrun release asks for plexus-utils 4.0.3 or later and fleet-dev pins it (#30).
+				-->
+				<plugin>
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-antrun-plugin</artifactId>
+					<version>${antrun-plugin.version}</version>
+					<dependencies>
+						<!-- GHSA-6fmv-xxpf-w3cw: antrun 3.2.0 asks for plexus-utils 4.0.2 (fleet-dev docs/java-plugins.md) -->
+						<dependency>
+							<groupId>org.codehaus.plexus</groupId>
+							<artifactId>plexus-utils</artifactId>
+							<version>4.0.3</version>
 						</dependency>
 					</dependencies>
 				</plugin>
