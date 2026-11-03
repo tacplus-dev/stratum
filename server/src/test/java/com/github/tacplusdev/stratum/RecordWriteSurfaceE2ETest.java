@@ -116,7 +116,8 @@ class RecordWriteSurfaceE2ETest {
                 return tw;
             }
         };
-        authorizer.setHostNamespace(TENANT);
+        // The routed tid is read from the subject, the tenant door from the namespace (tacplus#202, #27).
+        authorizer.setHostIdentity(TENANT, "spiffe://cav" + TENANT + "/services/stratum");
         java.util.Map<String, StratumRecordMaps.Handle> registry = new java.util.concurrent.ConcurrentHashMap<>();
         server = NettyServerBuilder.forPort(0)
                 .addService(ServerInterceptors.intercept(
