@@ -18,3 +18,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-10-30 looper issue codegen resolves plexus-utils 3.5.1 (GHSA-6fmv-xxpf-w3cw, HIGH) via maven-plugin-api 3.9.9: bump to 3.9.16 (#21, 0c47975)
 - 2026-11-01 looper issue Seed members and member role in Config, not env (uni-config, operator#17) (#23, 6380fe7)
 - 2026-11-02 looper issue maven-shade-plugin 3.6.1 runs on plexus-utils 3.5.1 (GHSA-6fmv-xxpf-w3cw, HIGH): override it to 3.6.1 (#25, 0a84828)
+- 2026-11-03 looper issue just gates fails on main with tacplus 2.5.8: E2E tests set only the host namespace, not the host subject's tid (tacplus#202) (#27, 2c7e240)
