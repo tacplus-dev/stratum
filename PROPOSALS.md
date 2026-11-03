@@ -76,5 +76,13 @@ the looper then marks it `promoted` or `declined` here with the date.
   for an affected plexus-utils. A check reading the `Populating class realm plugin>...` blocks of
   `mvn -X package`, like fleet-dev's `checks/shade.sh` (tacplus-dev/fleet-dev#17), or scanning those realms'
   jars, would; it costs another package build per gates run unless it reads the gates' own build log.
+- **Audit the release jar, and publish the result** (2026-11-03, nightly scan, #28): an OSV check of the
+  resolved pom tree came back clean (164 packages, every scope), while `trivy rootfs` over `server/target/stratum.jar`
+  found jackson 2.21.2 and 3.1.2 with HIGH advisories shaded inside Hazelcast 5.7.0 (`com.hazelcast.shaded.*`),
+  which no tree can show. The audit in the gates (above) should scan the built jar (and, with the image smoke test,
+  the image), not only the tree. And CI runs only `planning-files`, so there is no security report for the
+  nightly scan to read: the README has no "Security checks" section and code scanning has no analysis. A workflow
+  that runs that audit on push and uploads SARIF (or a README section that says where the report lives) would
+  give the scan one to read.
 
 ## Promoted / declined
