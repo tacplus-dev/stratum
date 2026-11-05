@@ -124,5 +124,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   as `SequencerCall.get(type, key, namespace)`, and the trace isn't in it. That's harmless today, because
   the sequencer's `getHere` makes no further call. If it ever does, carry the request's `trace_id` in the
   call, the way `SequencerCall.apply` carries the whole request.
+- **A "Trace propagation" section in the README** (2026-11-05, nightly scan; tacplus-dev/looper#51, #29): the
+  nightly scan reads the README's "Trace propagation" section, and there is none (nor "Security checks", see
+  above). `looper-trace check` reads no Java (`pass (0 handlers, 0 findings)`, 42 Java files not checked), so
+  every run re-derives the handlers by hand. A short section would save that work: the only downstream calls
+  are the redo's `Append` and `Replay` (`RecordStore.commit`, `catchUp`, `GrpcRedoLog`), plus the Hazelcast
+  forward to the sequencer (`SequencerCall`). It would also say which carry the write's `trace_id`, which are
+  marked `// trace: unrelated:`, which wait on tacplus-dev/tacplus#313, and which tests assert it.
 
 ## Promoted / declined
