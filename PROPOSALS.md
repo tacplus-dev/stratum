@@ -80,6 +80,10 @@ the looper then marks it `promoted` or `declined` here with the date.
   the same way (tacplus-dev/fleet-dev#18, whose `checks/plugins.sh` is the model for those three realms).
   exec-maven-plugin has no execution in the gates' build, so its realm only shows up under a goal run
   directly (`mvn -X -pl model exec:help`).
+  The 2026-11-06 nightly scan found six more realms the same way (#31): compiler, jar, resources, plugin-plugin,
+  protobuf-maven-plugin and the os-maven-plugin build extension (plexus-utils, commons-io, aircompressor, guava,
+  jsoup). An OSV query of every `Included:` jar in `mvn -X package` (17 realms, 127 jars) found them in one pass,
+  so the check could read the gates' own build log rather than keep a per-plugin list.
 - **model's antrun step and `just generate` run different compilers** (2026-11-03, #30): `just generate`
   runs `tacplus build --tag latest`, while model's antrun target runs plain `tacplus build` when the
   generated sources are missing (a bare `mvn install`). Running that target produced different sources
