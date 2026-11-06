@@ -7,11 +7,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.Iterator;
-import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -36,6 +36,7 @@ import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.MetadataUtils;
 
+import com.github.tacplusdev.stratum.hazelcast.MemberNetwork;
 import com.github.tacplusdev.stratum.hazelcast.StratumMapConfig;
 import com.github.tacplusdev.stratum.model.chassis.grpcserver.Authorizer;
 import com.github.tacplusdev.stratum.model.chassis.servicemanager.Auth;
@@ -95,7 +96,7 @@ class RecordWriteSurfaceE2ETest {
 
     @BeforeAll
     static void up() throws Exception {
-        Config cfg = StratumMapConfig.build(TID, List.of("127.0.0.1"), 1, null);
+        Config cfg = StratumMapConfig.build(TID, MemberNetwork.alone(new InetSocketAddress("127.0.0.1", 5701)), 1, null);
         cfg.setClusterName("stratum-write-e2e-" + UUID.randomUUID());
         cfg.getNetworkConfig().setPort(5851).setPortAutoIncrement(true);
         hz = Hazelcast.newHazelcastInstance(cfg);
@@ -233,7 +234,10 @@ class RecordWriteSurfaceE2ETest {
             CompletableFuture<Query.LetsEncryptCertWatchChange> delta = CompletableFuture.supplyAsync(() -> {
                 while (true) {
                     Query.LetsEncryptCertWatchEvent ev = events.next();
-                    if (ev.hasDelta()) {
+                    // wa-1's own change may follow the snapshot that already held it,
+                    // when the feed delivered it after the watch read its revision: the
+                    // watch allows that redelivery (applying it again is a no-op).
+                    if (ev.hasDelta() && !ev.getDelta().getItem().getCertSetId().equals("wa-1")) {
                         return ev.getDelta();
                     }
                 }
