@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetSocketAddress;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -137,7 +138,7 @@ class ShadedJacksonReachabilityTest {
     @Test
     @SuppressWarnings("removal") // the classic REST API can be enabled until it is removed
     void membersKeepEveryJsonSurfaceOff() {
-        Config cfg = StratumMapConfig.build("t1", List.of("127.0.0.1"), 1, null);
+        Config cfg = StratumMapConfig.build("t1", MemberNetwork.alone(new InetSocketAddress("127.0.0.1", 5701)), 1, null);
         assertFalse(cfg.getNetworkConfig().getRestApiConfig().isEnabled(), "REST API (classic) enabled");
         assertFalse(cfg.getRestConfig().isEnabled(), "REST API enabled");
         assertFalse(cfg.getNetworkConfig().getMemcacheProtocolConfig().isEnabled(), "memcache enabled");

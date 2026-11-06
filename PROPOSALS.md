@@ -33,7 +33,11 @@ the looper then marks it `promoted` or `declined` here with the date.
   Stratum per tenant with no volume, set `Config.seed_members` to that tenant's members (#23; required since #18: a member without seeds refuses to start, and there is no multicast fallback; a one-member tenant names itself), set
   `STRATUM_ZONE` from the node's `topology.kubernetes.io/zone` (zone-aware backups), and size memory for
   the tenant's whole dataset (nothing is evicted). The member count per tenant is the footprint knob; one
-  is allowed. Needs an operator issue.
+  is allowed. Since #17 it also renders `grpcconfig.member_port` (`listen_address` the pod's member port,
+  5001, the only Hazelcast port the pod exposes; `target_address` a loopback address outside `127.0.2.0/24`,
+  the same port on every member), lists `seed_members` as every member's member port, its own included,
+  in the same order on every member (a member's place in it is its loopback alias), and the NetworkPolicy
+  on the member port (operator#2) as a second layer. Needs an operator issue.
 - **Purge soft-deleted rows again** (2026-10-28, #2): the daily checkpoint purged rows whose
   `(spec.deleted_flag)` was set after `deleted_max_age_seconds`; it went with the disk path, and nothing
   purges them now (docs/DURABILITY.md, Known gaps). A sweep on the sequencer that issues `Delete`
@@ -135,5 +139,21 @@ the looper then marks it `promoted` or `declined` here with the date.
   are the redo's `Append` and `Replay` (`RecordStore.commit`, `catchUp`, `GrpcRedoLog`), plus the Hazelcast
   forward to the sequencer (`SequencerCall`). It would also say which carry the write's `trace_id`, which are
   marked `// trace: unrelated:`, which wait on tacplus-dev/tacplus#313, and which tests assert it.
+- **tacplus: a member port forward that re-resolves its remote** (2026-11-06, #17): `MemberPort.forward`
+  takes an `InetSocketAddress`, so Stratum resolves each other member's name (`stratum-<i>.stratum`) once,
+  at start. A peer pod that comes back on a new IP, or whose name does not resolve yet when this member
+  starts, stays unreachable through that forward until this member restarts. A forward by host and port,
+  resolved on each connection, would follow the StatefulSet. Needs a tacplus issue (a Java chassis change;
+  the generated `MemberPort` is not Stratum's to edit).
+- **Run the generated ServiceManager's member port wiring in a test** (2026-11-06, #17; tacplus
+  KNOWN_TEST_GAPS MP-1): `TenantMemberAdmissionTest` drives the generated `MemberPort` itself with a fake
+  kernel (a test CA, signing key and minter), as tacplus's `cross-test/memberport` does. Neither runs
+  `ServiceManager.startMemberPort` (the `member:stratum` token from the identity manager, the JWKS watch, the
+  auto-TLS certificate) against a kernel: MP-1 names Stratum's adoption as one way to close it, which needs a
+  fake kernel that mints `member:<svc>` (kernel#30) and serves ManageCert, or a test against a deployed one.
+- **Kernel's members behind the same member port** (2026-11-06, #17): kernel's Hazelcast member traffic is
+  plain and unauthenticated (tacplus-dev/kernel#24, kernel PROPOSALS.md). `MemberNetwork` (the per-member
+  loopback alias, forwarded to each peer's member port) is the glue kernel would need too; if both use it,
+  it belongs in tacplus's generated member port rather than in each service.
 
 ## Promoted / declined

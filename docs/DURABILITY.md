@@ -137,13 +137,20 @@ in either half can be stale while the split lasts.
   the replay finishes, and nothing acked at LOCAL or REMOTE is lost. MEMORY writes are lost on any full
   restart, whatever the member count.
 - Members are found through `Config.seed_members`, rendered by the operator from the uni-config
-  (operator#17), and only through it: the join is TCP/IP to those addresses, never multicast. A Config
-  without seed members is invalid and a member refuses to start; a single member or a dev run sets
-  `127.0.0.1`. A changed list applies at the next start.
+  (operator#17), and only through it: the join is TCP/IP to those members, never multicast. A Config
+  without seed members, or whose list does not name this member, is invalid and a member refuses to
+  start; a single member or a dev run sets `127.0.0.1`. A changed list applies at the next start.
+- Member traffic never crosses the network as Hazelcast's own (#17). Hazelcast binds to loopback only
+  (`grpcconfig.member_port.target_address`) behind the generated member port (tacplus#212): server TLS
+  with the instance's auto-TLS certificate, then a kernel token for audience `member:stratum` in each
+  direction, refreshed in-band. A port admits only a Stratum member of this same tenant, forwards nothing
+  before a valid token and has no plaintext fallback; outbound, a member refuses a port whose certificate
+  is not this tenant's Stratum. Each member is known everywhere by the loopback alias `127.0.2.<i+1>`
+  of its place `i` in `seed_members`, forwarded on every other member to its member port
+  (`MemberNetwork`).
 - The cluster name is `stratum-<tid>`, the tid taken from the instance's own SPIFFE identity
   (`/tenants/<tid>/services/stratum`), never from config. Two tenants' members that reach each other's
-  port never form one cluster (#18). This keeps accidental joins apart; it is not admission: a member
-  that knows the name still gets in, and member traffic is plaintext (#17).
+  port never form one cluster (#18): a second guard behind the member port.
 
 ## Watch
 

@@ -63,13 +63,14 @@ Stratum's hand-written code names no record type.
 | `server/.../store/WriteOp.java`, `RecordType.java`, `RecordTypes.java` | One decoded write; what the store knows of a record type. |
 | `server/.../store/RedoLog.java`, `GrpcRedoLog.java` | The redo service through its generated client: one `Append` stream per store, a `Replay` per catch-up, route tenant `00000002`. |
 | `server/.../store/ChangeFeed.java` | Each member's view of committed changes: what Watch serves, with 4096 changes of history per type. |
-| `server/.../hazelcast/StratumMapConfig.java` | Hazelcast config: cluster `stratum-<tid>` (the tid from the instance's own SPIFFE identity), TCP/IP join to the seed members only (never multicast), one map per record type, backups, zone-aware grouping, the change topic, the sequencer executor. No eviction. |
+| `server/.../hazelcast/StratumMapConfig.java` | Hazelcast config: cluster `stratum-<tid>` (the tid from the instance's own SPIFFE identity), bound to the member port's loopback target, TCP/IP join to the other members only (never multicast), one map per record type, backups, zone-aware grouping, the change topic, the sequencer executor. No eviction. |
+| `server/.../hazelcast/MemberNetwork.java` | Hazelcast behind the generated member port (#17, tacplus#212): which seed is this member, its loopback alias (`127.0.2.<i+1>`, the same on every member), and a forward to each other member's port. |
 | `server/.../hazelcast/ProtoMessageSerializer.java` | Rows travel as (proto full name, proto bytes), never as a Java class name. |
-| `proto/services/stratum.proto` | Config (`hazelcast_memory_mb`, `write_ack_timeout_ms`, `seed_members`), state, health, and the `redolog.Redo` client declaration. |
+| `proto/services/stratum.proto` | Config (`hazelcast_memory_mb`, `write_ack_timeout_ms`, `seed_members`), state, health, the `redolog.Redo` client declaration, and `StratumMembers` (no RPC: `(spec.member_port)`). |
 
 `server/...` is `server/src/main/java/com/github/tacplusdev/stratum`.
 
-Config: `seed_members` (Hazelcast join, rendered by the operator from the uni-config, operator#17; required, a single member or a dev run sets `127.0.0.1`). Environment: `STRATUM_BACKUP_COUNT` (default 1), `STRATUM_ZONE`.
+Config: `seed_members` (every member's member port, this member's included, in the same order on every member; rendered by the operator from the uni-config, operator#17; required, a single member or a dev run sets `127.0.0.1`), and `grpcconfig.member_port` (`listen_address`, the pod's member port; `target_address`, the loopback address Hazelcast binds, the same port on every member; both required, #17). Environment: `STRATUM_BACKUP_COUNT` (default 1), `STRATUM_ZONE`.
 
 ## What was removed (stratum#2)
 

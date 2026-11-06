@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.github.tacplusdev.stratum;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -15,6 +18,7 @@ import io.grpc.stub.StreamObserver;
 import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
 
+import com.github.tacplusdev.stratum.hazelcast.MemberNetwork;
 import com.github.tacplusdev.stratum.hazelcast.StratumMapConfig;
 import com.github.tacplusdev.stratum.store.GrpcRedoLog;
 import com.github.tacplusdev.stratum.store.RecordStore;
@@ -55,6 +59,8 @@ public class StratumHandler extends StratumVServiceBase {
     // volatile: the record plane reads these from gRPC threads on every call.
     private volatile RecordStore store;
     private volatile StratumStores stores;
+    // The forwards to the other members' ports, opened once: a retried start reuses them.
+    private MemberNetwork network;
     private Thread keeper;
     private StratumRecordMaps recordMaps;
 
@@ -134,10 +140,10 @@ public class StratumHandler extends StratumVServiceBase {
 
     /**
      * Hazelcast seed members, from Config.seed_members: one "host:5001" entry per
-     * member of this tenant's store, rendered by the operator from the
-     * StatefulSet's stable per-pod DNS. A single member or a dev run names itself
-     * (127.0.0.1). Empty, the member refuses to start ({@link StratumMapConfig#build}):
-     * there is no multicast fallback.
+     * member of this tenant's store (its member port), rendered by the operator
+     * from the StatefulSet's stable per-pod DNS. A single member or a dev run names
+     * itself (127.0.0.1). Empty, the member refuses to start
+     * ({@link MemberNetwork#through}): there is no multicast fallback.
      */
     static List<String> seedMembers(Stratum.Config cfg) {
         List<String> members = cfg.getSeedMembersList().stream()
@@ -146,6 +152,29 @@ public class StratumHandler extends StratumVServiceBase {
                 .toList();
         log.info("Hazelcast seed members: {}", members);
         return members;
+    }
+
+    /**
+     * Places Hazelcast behind the generated member port (stratum#17): bound to
+     * grpcconfig.member_port.target_address (loopback), reaching each other member
+     * through a forward to its member port. The member port admits only a Stratum
+     * member of this tenant, so another tenant's member never reaches Hazelcast.
+     */
+    private MemberNetwork memberNetwork(Stratum.Config cfg) {
+        if (network != null) {
+            return network;
+        }
+        var mp = sm.getConfig().getMemberPort();
+        InetSocketAddress target = new InetSocketAddress(mp.getTargetAddress().getHost(), mp.getTargetAddress().getPort());
+        List<String> seeds = seedMembers(cfg);
+        int self = MemberNetwork.self(seeds, MemberNetwork.localHostname(), MemberNetwork::isLocalAddress);
+        try {
+            network = MemberNetwork.through(seeds, self, target, mp.getListenAddress().getPort(),
+                    sm.getMemberPort()::forward);
+        } catch (IOException e) {
+            throw new UncheckedIOException("member port: cannot forward to the other members " + seeds, e);
+        }
+        return network;
     }
 
     /**
@@ -182,7 +211,7 @@ public class StratumHandler extends StratumVServiceBase {
         log.info("config: hazelcast_memory_mb={}, write_ack_timeout_ms={}",
                 cfg.getHazelcastMemoryMb(), cfg.getWriteAckTimeoutMs());
         HazelcastInstance hz = Hazelcast.newHazelcastInstance(StratumMapConfig.build(tenant(),
-                seedMembers(cfg), StratumMapConfig.configuredBackupCount(), StratumMapConfig.configuredZone()));
+                memberNetwork(cfg), StratumMapConfig.configuredBackupCount(), StratumMapConfig.configuredZone()));
         try {
             RecordStore s = new RecordStore(hz, new StratumRecordTypes(),
                     new GrpcRedoLog(sm.getGrpcClients().sys().redo()), ackTimeout);

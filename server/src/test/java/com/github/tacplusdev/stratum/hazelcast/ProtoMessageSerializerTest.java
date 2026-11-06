@@ -7,8 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 
 import com.google.protobuf.Message;
 import com.google.protobuf.Struct;
@@ -33,7 +33,7 @@ class ProtoMessageSerializerTest {
     /** The serialization service the stratum Config actually configures. */
     private static InternalSerializationService service() {
         return new DefaultSerializationServiceBuilder()
-                .setConfig(StratumMapConfig.build("acme0001", List.of("127.0.0.1"), 1, null).getSerializationConfig())
+                .setConfig(StratumMapConfig.build("acme0001", MemberNetwork.alone(new InetSocketAddress("127.0.0.1", 5701)), 1, null).getSerializationConfig())
                 .build();
     }
 

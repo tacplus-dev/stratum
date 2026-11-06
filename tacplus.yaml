@@ -1,5 +1,5 @@
 language: java
-tacplus: "2.5"
+tacplus: "2.6"
 pkg: com.github.tacplusdev.stratum
 output-dir: model/target/generated-sources
 src: proto

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.github.tacplusdev.stratum.hazelcast;
 
+import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.UUID;
 
@@ -9,11 +10,14 @@ import com.google.protobuf.Message;
 import com.hazelcast.config.Config;
 import com.hazelcast.config.ExecutorConfig;
 import com.hazelcast.config.MapConfig;
+import com.hazelcast.config.MemberAddressProviderConfig;
 import com.hazelcast.config.NetworkConfig;
 import com.hazelcast.config.PartitionGroupConfig;
 import com.hazelcast.config.ReliableTopicConfig;
 import com.hazelcast.config.RingbufferConfig;
 import com.hazelcast.config.SerializerConfig;
+import com.hazelcast.instance.EndpointQualifier;
+import com.hazelcast.spi.MemberAddressProvider;
 import com.hazelcast.spi.partitiongroup.PartitionGroupMetaData;
 import com.hazelcast.topic.TopicOverloadPolicy;
 
@@ -39,9 +43,6 @@ public final class StratumMapConfig {
 
     private static final Logger log = LoggerFactory.getLogger(StratumMapConfig.class);
 
-    /** Must match the chart's HasHazelcast containerPort (kernel's convention). */
-    public static final int HAZELCAST_PORT = 5001;
-
     /**
      * Synchronous in-memory backups per map, beyond the primary: how many members
      * may die at once without the cluster losing a row it would then have to
@@ -63,7 +64,8 @@ public final class StratumMapConfig {
     /**
      * The cluster name is this prefix and the tenant's id: two tenants' members
      * that reach each other's ports still never form one cluster. It keeps
-     * accidental joins apart; it is not admission (stratum#17).
+     * accidental joins apart; admission is the member port's (stratum#17,
+     * {@link MemberNetwork}).
      */
     public static final String CLUSTER_NAME_PREFIX = "stratum-";
 
@@ -124,23 +126,18 @@ public final class StratumMapConfig {
     /**
      * @param tenant      this instance's tenant id ({@link #tenantOf}); the cluster
      *                    is {@code stratum-<tenant>}
-     * @param seedMembers "host:port" addresses for TCP/IP join, at least one; a
-     *                    single member or a dev run names itself (127.0.0.1).
-     *                    There is no multicast fallback: a member any host on the
-     *                    network can find is one any tenant's member can join.
+     * @param network     where Hazelcast binds (loopback, behind the member port),
+     *                    the address it advertises, and the other members it
+     *                    joins by TCP/IP ({@link MemberNetwork#through}). There is
+     *                    no multicast: a member any host on the network can find
+     *                    is one any tenant's member can join.
      * @param backupCount synchronous backups per map
      * @param zone        this member's availability zone, or null
-     * @throws IllegalArgumentException with no tenant or no seed members: the
-     *                    member refuses to start
+     * @throws IllegalArgumentException with no tenant: the member refuses to start
      */
-    public static Config build(String tenant, List<String> seedMembers, int backupCount, String zone) {
+    public static Config build(String tenant, MemberNetwork network, int backupCount, String zone) {
         if (tenant == null || tenant.isBlank()) {
             throw new IllegalArgumentException("no tenant: a Stratum member joins only its own tenant's cluster");
-        }
-        if (seedMembers == null || seedMembers.isEmpty()) {
-            throw new IllegalArgumentException("Config.seed_members is empty: a member refuses to start "
-                    + "without its tenant's seed members (multicast join is never used; "
-                    + "a single member or a dev run sets it to 127.0.0.1)");
         }
         Config cfg = new Config();
         // Records travel as (proto full name, proto bytes), never as a Java class name.
@@ -151,18 +148,20 @@ public final class StratumMapConfig {
         cfg.setInstanceName("stratum-" + UUID.randomUUID().toString().substring(0, 8));
         cfg.setProperty("hazelcast.phone.home.enabled", "false");
 
-        // The port is pinned and auto-increment disabled so a peer's address is
-        // predictable: the operator renders seed addresses from the StatefulSet's
-        // stable DNS, which only resolves to a member if every member binds this
-        // exact port.
+        // Hazelcast binds to the member port's loopback target only, and is known
+        // to the other members by the address MemberNetwork gives it: nothing
+        // reaches it, and it reaches nothing, except through the member port. The
+        // port is pinned and auto-increment disabled so it binds exactly there.
         NetworkConfig net = cfg.getNetworkConfig();
-        net.setPort(HAZELCAST_PORT);
+        net.setPort(network.bind().getPort());
         net.setPortAutoIncrement(false);
+        net.setMemberAddressProviderConfig(new MemberAddressProviderConfig().setEnabled(true)
+                .setImplementation(new FixedAddresses(network.bind(), network.advertised())));
         net.getJoin().getMulticastConfig().setEnabled(false);
         net.getJoin().getAutoDetectionConfig().setEnabled(false);
         net.getJoin().getTcpIpConfig().setEnabled(true);
-        for (String member : seedMembers) {
-            net.getJoin().getTcpIpConfig().addMember(member);
+        for (InetSocketAddress member : network.peers()) {
+            net.getJoin().getTcpIpConfig().addMember(member.getHostString() + ":" + member.getPort());
         }
 
         if (zone != null) {
@@ -185,9 +184,41 @@ public final class StratumMapConfig {
                 .setTopicOverloadPolicy(TopicOverloadPolicy.DISCARD_OLDEST));
         cfg.addExecutorConfig(new ExecutorConfig(RecordStore.SEQUENCER_EXECUTOR, SEQUENCER_THREADS));
 
-        log.info("stratum cluster {}, seed members {}", cfg.getClusterName(), seedMembers);
+        log.info("stratum cluster {}: bound to {}, known as {}, other members {}", cfg.getClusterName(),
+                network.bind(), network.advertised(), network.peers());
         log.info("stratum record maps {}: backupCount={}, zone={}, all resident (no eviction)",
                 StratumRecordTypes.mapNames(), backupCount, zone == null ? "unset (backups not zone-aware)" : zone);
         return cfg;
+    }
+
+    /** Hazelcast's bind and advertised addresses, fixed by {@link MemberNetwork}. */
+    static final class FixedAddresses implements MemberAddressProvider {
+        private final InetSocketAddress bind;
+        private final InetSocketAddress advertised;
+
+        FixedAddresses(InetSocketAddress bind, InetSocketAddress advertised) {
+            this.bind = bind;
+            this.advertised = advertised;
+        }
+
+        @Override
+        public InetSocketAddress getBindAddress() {
+            return bind;
+        }
+
+        @Override
+        public InetSocketAddress getBindAddress(EndpointQualifier qualifier) {
+            return bind;
+        }
+
+        @Override
+        public InetSocketAddress getPublicAddress() {
+            return advertised;
+        }
+
+        @Override
+        public InetSocketAddress getPublicAddress(EndpointQualifier qualifier) {
+            return advertised;
+        }
     }
 }

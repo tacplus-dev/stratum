@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -28,6 +29,7 @@ import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.map.IMap;
 
 import com.github.tacplusdev.stratum.StratumRecordTypes;
+import com.github.tacplusdev.stratum.hazelcast.MemberNetwork;
 import com.github.tacplusdev.stratum.hazelcast.StratumMapConfig;
 import com.github.tacplusdev.stratum.model.types.services.letsencrypt.Letsencrypt.CertMagicState;
 import com.github.tacplusdev.stratum.model.types.services.letsencrypt.Letsencrypt.LetsEncryptCert;
@@ -58,9 +60,13 @@ class RecordStoreTest {
     }
 
     private HazelcastInstance member() {
-        Config cfg = StratumMapConfig.build("acme0001", List.of("127.0.0.1"), 1, null);
+        Config cfg = StratumMapConfig.build("acme0001", MemberNetwork.alone(new InetSocketAddress("127.0.0.1", 5701)), 1, null);
         cfg.setClusterName(cluster);
+        // Several members on one host, joined directly on loopback: no member port
+        // here (TenantMemberAdmissionTest covers that), so no fixed addresses either.
+        cfg.getNetworkConfig().getMemberAddressProviderConfig().setEnabled(false);
         cfg.getNetworkConfig().setPort(5801).setPortAutoIncrement(true);
+        cfg.getNetworkConfig().getJoin().getTcpIpConfig().addMember("127.0.0.1");
         HazelcastInstance hz = Hazelcast.newHazelcastInstance(cfg);
         members.add(hz);
         return hz;
