@@ -22,3 +22,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-03 looper issue exec-maven-plugin 3.5.0, build-helper-maven-plugin 3.6.0 and maven-antrun-plugin 3.1.0 run on plexus-utils with GHSA-6fmv-xxpf-w3cw (and commons-io with GHSA-78wr-2p64-hpwj), both HIGH: bump them and override antrun (#30, d0fefa6)
 - 2026-11-03 looper issue Hazelcast 5.7.0 shades jackson 2.21.2 and 3.1.2 (HIGH advisories) into stratum.jar; the pom-tree OSV check cannot see them (#28, b236727)
 - 2026-11-06 looper issue Six more build-plugin realms load HIGH advisories (plexus-utils GHSA-6fmv-xxpf-w3cw, commons-io, aircompressor, guava, jsoup): compiler, jar, resources, plugin-plugin, protobuf, os-maven (#31, 910a81c)
+- 2026-11-06 looper issue Hazelcast member traffic must never join or reach another tenant's Stratum: same cluster name, multicast join, no member auth (#17)
