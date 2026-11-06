@@ -88,6 +88,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   protobuf-maven-plugin and the os-maven-plugin build extension (plexus-utils, commons-io, aircompressor, guava,
   jsoup). An OSV query of every `Included:` jar in `mvn -X package` (17 realms, 127 jars) found them in one pass,
   so the check could read the gates' own build log rather than keep a per-plugin list.
+  #31 fixed them (compiler 3.16.0, jar 3.5.1, plugin-plugin 3.16.0; plexus-utils 3.6.1 overrides on resources
+  3.5.0, protobuf-maven-plugin 0.6.1 and os-maven-plugin 1.7.1, now declared as a plugin with
+  `<extensions>true</extensions>` so it can take them, plus commons-lang3 3.20.0 on os-maven-plugin): every
+  realm's jars (106, 20 realms) are clean on OSV. fleet-dev's docs/java-plugins.md has no entry for compiler, resources,
+  protobuf-maven-plugin or os-maven-plugin, and covers jar 3.5.0 and plugin-plugin 3.15.1 with plexus-archiver
+  overrides where 3.5.1 and 3.16.0 now need none: a fleet-dev issue, as tacplus-dev/fleet-dev#17/#18 were.
 - **model's antrun step and `just generate` run different compilers** (2026-11-03, #30): `just generate`
   runs `tacplus build --tag latest`, while model's antrun target runs plain `tacplus build` when the
   generated sources are missing (a bare `mvn install`). Running that target produced different sources

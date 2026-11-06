@@ -125,23 +125,40 @@
 				<directory>target/generated-sources/model/src/main/resources</directory>
 			</resource>
 		</resources>
-		<extensions>
-			<extension>
+		<plugins>
+			<!--
+			  The build extension that sets os.detected.classifier for protoc. Declared as a
+			  plugin with extensions, since an <extension> cannot take dependencies. 1.7.1 is
+			  the newest release; drop the overrides once one asks for plexus-utils 3.6.1 and
+			  commons-lang3 3.18.0 or later (#31).
+			-->
+			<plugin>
 				<groupId>kr.motd.maven</groupId>
 				<artifactId>os-maven-plugin</artifactId>
 				<version>1.7.1</version>
-			</extension>
-		</extensions>
-		<plugins>
+				<extensions>true</extensions>
+				<dependencies>
+					<!-- GHSA-6fmv-xxpf-w3cw: os-maven-plugin 1.7.1 asks for plexus-utils 3.1.0 -->
+					<dependency>
+						<groupId>org.codehaus.plexus</groupId>
+						<artifactId>plexus-utils</artifactId>
+						<version>3.6.1</version>
+					</dependency>
+					<!-- GHSA-j288-q9x7-2f5v: os-maven-plugin 1.7.1 asks for commons-lang3 3.5 -->
+					<dependency>
+						<groupId>org.apache.commons</groupId>
+						<artifactId>commons-lang3</artifactId>
+						<version>3.20.0</version>
+					</dependency>
+				</dependencies>
+			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
-				<version>${maven-compiler-plugin.version}</version>
 			</plugin>
 			<plugin>
 				<groupId>org.xolstice.maven.plugins</groupId>
 				<artifactId>protobuf-maven-plugin</artifactId>
-				<version>0.6.1</version>
 				<configuration>
 					<protocArtifact>com.google.protobuf:protoc:${protobuf.version}:exe:${os.detected.classifier}</protocArtifact>
 					<pluginId>grpc-java</pluginId>
@@ -243,7 +260,6 @@
 		<snakeyaml.version>2.5</snakeyaml.version>
 		<toml4j.version>0.7.2</toml4j.version>
 		<jjwt.version>0.13.0</jjwt.version>
-		<maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
 		<gson.version>2.13.2</gson.version>
 		<junit.version>6.0.2</junit.version>
 	</properties>
