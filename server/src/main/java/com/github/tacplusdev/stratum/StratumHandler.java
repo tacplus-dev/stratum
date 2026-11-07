@@ -8,6 +8,7 @@ import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
 
 import org.slf4j.Logger;
@@ -24,6 +25,7 @@ import com.github.tacplusdev.stratum.store.GrpcRedoLog;
 import com.github.tacplusdev.stratum.store.RecordStore;
 import com.github.tacplusdev.stratum.model.s2sm.ServiceManager;
 import com.github.tacplusdev.stratum.model.chassis.collection.CollectionRuntime;
+import com.github.tacplusdev.stratum.model.types.services.kernel.Kernel;
 import com.github.tacplusdev.stratum.model.types.services.stratum.Stratum;
 import com.github.tacplusdev.stratum.model.types.services.stratum.Helpers;
 import com.github.tacplusdev.stratum.model.chassis.servicemanager.Caller;
@@ -45,7 +47,11 @@ import com.github.tacplusdev.stratum.model.types.sys.x509.X509;
  *
  * <p>A later config never rebuilds the store: its rows are memory, and tearing
  * the member down would turn a config change into a replay. The ack timeout
- * applies at once; hazelcast_memory_mb and seed_members at the next start.
+ * applies at once; hazelcast_memory_mb at the next start.
+ *
+ * <p>The members to join are not in that Config, which is the same for every
+ * tenant: they are this tenant's own StratumTenantConfig.seed_members, read from
+ * kernel's ConfigState.tenant_configs when the member starts (stratum#26).
  */
 public class StratumHandler extends StratumVServiceBase {
 
@@ -139,19 +145,43 @@ public class StratumHandler extends StratumVServiceBase {
     }
 
     /**
-     * Hazelcast seed members, from Config.seed_members: one "host:5001" entry per
-     * member of this tenant's store (its member port), rendered by the operator
-     * from the StatefulSet's stable per-pod DNS. A single member or a dev run names
-     * itself (127.0.0.1). Empty, the member refuses to start
+     * Hazelcast seed members: {@code tenant}'s StratumTenantConfig.seed_members, one
+     * "host:5001" entry per member of its store (its member port), rendered by the
+     * operator from the StatefulSet's stable per-pod DNS. A single member or a dev
+     * run names itself (127.0.0.1). Another tenant's entry is never read: a member
+     * joins only its own tenant's members. None, the member refuses to start
      * ({@link MemberNetwork#through}): there is no multicast fallback.
+     *
+     * @param tenantConfigs each tenant's TenantConfig, keyed by tenant, as kernel's
+     *                      ConfigState.tenant_configs holds it
      */
-    static List<String> seedMembers(Stratum.Config cfg) {
-        List<String> members = cfg.getSeedMembersList().stream()
+    public static List<String> seedMembers(String tenant, Map<String, Kernel.TenantConfigEntry> tenantConfigs) {
+        Kernel.TenantConfigEntry entry = tenantConfigs.get(tenant);
+        if (entry == null) {
+            log.warn("tenant {} has no TenantConfig: no Hazelcast seed members", tenant);
+            return List.of();
+        }
+        List<String> members = entry.getConfig().getStratum().getSeedMembersList().stream()
                 .map(String::trim)
                 .filter(m -> !m.isEmpty())
                 .toList();
-        log.info("Hazelcast seed members: {}", members);
+        log.info("tenant {}: Hazelcast seed members {}", tenant, members);
         return members;
+    }
+
+    /**
+     * This tenant's TenantConfigs as kernel serves them to this instance: pinned to
+     * its own tenant, projected to Stratum's slice. The generated watch may not have
+     * delivered yet when the member starts, so its cache is backed by one read.
+     */
+    private Map<String, Kernel.TenantConfigEntry> tenantConfigs(String tenant) {
+        var configState = sm.getStateClients().services().configState();
+        Map<String, Kernel.TenantConfigEntry> cached = configState.getTenantConfigsMap();
+        if (cached.containsKey(tenant)) {
+            return cached;
+        }
+        // trace: unrelated: the member's start reads its tenant's seeds once, whichever config delivery or call happens to start it
+        return configState.fetchAllTenantConfigs();
     }
 
     /**
@@ -160,13 +190,13 @@ public class StratumHandler extends StratumVServiceBase {
      * through a forward to its member port. The member port admits only a Stratum
      * member of this tenant, so another tenant's member never reaches Hazelcast.
      */
-    private MemberNetwork memberNetwork(Stratum.Config cfg) {
+    private MemberNetwork memberNetwork(String tenant) {
         if (network != null) {
             return network;
         }
         var mp = sm.getConfig().getMemberPort();
         InetSocketAddress target = new InetSocketAddress(mp.getTargetAddress().getHost(), mp.getTargetAddress().getPort());
-        List<String> seeds = seedMembers(cfg);
+        List<String> seeds = seedMembers(tenant, tenantConfigs(tenant));
         int self = MemberNetwork.self(seeds, MemberNetwork.localHostname(), MemberNetwork::isLocalAddress);
         try {
             network = MemberNetwork.through(seeds, self, target, mp.getListenAddress().getPort(),
@@ -204,14 +234,15 @@ public class StratumHandler extends StratumVServiceBase {
         if (store != null) {
             store.setAckTimeout(ackTimeout);
             this.config = cfg;
-            log.info("config: write_ack_timeout_ms={} (hazelcast_memory_mb={} and seed_members {} apply at the next start)",
-                    cfg.getWriteAckTimeoutMs(), cfg.getHazelcastMemoryMb(), cfg.getSeedMembersList());
+            log.info("config: write_ack_timeout_ms={} (hazelcast_memory_mb={} applies at the next start)",
+                    cfg.getWriteAckTimeoutMs(), cfg.getHazelcastMemoryMb());
             return;
         }
         log.info("config: hazelcast_memory_mb={}, write_ack_timeout_ms={}",
                 cfg.getHazelcastMemoryMb(), cfg.getWriteAckTimeoutMs());
-        HazelcastInstance hz = Hazelcast.newHazelcastInstance(StratumMapConfig.build(tenant(),
-                memberNetwork(cfg), StratumMapConfig.configuredBackupCount(), StratumMapConfig.configuredZone()));
+        String tenant = tenant();
+        HazelcastInstance hz = Hazelcast.newHazelcastInstance(StratumMapConfig.build(tenant,
+                memberNetwork(tenant), StratumMapConfig.configuredBackupCount(), StratumMapConfig.configuredZone()));
         try {
             RecordStore s = new RecordStore(hz, new StratumRecordTypes(),
                     new GrpcRedoLog(sm.getGrpcClients().sys().redo()), ackTimeout);

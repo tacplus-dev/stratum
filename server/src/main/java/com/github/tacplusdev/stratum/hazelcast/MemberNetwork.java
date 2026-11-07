@@ -41,7 +41,7 @@ public final class MemberNetwork {
     /** The loopback /24 of the members' aliases: seed i is {@code 127.0.2.<i+1>}. */
     static final String ALIAS_PREFIX = "127.0.2.";
 
-    /** At most this many members: Config.seed_members' own limit. */
+    /** At most this many members: StratumTenantConfig.seed_members' own limit. */
     static final int MAX_MEMBERS = 64;
 
     private static final Pattern IPV4 = Pattern.compile("[0-9.]+");
@@ -90,7 +90,7 @@ public final class MemberNetwork {
     /**
      * Places this member behind its member port.
      *
-     * @param seeds      Config.seed_members: every member's member port,
+     * @param seeds      StratumTenantConfig.seed_members: every member's member port,
      *                   "host:port" or "host", this member's own included
      * @param self       this member's index in {@code seeds} ({@link #self})
      * @param target     grpcconfig.member_port.target_address, where Hazelcast
@@ -104,7 +104,7 @@ public final class MemberNetwork {
             Forwarder forwarder) throws IOException {
         requireSeeds(seeds);
         if (self < 0 || self >= seeds.size()) {
-            throw new IllegalArgumentException("this member is not in Config.seed_members " + seeds);
+            throw new IllegalArgumentException("this member is not in StratumTenantConfig.seed_members " + seeds);
         }
         if (target.isUnresolved() || !target.getAddress().isLoopbackAddress()
                 || target.getHostString().startsWith(ALIAS_PREFIX)) {
@@ -148,15 +148,16 @@ public final class MemberNetwork {
             }
             if (me) {
                 if (found >= 0) {
-                    throw new IllegalArgumentException("Config.seed_members names this member twice ("
+                    throw new IllegalArgumentException("StratumTenantConfig.seed_members names this member twice ("
                             + seeds.get(found) + ", " + seeds.get(i) + ")");
                 }
                 found = i;
             }
         }
         if (found < 0) {
-            throw new IllegalArgumentException("Config.seed_members " + seeds + " does not name this member (host "
-                    + hostname + "): every member is in it, its own entry included");
+            throw new IllegalArgumentException("StratumTenantConfig.seed_members " + seeds
+                    + " does not name this member (host " + hostname
+                    + "): every member is in it, its own entry included");
         }
         return found;
     }
@@ -189,13 +190,13 @@ public final class MemberNetwork {
 
     private static void requireSeeds(List<String> seeds) {
         if (seeds == null || seeds.isEmpty()) {
-            throw new IllegalArgumentException("Config.seed_members is empty: a member refuses to start "
+            throw new IllegalArgumentException("StratumTenantConfig.seed_members is empty: a member refuses to start "
                     + "without its tenant's seed members (multicast join is never used; "
                     + "a single member or a dev run sets it to 127.0.0.1)");
         }
         if (seeds.size() > MAX_MEMBERS) {
-            throw new IllegalArgumentException("Config.seed_members names " + seeds.size() + " members, at most "
-                    + MAX_MEMBERS);
+            throw new IllegalArgumentException("StratumTenantConfig.seed_members names " + seeds.size()
+                    + " members, at most " + MAX_MEMBERS);
         }
     }
 
@@ -207,7 +208,7 @@ public final class MemberNetwork {
             }
             return uri;
         } catch (URISyntaxException e) {
-            throw new IllegalArgumentException("Config.seed_members: not host[:port]: " + seed, e);
+            throw new IllegalArgumentException("StratumTenantConfig.seed_members: not host[:port]: " + seed, e);
         }
     }
 
@@ -220,7 +221,7 @@ public final class MemberNetwork {
             // A literal is parsed, never looked up.
             return InetAddress.getByName(host.startsWith("[") ? host.substring(1, host.length() - 1) : host);
         } catch (UnknownHostException e) {
-            throw new IllegalArgumentException("Config.seed_members: not an address: " + host, e);
+            throw new IllegalArgumentException("StratumTenantConfig.seed_members: not an address: " + host, e);
         }
     }
 

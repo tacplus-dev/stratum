@@ -66,7 +66,7 @@ Stratum's hand-written code names no record type.
 | `server/.../hazelcast/StratumMapConfig.java` | Hazelcast config: cluster `stratum-<tid>` (the tid from the instance's own SPIFFE identity), bound to the member port's loopback target, TCP/IP join to the other members only (never multicast), one map per record type, backups, zone-aware grouping, the change topic, the sequencer executor. No eviction. |
 | `server/.../hazelcast/MemberNetwork.java` | Hazelcast behind the generated member port (#17, tacplus#212): which seed is this member, its loopback alias (`127.0.2.<i+1>`, the same on every member), and a forward to each other member's port. |
 | `server/.../hazelcast/ProtoMessageSerializer.java` | Rows travel as (proto full name, proto bytes), never as a Java class name. |
-| `proto/services/stratum.proto` | Config (`hazelcast_memory_mb`, `write_ack_timeout_ms`, `seed_members`), state, health, the `redolog.Redo` client declaration, and `StratumMembers` (no RPC: `(spec.member_port)`). |
+| `proto/services/stratum.proto` | Config (`hazelcast_memory_mb`, `write_ack_timeout_ms`: the same for every tenant), the tenant-scope slice `StratumTenantConfig` (`seed_members`, per tenant, read from kernel's `ConfigState.tenant_configs`, #26), state, health, the `redolog.Redo` client declaration, and `StratumMembers` (no RPC: `(spec.member_port)`). |
 
 `server/...` is `server/src/main/java/com/github/tacplusdev/stratum`.
 

@@ -136,10 +136,13 @@ in either half can be stale while the split lasts.
 - **A single member is allowed.** It trades availability, not durability: a restart is downtime until
   the replay finishes, and nothing acked at LOCAL or REMOTE is lost. MEMORY writes are lost on any full
   restart, whatever the member count.
-- Members are found through `Config.seed_members`, rendered by the operator from the uni-config
-  (operator#17), and only through it: the join is TCP/IP to those members, never multicast. A Config
-  without seed members, or whose list does not name this member, is invalid and a member refuses to
-  start; a single member or a dev run sets `127.0.0.1`. A changed list applies at the next start.
+- Members are found through the tenant's own `StratumTenantConfig.seed_members` (#26), a tenant-scope
+  config slice that kernel holds in `ConfigState.tenant_configs` and serves to each instance pinned to
+  its own tenant; the operator derives each tenant's list from the deployment's rendering (operator#2)
+  and delivers it as that slice, never in the deployment-wide `Config`, which every tenant's Stratum
+  shares. The join is TCP/IP to those members only, never multicast. A member whose tenant has no seed
+  members, or whose list does not name it, refuses to start; a single member or a dev run sets
+  `127.0.0.1`. A changed list applies at the next start.
 - Member traffic never crosses the network as Hazelcast's own (#17). Hazelcast binds to loopback only
   (`grpcconfig.member_port.target_address`) behind the generated member port (tacplus#212): server TLS
   with the instance's auto-TLS certificate, then a kernel token for audience `member:stratum` in each

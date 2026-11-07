@@ -50,30 +50,46 @@ message Config {
   // (UNAVAILABLE) and not applied. Default: 10000. Min: 100.
   int32 write_ack_timeout_ms = 9 [(spec.default_int) = 10000, (spec.assert_ge) = 100];
 
+  // Field 10, seed_members, moved to this tenant's StratumTenantConfig
+  // (stratum#26): every tenant has its own members, and this Config is the
+  // same for every tenant.
+  // Fields 2 and 4-8 configured working-set maps, the retention sweep, the
+  // daily checkpoint and the warm tier, all removed with the per-tenant,
+  // in-memory rebuild (stratum#2).
+  reserved 2, 4, 5, 6, 7, 8, 10;
+  reserved "seed_members", "map_idle_ttl_seconds", "max_maps", "retention_days", "cleanup_interval_seconds",
+      "active_session_idle_seconds", "warm_window_seconds";
+}
+
+// ============================================================================
+// Tenant config
+// ============================================================================
+
+// StratumTenantConfig is Stratum's slice of each tenant's TenantConfig
+// (stratum#26, tacplus-dev/operator#2 option B): what differs per tenant. The
+// operator derives it from the deployment's rendering (namespace and member
+// count) and kernel holds it in ConfigState.tenant_configs; each instance reads
+// only its own tenant's entry (the tenant of its own service identity), served
+// tenant-pinned by kernel.
+message StratumTenantConfig {
+  option (spec.config_slice) = {scope: CONFIG_SLICE_SCOPE_TENANT, service_name: "stratum"};
+
   // seed_members are this tenant's members, one "host:port" each: every
   // member's member port (grpcconfig.member_port.listen_address,
   // stratum-<i>.stratum:5001), this member's own included, in the same order on
-  // every member. The operator renders them from the uni-config and the
-  // StatefulSet's stable per-pod DNS (operator#17). Hazelcast binds to loopback
-  // only (grpcconfig.member_port.target_address) and reaches every other member
+  // every member. The operator renders them from the StatefulSet's stable
+  // per-pod DNS. Hazelcast binds to loopback only
+  // (grpcconfig.member_port.target_address) and reaches every other member
   // through the generated member port (stratum#17). The join is to these
-  // members only, never multicast, so a Config without them is invalid and a
-  // member refuses to start, as does one whose list does not name it (its pod's
-  // hostname, a loopback address or one of its own addresses); a single member
-  // or a dev run names itself (127.0.0.1). At most 64 members. Applies at the
-  // next start.
+  // members only, never multicast, so a member whose tenant has none refuses to
+  // start, as does one whose list does not name it (its pod's hostname, a
+  // loopback address or one of its own addresses); a single member or a dev run
+  // names itself (127.0.0.1). At most 64 members. Applies at the next start.
   //
   // There is one cluster per tenant and no member roles (stratum#2), so the
   // working-set seeds and the member role the operator used to render as
   // STRATUM_WS_SEED_MEMBERS and STRATUM_MEMBER_ROLE have no field.
-  repeated string seed_members = 10 [(spec.assert_required) = true, (spec.assert_max_size) = 64];
-
-  // Fields 2 and 4-8 configured working-set maps, the retention sweep, the
-  // daily checkpoint and the warm tier, all removed with the per-tenant,
-  // in-memory rebuild (stratum#2).
-  reserved 2, 4, 5, 6, 7, 8;
-  reserved "map_idle_ttl_seconds", "max_maps", "retention_days", "cleanup_interval_seconds",
-      "active_session_idle_seconds", "warm_window_seconds";
+  repeated string seed_members = 1 [(spec.assert_max_size) = 64];
 }
 
 // ============================================================================

@@ -57,11 +57,15 @@ import com.hazelcast.config.Config;
 import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
 
+import com.github.tacplusdev.stratum.StratumHandler;
 import com.github.tacplusdev.stratum.model.chassis.jwk.ImmutableJwk;
 import com.github.tacplusdev.stratum.model.chassis.key.ImmutableKey;
 import com.github.tacplusdev.stratum.model.chassis.key.KeyHelpers;
 import com.github.tacplusdev.stratum.model.chassis.memberport.MemberPort;
 import com.github.tacplusdev.stratum.model.chassis.token.TokenWrapper;
+import com.github.tacplusdev.stratum.model.types.generated.tenant_config.TenantConfigOuterClass.TenantConfig;
+import com.github.tacplusdev.stratum.model.types.services.kernel.Kernel;
+import com.github.tacplusdev.stratum.model.types.services.stratum.Stratum;
 import com.github.tacplusdev.stratum.model.types.sys.jwk.JwkOuterClass;
 import com.github.tacplusdev.stratum.model.types.sys.key.KeyOuterClass;
 
@@ -136,6 +140,52 @@ class TenantMemberAdmissionTest {
         a1.hz.<String, String>getMap("probe").put("k", "from-a1");
         assertEquals("from-a1", a2.hz.<String, String>getMap("probe").get("k"), "A's members share data");
         assertNull(b1.hz.<String, String>getMap("probe").get("k"), "tenant B sees none of it");
+    }
+
+    /**
+     * stratum#26: each tenant's members take their seeds from their own tenant's
+     * StratumTenantConfig, out of one ConfigState.tenant_configs holding both
+     * tenants' different lists, as kernel holds them. Each tenant forms its own
+     * cluster of exactly its own members, and neither sees the other's data.
+     */
+    @Test
+    void twoTenantsWithTheirOwnSeedMembersEachJoinOnlyTheirOwn() throws Exception {
+        int portA = freePort();
+        int portB = freePort();
+        Member a1 = new Member(A, new InetSocketAddress("127.0.1.1", portA));
+        Member a2 = new Member(A, new InetSocketAddress("127.0.1.2", portA));
+        Member b1 = new Member(B, new InetSocketAddress("127.0.1.3", portB));
+        Member b2 = new Member(B, new InetSocketAddress("127.0.1.4", portB));
+        Map<String, Kernel.TenantConfigEntry> tenantConfigs = Map.of(
+                A, tenantConfig(A, a1.seed(), a2.seed()),
+                B, tenantConfig(B, b1.seed(), b2.seed()));
+
+        List<Member> members = List.of(a1, a2, b1, b2);
+        for (Member m : members) {
+            List<String> seeds = StratumHandler.seedMembers(m.tenant, tenantConfigs);
+            m.start(seeds, seeds.indexOf(m.seed()), null);
+        }
+        waitFor("each tenant's members to form its cluster", 60_000,
+                () -> members.stream().allMatch(m -> m.size() == 2));
+        assertEquals(StratumMapConfig.CLUSTER_NAME_PREFIX + A, a2.hz.getConfig().getClusterName());
+        assertEquals(StratumMapConfig.CLUSTER_NAME_PREFIX + B, b2.hz.getConfig().getClusterName());
+        for (Member m : members) {
+            assertEquals(2, m.size(), m.tenant + "'s member joined exactly its own tenant's two members");
+        }
+
+        a1.hz.<String, String>getMap("probe").put("k", "from-a1");
+        b1.hz.<String, String>getMap("probe").put("k", "from-b1");
+        assertEquals("from-a1", a2.hz.<String, String>getMap("probe").get("k"), "A's members share A's data");
+        assertEquals("from-b1", b2.hz.<String, String>getMap("probe").get("k"), "B's members share B's data");
+    }
+
+    /** {@code tenant}'s entry in ConfigState.tenant_configs, carrying Stratum's slice. */
+    static Kernel.TenantConfigEntry tenantConfig(String tenant, String... seeds) {
+        return Kernel.TenantConfigEntry.newBuilder()
+                .setTenantName(tenant)
+                .setConfig(TenantConfig.newBuilder()
+                        .setStratum(Stratum.StratumTenantConfig.newBuilder().addAllSeedMembers(List.of(seeds))))
+                .build();
     }
 
     /**

@@ -30,7 +30,7 @@ the looper then marks it `promoted` or `declined` here with the date.
   what tacplus's dependency list expects first.
 - **The operator renders the per-tenant Stratum** (2026-10-28, #2): stratum.proto now declares
   `tenant_owned: true` and holds no durable state. The operator (tacplus-dev/operator) has to run one
-  Stratum per tenant with no volume, set `Config.seed_members` to that tenant's members (#23; required since #18: a member without seeds refuses to start, and there is no multicast fallback; a one-member tenant names itself), set
+  Stratum per tenant with no volume, deliver that tenant's members as its `StratumTenantConfig.seed_members` slice of the TenantConfig kernel holds (#26, operator#2 option B; was `Config.seed_members`, #23; required since #18: a member without seeds refuses to start, and there is no multicast fallback; a one-member tenant names itself), set
   `STRATUM_ZONE` from the node's `topology.kubernetes.io/zone` (zone-aware backups), and size memory for
   the tenant's whole dataset (nothing is evicted). The member count per tenant is the footprint knob; one
   is allowed. Since #17 it also renders `grpcconfig.member_port` (`listen_address` the pod's member port,
@@ -67,10 +67,10 @@ the looper then marks it `promoted` or `declined` here with the date.
   the wire here; only the route check and the handle check behind it are. Signing the test tokens with a test JWK
   source instead would put the shipped `authorize` on the path.
 - **`STRATUM_BACKUP_COUNT` and `STRATUM_ZONE` out of env too** (2026-11-01, #23): #23 moved the seed
-  members into `Config.seed_members`; stratum still reads these two from env
+  members into `Config.seed_members` (and #26 on into the tenant's `StratumTenantConfig` slice); stratum still reads these two from env
   (`StratumMapConfig.configuredBackupCount`, `configuredZone`). Under the uni-config's interim rule
   (tacplus-dev/operator#17: no env but downward-API pod identity) both have to go: `backup_count` fits
-  `Config`; the zone is per-node, so it is either node identity (allowed with `NODE_NAME`, if stratum
+  `Config`, or the `StratumTenantConfig` slice if it is to differ per tenant (#26); the zone is per-node, so it is either node identity (allowed with `NODE_NAME`, if stratum
   looks the zone up itself) or a downward-API value Jody has to add to the allowlist. Also: the operator
   still renders `STRATUM_WS_SEED_MEMBERS` and `STRATUM_MEMBER_ROLE`, which nothing has read since #2;
   operator#17 can drop them now, and `STRATUM_SEED_MEMBERS` once it renders `seed_members`.
@@ -161,5 +161,15 @@ the looper then marks it `promoted` or `declined` here with the date.
   plain and unauthenticated (tacplus-dev/kernel#24, kernel PROPOSALS.md). `MemberNetwork` (the per-member
   loopback alias, forwarded to each peer's member port) is the glue kernel would need too; if both use it,
   it belongs in tacplus's generated member port rather than in each service.
+- **Register `StratumTenantConfig`'s TenantConfig field number** (2026-11-07, #26): tacplus numbers a new
+  tenant slice `max + 1` in each build and records it nowhere (tacplus-dev/tacplus#352), so `stratum = 4` in the
+  generated TenantConfig holds only because stratum's build and kernel's (tacplus-dev/kernel#34) see the same
+  slices. Once tacplus can register a slice field, register `stratum`'s in tacplus-dev/registry (4, as generated
+  today) and sync `proto/registry.yaml`.
+- **Watch the seed members, not only read them at start** (2026-11-07, #26): the member reads its tenant's
+  `StratumTenantConfig.seed_members` once, when it starts (the generated watch's cache, else one GetAll), and a
+  changed list applies at the next start, as `Config.seed_members` did. Subscribing to the generated
+  `ConfigState.tenant_configs` watch could log, or report in health, a list that no longer matches the one the
+  member joined, so a scale-up the operator delivers is visible before the rolling restart.
 
 ## Promoted / declined
