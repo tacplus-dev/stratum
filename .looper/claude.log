@@ -1,0 +1,248 @@
+= init
+= thinking_tokens
+= thinking_tokens
+> Bash gh issue view 32 --repo tacplus-dev/stratum --comments | tail -40; ls; cat tacplus.yaml justfile; cat STATE.md | head -60; which tacplus; tacplus --version
+= task_started
+= task_notification
+< author:	jodydadescott association:	member edited:	false status:	none -- **Decision (Jody, 2026-11-06):** move the floor to 2.6. Commit a tacplus.lock (tacplus pin from build:2.6) and build in the image it names; regenerate with 2.6.x; fix what the sensitive-field gate refuses. Leave the deprecation ...
+= thinking_tokens
+= thinking_tokens
+> Bash git log --oneline -5 -- tacplus.yaml; ls -a; ls tacplus.lock 2>&1; grep -n -i "floor\|2\.[456]" ROADMAP.md PROPOSALS.md | head -30; tacplus --help 2>&1 | head -40
+< 8d5d07b Hazelcast member traffic behind the generated member port (#17) 206a973 Per-tenant, in-memory Stratum: no event bus, durability through the redo service (#2) 2cf542b Work without SeaBeam: tacplus-dev packages, no gitlab.com in the build da00c71 tacplus.yaml: declare the tacplus floor, 2.4 d4...
+= thinking_tokens
+= thinking_tokens
+> Bash sed -n 50,75p PROPOSALS.md; tacplus pin --help; cat Dockerfile; ls .github/workflows; cat .github/workflows/* | head -80
+< - **Split brain** (2026-10-28, #2): the redo's strict seq keeps the log single-writer, so a split   cannot fork the database; but a minority side keeps answering reads from what it holds. Hazelcast   split-brain protection on reads (or refusing reads without the sequencer) would close that. - **tacp...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /tmp && gh release view v2.6.1 --repo tacplus-dev/tacplus | head -60; gh release view v2.6.0 --repo tacplus-dev/tacplus | sed -n '/Upgrading/,/^## /p' | head -60
+< title:	v2.6.1 tag:	v2.6.1 draft:	false prerelease:	false immutable:	false author:	github-actions[bot] created:	2026-11-06T04:33:28Z published:	2026-11-06T04:37:43Z url:	https://github.com/tacplus-dev/tacplus/releases/tag/v2.6.1 asset:	checksums.txt asset:	tacplus-2-6-1-darwin-amd64 asset:	tacplus-2-...
+> Bash gh api repos/tacplus-dev/tacplus/contents/docs/USER.md -H 'Accept: application/vnd.github.raw' | sed -n '/tacplus.lock/,+40p' | head -90; gh search code --owner tacplus-dev filename:tacplus.lock 2>&1 | head
+< | `tacplus` | string | No | Minimum tacplus `MAJOR.MINOR` this project needs, e.g. `"2.2"`. A floor, not a pin: MAJOR must match and the running MINOR must be at least this. A patch component is rejected: the exact release a build runs is pinned in [`tacplus.lock`](#tacpluslock-the-pinned-release), ...
+= thinking_tokens
+= thinking_tokens
+The floor is already 2.6 on main (since #17), so what's left is pinning `tacplus.lock` and running the build in the image it names. Pinning now.
+> Bash docker run --rm --memory 4096m -u $(id -u):$(id -g) -v "$PWD:/workspace" -w /workspace ghcr.io/tacplus-dev/tacplus/build:2.6 tacplus pin 2>&1 | tail -20; cat tacplus.lock
+< Exit code 1 mkdir: cannot create directory '//.cache': Permission denied cat: tacplus.lock: No such file or directory
+> Bash docker run --rm --memory 4096m -u $(id -u):$(id -g) -e HOME=/tmp -v "$PWD:/workspace" -w /workspace ghcr.io/tacplus-dev/tacplus/build:2.6 tacplus pin 2>&1 | tail -20; cat tacplus.lock; docker run --rm ghcr.io/tacplus-dev/tacplus/build:2.6 sh -c 'which java mvn just git trivy; java -version 2>&1|head...
+= task_started
+= task_notification
+< Pinned tacplus 2.6.1, build image ghcr.io/tacplus-dev/tacplus/build:2.6.1@sha256:91f42995e0e3d6f959a7f75177caf94b2aded90fc36c8492dbcd320ca0d187f5. Commit tacplus.lock. # The tacplus release and build image every build of this repository runs, exactly. # Written by `tacplus pin`; move it with `tacplu...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash file /usr/local/bin/tacplus; head -c 2000 /usr/local/bin/tacplus | strings | head -40; which java mvn trivy just; java -version 2>&1 | head -1
+< /usr/local/bin/tacplus: Bourne-Again shell script, ASCII text executable #!/usr/bin/env bash # Copyright (c) 2026 Jody Scott # SPDX-License-Identifier: Apache-2.0 # tacplus, as the looper image provides it: not a binary of its own, but the # released tacplus for this repository, run in the tacplus b...
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n -i "lock\|build_image\|digest" /usr/local/bin/tacplus | head -40
+< 9:# looper#27). Which release: the one the repository's tacplus.lock pins, as a 64:[[ -n "$project" && -f "$project/tacplus.lock" ]] && 65:  version="$(sed -n -E 's/^tacplus:[[:space:]]*"?([0-9]+\.[0-9]+\.[0-9]+)"?[[:space:]]*$/\1/p' "$project/tacplus.lock" | head -1)"
+> Bash sed -n 40,140p /usr/local/bin/tacplus
+< d="$PWD" while [[ "$d" != / && -z "$project" ]]; do   for f in "$d/tacplus.yaml" "$d/fleet.yaml"; do     if [[ -f "$f" ]]; then       project="$d"       [[ -n "$minor" ]] || minor="$(sed -n -E 's/^tacplus:[[:space:]]*"?([0-9]+\.[0-9]+)"?.*$/\1/p' "$f" | head -1)"       break     fi   done   d="$(dir...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash tacplus version 2>&1 | head; tacplus --version
+< tacplus version 2.6.1 (commit 59419d54) tacplus version 2.6.1
+Pinned 2.6.1. Next I'll make the justfile's `generate` refuse any compiler other than the pinned one.
+> Edit /builds/looper/stratum/issues/32/justfile
+< The file /builds/looper/stratum/issues/32/justfile has been updated successfully.
+> Bash mkdir -p /tmp/fk && printf '#!/bin/sh\necho "tacplus version 2.6.0"\n' > /tmp/fk/tacplus && chmod +x /tmp/fk/tacplus && TACPLUS_BIN=/tmp/fk/tacplus just generate; echo exit=$?; git status --short
+< generate: tacplus.lock pins tacplus 2.6.1, but /tmp/fk/tacplus is 2.6.0 error: recipe `generate` failed with exit code 1 exit=1  M justfile ?? tacplus.lock
+Refusal works. Running the full gates with the pinned compiler (detached).
+> Bash nohup just gates > /tmp/gates32.log 2>&1 & echo $!
+< 1115
+While that runs, updating STATE.md.
+> Bash python3 - <<'EOF' p='STATE.md'; s=open(p).read() s=s.replace("Last updated: 2026-11-06 by the looper (#17).","Last updated: 2026-11-07 by the looper (#32).") s=s.replace("tacplus floor 2.6 (the generated member port","tacplus floor 2.6, pinned at exactly 2.6.1 in `tacplus.lock` (build image `ghcr.io...
+<  STATE.md |  4 ++--  justfile | 14 +++++++++++---  2 files changed, 13 insertions(+), 5 deletions(-) - **Split brain** (2026-10-28, #2): the redo's strict seq keeps the log single-writer, so a split   cannot fork the database; but a minority side keeps answering reads from what it holds. Hazelcast  ...
+= thinking_tokens
+= thinking_tokens
+> Bash python3 - <<'EOF' p='PROPOSALS.md'; s=open(p).read() a=s.index("- **Pin the exact tacplus version"); b=s.index("- **E2E tests through") s=s[:a]+s[b:]; open(p,'w').write(s) EOF git diff PROPOSALS.md | head -30; sed -n 1,15p ROADMAP.md
+< diff --git a/PROPOSALS.md b/PROPOSALS.md index 936dc61..da4d753 100644 --- a/PROPOSALS.md +++ b/PROPOSALS.md @@ -53,14 +53,6 @@ the looper then marks it `promoted` or `declined` here with the date.  - **tacplus#205: a depends cycle merges the project's published proto** (2026-10-28, #2): letsencrypt...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash git fetch -q --tags origin && git tag -l; git branch -r; git log --oneline v0.1.0..origin/main 2>/dev/null | head -30; tail -3 /tmp/gates32.log
+< v0.1.0   origin/HEAD -> origin/main   origin/looper/stratum-24   origin/looper/stratum-26   origin/looper/stratum-3   origin/main 2026-11-07T15:40:09.726Z	INFO	Injected ConfigState into service proto	{"service": "stratum", "state": "StratumConfigState", "proto": "services/stratum.proto"} 2026-11-07T...
+= thinking_tokens
+= thinking_tokens
+> Bash git cat-file -t v0.1.0; git show v0.1.0 --no-patch | head -15; gh release list --repo tacplus-dev/stratum; grep -rn -i "release\|tag" README.md docs 2>/dev/null | grep -i "tag\|release" | head
+< tag tag v0.1.0 Tagger: Jody Scott <jody@aporeto.com> Date:   Fri Nov 6 18:21:43 2026 -0700  stratum 0.1.0: first release, a source tag on green main (Jody, 2026-11-07). Fleets on tacplus 2.6 pin services by release line (fleet-seatrials#1, fleet-dev#1). Binaries, images and the GitHub release come f...
+= thinking_tokens
+= thinking_tokens
+> Bash python3 - <<'EOF' p='STATE.md'; s=open(p).read() s=s.replace("**Version / line:** no release yet (no vX.Y.Z tag); tacplus floor","**Version / line:** v0.1.1 (the 0.1 line: v0.1.0 a source tag on green main, 2026-11-07; v0.1.1 the tacplus pin, #32); tacplus floor",1) s=s.replace("- **Released / deplo...
+< --- a/STATE.md +++ b/STATE.md -Overwritten to stay current (loopers and agents). Last updated: 2026-11-06 by the looper (#17). +Overwritten to stay current (loopers and agents). Last updated: 2026-11-07 by the looper (#32). -- **Version / line:** no release yet (no vX.Y.Z tag); tacplus floor 2.6 (th...
+> Bash for i in $(seq 1 55); do kill -0 1115 2>/dev/null || break; sleep 10; done; kill -0 1115 2>/dev/null && echo running; grep -E "Tests run:.*Fail|BUILD|WARN.*(sensitive|redact|deprecat)|error|Total:" /tmp/gates32.log | tail -15; tail -5 /tmp/gates32.log
+= task_started
+= task_notification
+< 2026-11-07T15:40:06.305Z	INFO	created embedded proto file	{"file": "sys/errors.proto"} 2026-11-07T15:40:07.809Z	INFO	created embedded proto file	{"file": "sys/errors.proto"} 2026-11-07T15:40:24.232Z	INFO	Module proto files	{"module": "types-sys-errors", "files": ["sys/errors.proto"]} 2026-11-07T15:4...
+Generation failed only because I edited STATE.md while it ran (the tracked-files check caught it). Re-running the gates, hands off this time.
+> Bash grep -iE "sensitive|redact|deprecat|WARN" /tmp/gates32.log | head; nohup just gates > /tmp/gates32.log 2>&1 & echo $!
+< 2026-11-07T15:40:50.729Z	DEBUG	Wrote Java library file	{"path": "grpcconfig/RedactionInstalledTest.java"} 2026-11-07T15:40:50.731Z	DEBUG	Wrote Java library file	{"path": "logger/CredentialRedactor.java"} 1338
+> Bash for i in $(seq 1 58); do kill -0 1338 2>/dev/null || break; sleep 10; done; kill -0 1338 2>/dev/null && echo running; grep -E "Tests run:.*Fail.*Skipped: [0-9]+$|BUILD|error:|Total:" /tmp/gates32.log | tail -15
+= task_started
+= task_notification
+< [INFO] Tests run: 34, Failures: 0, Errors: 0, Skipped: 0 [INFO] Tests run: 78, Failures: 0, Errors: 0, Skipped: 0 [INFO] BUILD SUCCESS
+> Bash sleep 5; for i in $(seq 1 30); do kill -0 1338 2>/dev/null || break; sleep 10; done; kill -0 1338 2>/dev/null && echo running; tail -12 /tmp/gates32.log; grep -ciE "warn" /tmp/gates32.log; grep -iE "WARN" /tmp/gates32.log | grep -iv maven | head -5
+= task_started
+= task_notification
+< │ stratum.jar │ jar  │        0        │ └─────────────┴──────┴─────────────────┘ Legend: - '-': Not scanned - '0': Clean (no security findings detected)   📣 [34mNotices:[0m   - Version 0.76.2 of Trivy is now available, current version is 0.76.1  To suppress version checks, run Trivy scans with th...
+= thinking_tokens
+= thinking_tokens
+Gates green (codegen 34, server 78, trivy clean); the sensitive-field gate refused nothing. Committing, checkpointing, and landing.
+> Bash git add -A && git commit -q -F - <<'EOF' Pin tacplus 2.6.1 in tacplus.lock; generate refuses any other compiler (#32)  The floor is already 2.6 (#17), but generate ran whatever tacplus was on the PATH, so a new patch could change main with no commit (as v2.5.3 did, #20). 2.6's build image runs only ...
+< 83a9f96 Pin tacplus 2.6.1 in tacplus.lock; generate refuses any other compiler (#32) remote:      https://github.com/tacplus-dev/stratum/pull/new/looper/stratum-32         remote:  [2026-11-07T15:47:02Z] checkpoint of #32 (a step) pushed to looper/stratum-32:  6 files changed, 275 insertions(+), 14 ...
+= thinking_tokens
+= thinking_tokens
+> Bash git show --stat HEAD | tail -8; git status --short
+<     Co-Authored-By: Claude <noreply@anthropic.com>   PROPOSALS.md |  8 --------  STATE.md     |  6 +++---  justfile     | 14 +++++++++++---  tacplus.lock |  4 ++++  4 files changed, 18 insertions(+), 14 deletions(-)
+> Bash for i in $(seq 1 57); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -15 /tmp/land32.log
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+While the land is queued, running the trace check (no handlers touched, but it's the standing rule).
+> Bash /usr/local/bin/looper-trace check 2>&1 | tail -25
+< looper-trace: /builds/looper/stratum/issues/32 not checked: 45 Java files: read their handlers yourself verdict: pass (0 handlers, 0 findings)
+> Bash for i in $(seq 1 58); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -5 /tmp/land32.log
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash for i in $(seq 1 58); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -5 /tmp/land32.log
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash for i in $(seq 1 58); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -12 /tmp/land32.log
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash for i in $(seq 1 58); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -12 /tmp/land32.log
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash for i in $(seq 1 58); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -30 /tmp/land32.log | cut -c1-400
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+Still waiting in the land queue (~50 min so far); continuing to poll.
+> Bash for i in $(seq 1 58); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -30 /tmp/land32.log | cut -c1-600
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash for i in $(seq 1 58); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -30 /tmp/land32.log | cut -c1-600
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash for i in $(seq 1 58); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -30 /tmp/land32.log | cut -c1-600
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash for i in $(seq 1 58); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -30 /tmp/land32.log | cut -c1-800; date -u
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash for i in $(seq 1 58); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -30 /tmp/land32.log | cut -c1-1500
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash for i in $(seq 1 58); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -30 /tmp/land32.log | cut -c1-1500
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+Still queued (~1h50m); checking the issue for any manager comment while polling.
+> Bash gh issue view 32 --repo tacplus-dev/stratum --comments | tail -15 | cut -c1-500; for i in $(seq 1 50); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -5 /tmp/land32.log | cut -c1-1500
+= task_started
+= task_notification
+< author:	jodydadescott association:	member edited:	false status:	none -- **Decision (Jody, 2026-11-06):** move the floor to 2.6. Commit a tacplus.lock (tacplus pin from build:2.6) and build in the image it names; regenerate with 2.6.x; fix what the sensitive-field gate refuses. Leave the deprecation ...
+= thinking_tokens
+= thinking_tokens
+> Bash /usr/local/bin/repo-looper --repo stratum --issue 32 --checkpoint "83a9f96 (tacplus.lock 2.6.1, justfile refuses unpinned compiler, STATE/PROPOSALS) queued for land since 15:47Z; local just gates green (codegen 34, server 78, trivy clean). Left once landed: just gates on main, tag v0.1.1 (annotated,...
+= task_started
+= task_notification
+< [2026-11-07T17:51:55Z] checkpoint of #32 (a step) pushed to looper/stratum-32:  7 files changed, 344 insertions(+), 14 deletions(-) running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] ...
+> Bash for i in $(seq 1 58); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -3 /tmp/land32.log | cut -c1-2000
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash for i in $(seq 1 58); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -3 /tmp/land32.log | cut -c1-2000
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash for i in $(seq 1 58); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -3 /tmp/land32.log | cut -c1-2000; date -u
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash for i in $(seq 1 58); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -3 /tmp/land32.log | cut -c1-2000
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+Still in the land queue (~2h50m); polling until the verdict or my time limit.
+> Bash for i in $(seq 1 58); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -3 /tmp/land32.log | cut -c1-2000
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash for i in $(seq 1 58); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -3 /tmp/land32.log | cut -c1-2000; date -u
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash for i in $(seq 1 55); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -3 /tmp/land32.log | cut -c1-2000; date -u
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 50); do kill -0 4077 2>/dev/null || break; sleep 10; done; kill -0 4077 2>/dev/null && echo running; tail -3 /tmp/land32.log | cut -c1-2000; date -u
+= task_started
+= task_notification
+< running [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: the manager of stratum merges looper/stratum-32 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash /usr/local/bin/repo-looper --repo stratum --issue 32 --checkpoint "83a9f96 (tacplus.lock 2.6.1 + digest from tacplus pin in build:2.6; justfile generate refuses a compiler other than the pin; STATE names floor 2.6 / pin 2.6.1; PROPOSALS pin entry removed) queued for land since 15:47Z, no verdict by ...
+= task_started
+= task_notification
+< [2026-11-07T19:17:02Z] checkpoint of #32 (a step) pushed to looper/stratum-32:  7 files changed, 383 insertions(+), 14 deletions(-) [2026-11-07T15:47:04Z] checkpoint of #32 (land queued) pushed to looper/stratum-32:  7 files changed, 280 insertions(+), 14 deletions(-) [2026-11-07T15:47:05Z] queued: ...
+= thinking_tokens
+= thinking_tokens
+Issue #32 isn't finished. My change is committed but still hasn't merged: it has been in the land queue since 15:47Z with no verdict, and my run stops at about 19:28Z. The manager will still land it after this run ends, and the next run picks up from the checkpoint on `looper/stratum-32`. The issue stays open, no `v0.1.1` tag is cut and no comment is posted yet.
+
+**What was already done:** main already declared `tacplus: "2.6"` (#17 changed it), and the runner's `tacplus` is 2.6.1. What was missing was a pinned compiler, so builds still ran whatever `tacplus` was on the PATH.
+
+**What commit `83a9f96` does:**
+- **`tacplus.lock`:** written by `tacplus pin` run in `build:2.6`, as Jody asked. It pins tacplus `2.6.1` and the build image `ghcr.io/tacplus-dev/tacplus/build:2.6.1@sha256:91f42995…`.
+- **`justfile`:** `generate` now stops if the compiler it runs isn't the pinned release, so a new tacplus patch can only reach main through a commit. A fake 2.6.0 binary was refused as expected.
+- **`STATE.md`:** names the 2.6 floor, the exact pin 2.6.1, and the 0.1 line (`v0.1.0` exists; `v0.1.1` is still to be tagged).
+- **`PROPOSALS.md`:** removed the "pin the exact tacplus version" entry, since this commit does it.
+
+**Checks run locally:** `just gates` passed with the pinned 2.6.1: codegen 34 tests and server 78 tests, 0 failures, and trivy found nothing in `stratum.jar`. The sensitive-field gate refused nothing, so there was nothing to fix. `looper-trace check` passed, but it read 0 handlers and left 45 Java files unchecked; this change touches none of them.
+
+**Left for the next run:**
+1. Once it lands, run `just gates` on main.
+2. Tag `v0.1.1` there as an annotated tag, like `v0.1.0`, and push it. Main has taken no features since `v0.1.0`, so the patch comes from main.
+3. Post the outcome comment, then close the issue.
+
+**Two things the outcome comment needs to raise with Jody:**
+- **ROADMAP 'Now' is not updated.** He asked for this, but the looper rules refuse any push of a commit that touches `ROADMAP.md`. The line still says "tacplus floor 2.4 (#1)" and should say the floor is 2.6, pinned at 2.6.1.
+- **The generated member port is already in use.** He said not to adopt 2.6's generated member port for Hazelcast, but #17 adopted it on main (`StratumMembers`, `(spec.member_port)`) before this issue. This change does not touch it.
+
+Also unverified: the runner's `tacplus` runs the pinned 2.6.1 compiler, but inside the `build:2.6` image rather than the exact image digest the lock names. That runner wrapper belongs to the looper, not this repository.
+= success: Issue #32 isn't finished. My change is committed but still hasn't merged: it has been in the land queue since 15:47Z with no verdict, and my run stops at about 19:28Z. The manager will still land it after this run ends, and the next run picks up from the checkpoint on `looper/stratum-32`. The issue stays open, no `v0.1.1` tag is cut and no comment is posted yet.
+
+**What was already done:** main already declared `tacplus: "2.6"` (#17 changed it), and the runner's `tacplus` is 2.6.1. What was missing was a pinned compiler, so builds still ran whatever `tacplus` was on the PATH.
+
+**What commit `83a9f96` does:**
+- **`tacplus.lock`:** written by `tacplus pin` run in `build:2.6`, as Jody asked. It pins tacplus `2.6.1` and the build image `ghcr.io/tacplus-dev/tacplus/build:2.6.1@sha256:91f42995…`.
+- **`justfile`:** `generate` now stops if the compiler it runs isn't the pinned release, so a new tacplus patch can only reach main through a commit. A fake 2.6.0 binary was refused as expected.
+- **`STATE.md`:** names the 2.6 floor, the exact pin 2.6.1, and the 0.1 line (`v0.1.0` exists; `v0.1.1` is still to be tagged).
+- **`PROPOSALS.md`:** removed the "pin the exact tacplus version" entry, since this commit does it.
+
+**Checks run locally:** `just gates` passed with the pinned 2.6.1: codegen 34 tests and server 78 tests, 0 failures, and trivy found nothing in `stratum.jar`. The sensitive-field gate refused nothing, so there was nothing to fix. `looper-trace check` passed, but it read 0 handlers and left 45 Java files unchecked; this change touches none of them.
+
+**Left for the next run:**
+1. Once it lands, run `just gates` on main.
+2. Tag `v0.1.1` there as an annotated tag, like `v0.1.0`, and push it. Main has taken no features since `v0.1.0`, so the patch comes from main.
+3. Post the outcome comment, then close the issue.
+
+**Two things the outcome comment needs to raise with Jody:**
+- **ROADMAP 'Now' is not updated.** He asked for this, but the looper rules refuse any push of a commit that touches `ROADMAP.md`. The line still says "tacplus floor 2.4 (#1)" and should say the floor is 2.6, pinned at 2.6.1.
+- **The generated member port is already in use.** He said not to adopt 2.6's generated member port for Hazelcast, but #17 adopted it on main (`StratumMembers`, `(spec.member_port)`) before this issue. This change does not touch it.
+
+Also unverified: the runner's `tacplus` runs the pinned 2.6.1 compiler, but inside the `build:2.6` image rather than the exact image digest the lock names. That runner wrapper belongs to the looper, not this repository.
