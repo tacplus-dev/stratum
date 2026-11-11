@@ -32,6 +32,7 @@
 		<exec-plugin.version>3.6.4</exec-plugin.version>
 		<build-helper-plugin.version>3.6.2</build-helper-plugin.version>
 		<antrun-plugin.version>3.2.0</antrun-plugin.version>
+		<install-plugin.version>3.1.4</install-plugin.version>
 		<hazelcast.version>5.7.0</hazelcast.version>
 		<lucene.version>10.2.1</lucene.version>
 		<google-cloud-storage.version>2.75.0</google-cloud-storage.version>
@@ -290,6 +291,24 @@
 							<groupId>org.codehaus.plexus</groupId>
 							<artifactId>plexus-utils</artifactId>
 							<version>3.6.1</version>
+						</dependency>
+					</dependencies>
+				</plugin>
+				<!--
+				  Reaches every module's install (Maven's default binding). 3.1.4 is the newest
+				  non-beta release; drop the override once an install release asks for
+				  plexus-utils 4.0.3 or later (#34).
+				-->
+				<plugin>
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-install-plugin</artifactId>
+					<version>${install-plugin.version}</version>
+					<dependencies>
+						<!-- GHSA-6fmv-xxpf-w3cw: install 3.1.4 asks for plexus-utils 4.0.1 -->
+						<dependency>
+							<groupId>org.codehaus.plexus</groupId>
+							<artifactId>plexus-utils</artifactId>
+							<version>4.0.3</version>
 						</dependency>
 					</dependencies>
 				</plugin>
