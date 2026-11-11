@@ -118,7 +118,8 @@ the looper then marks it `promoted` or `declined` here with the date.
   (tacplus-dev/roadmap decisions/trace-propagation-2026-11-03.md) clears field 200 on every store, the record
   plane and redo included. Records already carry it (`LetsEncryptCert.trace_id = 200`), and
   `RecordStore.commit` puts `op.item` into the map and its bytes into the `RedoChange` value as they came.
-  tacplus-dev/tacplus#313 clears it on generated storage paths. Once it lands, check with a raw map read
+  tacplus-dev/tacplus#313 clears it on generated storage paths (tacplus v2.6.4; stratum pins 2.6.1). Once the pin
+  moves past it, check with a raw map read
   and a redo tail whether the generated query plane clears it before the `RecordOp`. If it doesn't,
   `commit` (and `Replay.apply`, for rows logged before) should clear it, with a test.
 - **Does a watch event carry the write's trace?** (2026-11-03, #29): a commit publishes
@@ -136,7 +137,7 @@ the looper then marks it `promoted` or `declined` here with the date.
   every run re-derives the handlers by hand. A short section would save that work: the only downstream calls
   are the redo's `Append` and `Replay` (`RecordStore.commit`, `catchUp`, `GrpcRedoLog`), plus the Hazelcast
   forward to the sequencer (`SequencerCall`). It would also say which carry the write's `trace_id`, which are
-  marked `// trace: unrelated:`, which wait on tacplus-dev/tacplus#313, and which tests assert it.
+  marked `// trace: unrelated:`, which wait on tacplus-dev/tacplus#327, and which tests assert it.
 - **tacplus: a member port forward that re-resolves its remote** (2026-11-06, #17): `MemberPort.forward`
   takes an `InetSocketAddress`, so Stratum resolves each other member's name (`stratum-<i>.stratum`) once,
   at start. A peer pod that comes back on a new IP, or whose name does not resolve yet when this member
