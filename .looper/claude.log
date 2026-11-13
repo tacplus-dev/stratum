@@ -1,0 +1,400 @@
+Fails as expected. Now the scripts.
+> Bash cat > ci/release-tags.sh <<'EOF' #!/usr/bin/env bash # The image tags a release puts on ghcr.io/tacplus-dev/stratum (.github/workflows/release.yml). # # Usage:  ci/release-tags.sh vX.Y.Z # # Run in the checkout with its tags fetched. Prints the tags, space-separated: X.Y.Z, and the line tag X.Y # on...
+< ok   first release: its own tag and its line ok   first release: Latest ok   first release: notes list every commit ok   patch: its line moves ok   older patch of the line: the line does not move back ok   patch: notes since the previous release ok   minor: its own line ok   patch on an older line: ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+All 25 release-script tests pass. Next is the CI script that runs `just gates` inside the build image. That image is large, so first I'm checking whether it fits on a GitHub runner's disk.
+> Bash tok=$(curl -s "https://ghcr.io/token?scope=repository:tacplus-dev/tacplus/build:pull" | jq -r .token); d=sha256:91f42995e0e3d6f959a7f75177caf94b2aded90fc36c8492dbcd320ca0d187f5; curl -s -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distrib...
+< {"p":{"architecture":"arm64","os":"linux"},"d":"sha256:5a5f9ec18505332867c2e510f69d5137c0708f0c99c3de24f6ee804ace0915bd"} {"p":{"architecture":"unknown","os":"unknown"},"d":"sha256:09b18daf335dce0b3d7697c17b59dfe546cc6846b9d290b92e0f8ba4c71660f4"} {"p":{"architecture":"amd64","os":"linux"},"d":"sha2...
+> Bash tok=$(curl -s "https://ghcr.io/token?scope=repository:tacplus-dev/tacplus/build:pull" | jq -r .token); curl -s -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json' https://ghcr.io/v2/tacplus-dev/tacplus/build/man...
+< 3.49277018
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+The image is 3.5 GB compressed, so the workflow will free the runner's preinstalled toolsets before pulling it, as fleet-seatrials does. Writing the CI scripts now.
+> Bash cat > ci/gates.sh <<'EOF' #!/usr/bin/env bash # `just gates` as CI runs them (.github/workflows/release.yml): in the build image the checkout's tacplus.lock # pins, by digest, as the build pipeline runs them (tacplus-dev/roadmap decisions/deterministic-builds-2026-10-27.md). # Generation clones only...
+< Exit code 1
+No shellcheck here. Testing the trivy installer for real:
+> Bash d=$(mktemp -d) && t=$(ci/trivy.sh $d) && $t --version | head -1; rm -rf $d; bash -n ci/gates.sh ci/release-image.sh && echo syntax-ok
+< Version: 0.76.2 syntax-ok
+Now the workflow.
+> Write /builds/looper/stratum/issues/3/.github/workflows/release.yml
+< File created successfully at: /builds/looper/stratum/issues/3/.github/workflows/release.yml (file state is current in your context — no need to Read it back)
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Now the justfile recipe, so the gates run the script tests:
+> Bash python3 - <<'EOF' p='justfile' s=open(p).read() s=s.replace("""# The gates every change passes before it is pushed. gates: check-generated test audit-jar ""","""# The release scripts (.github/workflows/release.yml), on a fixture repository. test-release:   ci/release_test.sh  # The gates every chang...
+< diff --git a/justfile b/justfile index 92b9b7c..aecd530 100644 --- a/justfile +++ b/justfile @@ -49,8 +49,12 @@ test: build  audit-jar: build    {{TRIVY}} rootfs --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --ignorefile .trivyignore.yaml server/target/stratum.jar   +# The release scripts (...
+= thinking_tokens
+= thinking_tokens
+Now the README:
+> Bash sed -n 20,200p README.md
+< (Bash completed with no output)
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cat >> README.md <<'EOF'  ## Releasing  Stratum is released by version, so fleets pin a release line (`X.Y`), not a commit (tacplus-dev/tacplus#180).  - **Versions:** `vMAJOR.MINOR.PATCH` tags, annotated: on main for a minor, and on `release/MAJOR.MINOR` for a   patch to an older line. Stratum stays...
+< (Bash completed with no output)
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Now STATE.md and PROPOSALS.md:
+> Bash sed -n 1,4p STATE.md; sed -n 9,40p STATE.md; sed -n 1,30p PROPOSALS.md
+< # State: stratum  Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by the looper (#32).  - **Blocked on:** nothing # Proposals: stratum  Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones into ROADMAP.md (via an agent); the looper then marks it...
+> Bash python3 - <<'EOF' p='STATE.md' s=open(p).read() s=s.replace("Last updated: 2026-11-08 by the looper (#32).","Last updated: 2026-11-13 by the looper (#3).") old="- **Released / deployed:** source tag v0.1.0; v0.1.1 (the tacplus pin, #32) is cut on `release/0.1` once its backport merges (binaries, ima...
+<  PROPOSALS.md |  7 +++++++  README.md    | 36 ++++++++++++++++++++++++++++++++++++  STATE.md     |  4 ++--  justfile     |  6 +++++-  4 files changed, 50 insertions(+), 3 deletions(-)
+= thinking_tokens
+= thinking_tokens
+Checking the workflow YAML parses, then committing:
+> Bash python3 -c "import yaml;d=yaml.safe_load(open('.github/workflows/release.yml'));print(list(d[True]), [s.get('name',s.get('uses')) for s in d['jobs']['release']['steps']])"; command -v actionlint
+< Exit code 1 Traceback (most recent call last):   File "<string>", line 1, in <module>     import yaml;d=yaml.safe_load(open('.github/workflows/release.yml'));print(list(d[True]), [s.get('name',s.get('uses')) for s in d['jobs']['release']['steps']])     ^^^^^^^^^^^ ModuleNotFoundError: No module name...
+> Bash cd /tmp && d=$(mktemp -d) && cd $d && curl -fsSL -o a.tgz https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz && tar xzf a.tgz actionlint && ./actionlint /builds/looper/stratum/issues/3/.github/workflows/release.yml && echo actionlint-ok
+< Exit code 126 /bin/bash: line 1: ./actionlint: cannot execute binary file: Exec format error
+> Bash uname -m; cd $(mktemp -d) && curl -fsSL -o a.tgz https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_arm64.tar.gz && tar xzf a.tgz actionlint && ./actionlint /builds/looper/stratum/issues/3/.github/workflows/release.yml && echo actionlint-ok
+< aarch64 actionlint-ok Shell cwd was reset to /builds/looper/stratum/issues/3
+= thinking_tokens
+= thinking_tokens
+actionlint passes. Committing, then a build job:
+> Bash git add -A ci .github justfile README.md STATE.md PROPOSALS.md && git status --short && git commit -q -F - <<'EOF' Release by version: a vX.Y.Z tag publishes ghcr.io/tacplus-dev/stratum (#3)  Fleets pin stratum by release line, not by commit (tacplus#180), and seatrials' first deploy needs a publish...
+< A  .github/workflows/release.yml M  PROPOSALS.md M  README.md M  STATE.md A  ci/gates.sh A  ci/release-flag.sh A  ci/release-image.sh A  ci/release-notes.sh A  ci/release-tags.sh A  ci/release_test.sh A  ci/trivy.sh M  justfile 118e704 Release by version: a vX.Y.Z tag publishes ghcr.io/tacplus-dev/s...
+= thinking_tokens
+= thinking_tokens
+> Bash git ls-remote origin refs/heads/looper/stratum-3; git status --short | head
+< 31047b50aed6878203d0c10740c51112a323504a	refs/heads/looper/stratum-3
+The checkpoint is on the remote. Starting the build job, detached:
+> Bash nohup /usr/local/bin/repo-looper --repo stratum --issue 3 --build > /tmp/build3.log 2>&1 & echo $!
+< 3376
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Bash until ! kill -0 3376 2>/dev/null; do sleep 15; done; tail -15 /tmp/build3.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: beqa3j1ph. Output is being written to: /builds/looper/stratum/homes/looper-3/tmp/claude-61000/-builds-looper-stratum-issues-3/40adc58c-8ad1-4727-b852-3089d05f1dcd/tasks/beqa3j1ph.output. You will be notified when it completes. To check interim output, use Read ...
+= thinking_tokens
+= thinking_tokens
+While the build runs, I'm checking what this run's token may do (tags, workflow dispatch):
+> Bash gh api repos/tacplus-dev/stratum --jq .permissions; gh auth status 2>&1 | head -8; tail -3 /tmp/build3.log
+< {"admin":false,"maintain":false,"pull":false,"push":false,"triage":false} github.com   ✓ Logged in to github.com account x-access-token (/tmp/looper-tokens.bfN9WQ/report/hosts.yml)   - Active account: true   - Git operations protocol: https   - Token: ghs_********************************************...
+The build job is running. Waiting for it.
+> Bash until ! kill -0 3376 2>/dev/null; do sleep 20; done; tail -15 /tmp/build3.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bvskju1v2). Output is being written to: /builds/looper/stratum/homes/looper-3/tmp/claude-61000/-builds-looper-stratum-issues-3/40adc58c-8ad1-4727-b852-3089d05f1dcd/tasks/bvskju1v2.output. You will be notified when ...
+> Bash until ! kill -0 3376 2>/dev/null; do sleep 20; done; tail -15 /tmp/build3.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bd72krndz). Output is being written to: /builds/looper/stratum/homes/looper-3/tmp/claude-61000/-builds-looper-stratum-issues-3/40adc58c-8ad1-4727-b852-3089d05f1dcd/tasks/bd72krndz.output. You will be notified when ...
+= thinking_tokens
+= thinking_tokens
+The first watcher (1-hour limit) is still waiting on the build. Polling again:
+> Bash until ! kill -0 3376 2>/dev/null; do sleep 20; done; tail -15 /tmp/build3.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: b201mwi3d). Output is being written to: /builds/looper/stratum/homes/looper-3/tmp/claude-61000/-builds-looper-stratum-issues-3/40adc58c-8ad1-4727-b852-3089d05f1dcd/tasks/b201mwi3d.output. You will be notified when ...
+> Bash tail -5 /tmp/build3.log; kill -0 3376 && echo running
+<  ! [remote rejected] fddc241257271c4aedf26f5c0b5dbb705aad8083 -> looper/stratum-3 (refusing to allow a GitHub App to create or update workflow `.github/workflows/release.yml` without `workflows` permission) error: failed to push some refs to 'https://github.com/tacplus-dev/stratum.git' [2026-11-13T0...
+= thinking_tokens
+= thinking_tokens
+The checkpoint push was refused: the GitHub App token has no `workflows` permission, which is what looper#106 was meant to fix. Reading the full log:
+> Bash cat /tmp/build3.log | head -30; cd /builds/looper/stratum/issues/3 && git fetch -q origin looper/stratum-3 && git log --oneline -3 FETCH_HEAD && git show --stat FETCH_HEAD | head -30
+< To https://github.com/tacplus-dev/stratum.git  ! [remote rejected] fddc241257271c4aedf26f5c0b5dbb705aad8083 -> looper/stratum-3 (refusing to allow a GitHub App to create or update workflow `.github/workflows/release.yml` without `workflows` permission) error: failed to push some refs to 'https://git...
+= task_updated
+= task_notification
+= background_tasks_changed
+= thinking_tokens
+= thinking_tokens
+The branch still holds the old checkpoint, so the push really was refused. Checking how looper#106 was closed:
+> Bash gh issue view 106 --repo tacplus-dev/looper --comments | tail -40
+< status:	none -- The manager merged [`looper/looper-106`](https://github.com/tacplus-dev/looper/tree/looper/looper-106) on main: 9e1f9fa..446c89a, on the gates docs+token (all 4 changed paths map to docs, token): green. The branch is deleted. Its gates: job https://gitlab.com/tacplus-dev/looper/-/job...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash gh issue view 315 --repo tacplus-dev/tacplus --json state,title,labels --jq '{state,title,labels:[.labels[].name]}'; gh issue view 315 --repo tacplus-dev/tacplus --comments | grep -i -E 'workflow|refus|Blocked' | tail -8; gh api 'repos/tacplus-dev/tacplus/commits?path=.github/workflows/images.yml' -...
+< {"labels":["approved","feature","priority:high","looper:landing"],"state":"OPEN","title":"Build image: rootless BuildKit for image builds inside the container; shared build caches; cold and warm give identical results"} Blocked-by: tacplus-dev/looper#106 (looper-token mints tokens without workflows:...
+= thinking_tokens
+= thinking_tokens
+For tacplus, a push carrying a workflow went through after #106, but this run's token was refused. Looking at how this run's token was minted:
+> Bash ls /builds/tacplus-dev/looper/looper-runs/20261113T050251Z-issue-3/ 2>&1; grep -r -i -l workflows /builds/tacplus-dev/looper/looper-runs/20261113T050251Z-issue-3/ 2>/dev/null | head; ls /tmp/looper-tokens.bfN9WQ/ 2>&1
+< Exit code 2 builds builds.log claude.log comments prompt.md resumed-step step /builds/tacplus-dev/looper/looper-runs/20261113T050251Z-issue-3/prompt.md /builds/tacplus-dev/looper/looper-runs/20261113T050251Z-issue-3/claude.log ls: cannot open directory '/tmp/looper-tokens.bfN9WQ/': Permission denied
+> Bash cd /builds/tacplus-dev/looper/looper-runs/20261113T050251Z-issue-3/ && cat builds.log | tail -20; ls builds
+< [2026-11-13T05:09:32Z] started a build of stratum 118e704 (the gates full) for its model: https://gitlab.com/tacplus-dev/build/-/pipelines/3063061385 20261113T050930Z-3269330998.started 20261113T050930Z-3269330998.taken Shell cwd was reset to /builds/looper/stratum/issues/3
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+The build job seems to have received the commit anyway. I'll let it finish, then try the land, where the manager's own token decides. Waiting:
+> Bash until ! kill -0 3376 2>/dev/null; do sleep 20; done; tail -8 /tmp/build3.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: bxn17hiw6). Output is being written to: /builds/looper/stratum/homes/looper-3/tmp/claude-61000/-builds-looper-stratum-issues-3/40adc58c-8ad1-4727-b852-3089d05f1dcd/tasks/bxn17hiw6.output. You will be notified when ...
+> Bash until ! kill -0 3376 2>/dev/null; do sleep 20; done; tail -8 /tmp/build3.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: b62tbg5ve). Output is being written to: /builds/looper/stratum/homes/looper-3/tmp/claude-61000/-builds-looper-stratum-issues-3/40adc58c-8ad1-4727-b852-3089d05f1dcd/tasks/b62tbg5ve.output. You will be notified when ...
+> Bash until ! kill -0 3376 2>/dev/null; do sleep 20; done; tail -8 /tmp/build3.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: bry91dfpt). Output is being written to: /builds/looper/stratum/homes/looper-3/tmp/claude-61000/-builds-looper-stratum-issues-3/40adc58c-8ad1-4727-b852-3089d05f1dcd/tasks/bry91dfpt.output. You will be notified when ...
+The build has run for about an hour. Checking its state:
+> Bash tail -4 /tmp/build3.log; kill -0 3376 && echo running; date -u; curl -s https://gitlab.com/api/v4/projects/tacplus-dev%2Fbuild/pipelines/3063061385 | head -c 300
+< error: failed to push some refs to 'https://github.com/tacplus-dev/stratum.git' [2026-11-13T05:09:30Z] checkpoint of #3 (a build) pushed to looper/stratum-3:  14 files changed, 958 insertions(+), 3 deletions(-) [2026-11-13T05:09:30Z] build requested: stratum 118e704, the gates full (no gates.yaml) t...
+= thinking_tokens
+= thinking_tokens
+The build pipeline probably fetches my commit from the GitHub branch, which never received it. Checking the run's build records:
+> Bash cd /builds/tacplus-dev/looper/looper-runs/20261113T050251Z-issue-3/builds && for f in *; do echo "== $f"; cat "$f"; echo; done | head -40; grep -n -A30 '^build_jobs()\|^request_build\|build requested' /usr/local/bin/repo-looper | grep -n -i -E 'fetch|bundle|branch|sha|ref' | head -20
+< == 20261113T050930Z-3269330998.started 3063061385 https://gitlab.com/tacplus-dev/build/-/pipelines/3063061385  == 20261113T050930Z-3269330998.taken sha=118e70438974e53a92d237231ca4ee5d4965841f gates= base=3d8c5c5c1a036b395362cedc0c5787b008065654  8:1054-start_build() { # sha gates base 10:1056-  r="...
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash sed -n 1062,1118p /usr/local/bin/repo-looper
+<   echo "$id ${url:-$BUILD_API/projects/$BUILD_PROJECT/pipelines/$id}" }  # The verdict of the build pipeline id on sha: the commit status the build's # reader app set, linking that pipeline, once it is no longer pending. Prints # it ("success: <description>", "failure: <why>"); 0 on success, 1 on a ...
+= thinking_tokens
+= thinking_tokens
+The verdict arrives as a GitHub commit status on `118e704`, a commit GitHub never received, so no verdict can come. Confirming:
+> Bash gh api repos/tacplus-dev/stratum/commits/118e70438974e53a92d237231ca4ee5d4965841f/statuses 2>&1 | head -c 300
+< [{"url":"https://api.github.com/repos/tacplus-dev/stratum/statuses/118e70438974e53a92d237231ca4ee5d4965841f","avatar_url":"https://avatars.githubusercontent.com/u/342669832?v=4","id":58809533239,"node_id":"SC_kwDOVVSLbs8AAAANsVJDNw","state":"pending","description":"building","target_url":"https://gi
+= thinking_tokens
+= thinking_tokens
+The commit is on GitHub after all, and its status reads "building", so the build is still running. I'll keep waiting.
+> Bash until ! kill -0 3376 2>/dev/null; do sleep 30; done; tail -4 /tmp/build3.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: buf7bq0pb). Output is being written to: /builds/looper/stratum/homes/looper-3/tmp/claude-61000/-builds-looper-stratum-issues-3/40adc58c-8ad1-4727-b852-3089d05f1dcd/tasks/buf7bq0pb.output. You will be notified when ...
+> Bash until ! kill -0 3376 2>/dev/null; do sleep 30; done; tail -4 /tmp/build3.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: b6wgpfunw). Output is being written to: /builds/looper/stratum/homes/looper-3/tmp/claude-61000/-builds-looper-stratum-issues-3/40adc58c-8ad1-4727-b852-3089d05f1dcd/tasks/b6wgpfunw.output. You will be notified when ...
+> Bash gh api repos/tacplus-dev/stratum/commits/118e70438974e53a92d237231ca4ee5d4965841f/statuses --jq '.[]|.state+" "+.description+" "+.updated_at'; date -u
+< pending building 2026-11-13T05:10:59Z Fri Nov 13 06:29:42 UTC 2026
+= thinking_tokens
+= thinking_tokens
+Still pending after 80 minutes. Checking how long a full gates build took on a recent issue:
+> Bash gh issue view 32 --repo tacplus-dev/stratum --comments | grep -i -E 'build job|minutes|took|verdict' | head -8
+< The run ended before finishing (exit 0). Its commits are queued with the manager of stratum, which merges them after the run and gives its verdict here. Its work in progress is on [`looper/stratum-32`](https://github.com/tacplus-dev/stratum/tree/looper/stratum-32). > 83a9f96 (tacplus.lock 2.6.1 + di...
+= task_updated
+= task_notification
+= background_tasks_changed
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash nohup /usr/local/bin/repo-looper --repo stratum --issue 3 --land > /tmp/land3.log 2>&1 & echo $!; sleep 60; cat /tmp/land3.log
+= task_started
+= task_notification
+< 16575 To https://github.com/tacplus-dev/stratum.git  ! [remote rejected] 86bb6ab0027db1936d410779166cb02382fb861b -> looper/stratum-3 (refusing to allow a GitHub App to create or update workflow `.github/workflows/release.yml` without `workflows` permission) error: failed to push some refs to 'https...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+The land can't even be queued: the checkpoint to `looper/stratum-3` is refused because this run's GitHub App token lacks `workflows` permission. Looking for an open looper issue on this:
+> Bash gh issue list --repo tacplus-dev/looper --state open --limit 200 --json number,title,labels --jq '.[]|select(.title|test("workflow|token|App|permission";"i"))|"\(.number) \(.title) \([.labels[].name])"'
+< 123 The manager retries forever a land its ROADMAP.md guard refuses, even for an approved 'at Jody's request' ROADMAP change ["bug","approved","priority:high","looper:landing"] 120 gitleaks generic-api-key at tests/repo-looper.test.sh:2253 fails security-looper (fake GITLAB_TOKEN fixture; not in #11...
+> Bash gh issue view 115 --repo tacplus-dev/looper | head -60; gh issue view 115 --repo tacplus-dev/looper --comments | tail -25
+< title:	Security: a report's branch can publish the looper image every manager runs (workflows: write since #106) state:	OPEN author:	jodydadescott (Jody Scott) labels:	approved, bug, looper:landing, looper:workflows, priority:high comments:	13 assignees:	 projects:	 milestone:	 issue-type:	 parent:	...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash kill 3376; cd /builds/looper/stratum/issues/3 && mkdir -p /tmp/rel3 && cp .github/workflows/release.yml /tmp/rel3/release.yml && gh issue view 128 --repo tacplus-dev/looper --json state,title --jq '.state+" "+.title'
+< OPEN A manager turns a land red after 3h waiting for a build that is still queued, and times out; queued builds must not count
+= task_updated
+= task_notification
+= background_tasks_changed
+Taking `release.yml` out of the commit and saying why in the README and STATE:
+> Bash git rm -q --cached .github/workflows/release.yml && rm .github/workflows/release.yml && python3 - <<'EOF' p='README.md' s=open(p).read() old="Stratum is released by version, so fleets pin a release line (`X.Y`), not a commit (tacplus-dev/tacplus#180).\n" assert old in s s=s.replace(old, old+"\n`rele...
+< D  .github/workflows/release.yml M  README.md M  STATE.md
+= thinking_tokens
+= thinking_tokens
+> Bash git log --oneline -3 && git status --short
+< 118e704 Release by version: a vX.Y.Z tag publishes ghcr.io/tacplus-dev/stratum (#3) 3d8c5c5 HISTORY.md: #32 (looper) 2e78be2 Pin tacplus 2.6.1 in tacplus.lock; generate refuses any other compiler (#32) D  .github/workflows/release.yml M  README.md M  STATE.md
+> Bash git commit -q --amend -F - <<'EOF' Release scripts for a vX.Y.Z tag that publishes ghcr.io/tacplus-dev/stratum (#3)  Fleets pin stratum by release line, not by commit (tacplus#180), and seatrials' first deploy needs a published image. These are the scripts the release workflow runs (roadmap decision...
+<     Co-Authored-By: Claude <noreply@anthropic.com>   PROPOSALS.md        |   7 ++++  README.md           |  39 ++++++++++++++++++  STATE.md            |   6 +--  ci/gates.sh         |  20 +++++++++  ci/release-flag.sh  |  26 ++++++++++++  ci/release-image.sh |  35 ++++++++++++++++  ci/release-notes....
+= thinking_tokens
+= thinking_tokens
+Checking that the push really happened this time (looper#99: the checkpoint reports success even when refused):
+> Bash git ls-remote origin refs/heads/looper/stratum-3; git rev-parse HEAD
+< 28ece3276a6245390f7893227ca23a7458a90ca7	refs/heads/looper/stratum-3 f9324de29379f376d7d7aca9901a397bcd21fd1a
+= thinking_tokens
+= thinking_tokens
+The branch is updated. Builds are queuing for hours (looper#128), and the land runs the same full gates, so I'm going straight to the land rather than queuing a second build:
+> Bash nohup /usr/local/bin/repo-looper --repo stratum --issue 3 --land > /tmp/land3.log 2>&1 & echo $!; sleep 90; cat /tmp/land3.log
+= task_started
+= task_notification
+< 17155 [2026-11-13T06:31:45Z] checkpoint of #3 (land queued) pushed to looper/stratum-3:  14 files changed, 944 insertions(+), 4 deletions(-) [2026-11-13T06:31:47Z] queued: the manager of stratum merges looper/stratum-3 after the lands queued before it, one at a time, and says on the issue what came ...
+= thinking_tokens
+= thinking_tokens
+The land is queued. Writing the issue comment that carries `release.yml` for the next run:
+> Bash cd /tmp/rel3 && { cat <<'EOF' The looper of stratum, on #3: **the release scripts are queued to land, but `release.yml` itself can't be pushed yet.** The workflow is below so the next run can apply it as is.  **Why it waits.** A looper's report token can't push `.github/workflows/` (tacplus-dev/loop...
+< 159 comment.md Shell cwd was reset to /builds/looper/stratum/issues/3
+> Bash gh issue comment 3 --repo tacplus-dev/stratum --body-file /tmp/rel3/comment.md
+< https://github.com/tacplus-dev/stratum/issues/3#issuecomment-6846021443
+= thinking_tokens
+= thinking_tokens
+Comment posted. I'll watch the land for a while, so I can fix a gate failure while I still have time:
+> Bash for i in $(seq 1 19); do kill -0 17155 2>/dev/null || break; sleep 30; done; tail -5 /tmp/land3.log
+= task_started
+= task_notification
+< [2026-11-13T06:31:45Z] checkpoint of #3 (land queued) pushed to looper/stratum-3:  14 files changed, 944 insertions(+), 4 deletions(-) [2026-11-13T06:31:47Z] queued: the manager of stratum merges looper/stratum-3 after the lands queued before it, one at a time, and says on the issue what came of it;...
+> Bash for i in $(seq 1 19); do kill -0 17155 2>/dev/null || break; sleep 30; done; tail -3 /tmp/land3.log; gh issue view 3 --repo tacplus-dev/stratum --comments | tail -5
+= task_started
+= task_notification
+< [2026-11-13T06:31:45Z] checkpoint of #3 (land queued) pushed to looper/stratum-3:  14 files changed, 944 insertions(+), 4 deletions(-) [2026-11-13T06:31:47Z] queued: the manager of stratum merges looper/stratum-3 after the lands queued before it, one at a time, and says on the issue what came of it;...
+= thinking_tokens
+= thinking_tokens
+Still queued behind the build backlog (looper#128), and the manager will land it after me either way. Stopping my waiter and recording the blocker:
+> Bash kill 17155; printf 'Blocked-by: tacplus-dev/looper#115\n' > /builds/tacplus-dev/looper/looper-runs/20261113T050251Z-issue-3/outcome && cat /builds/tacplus-dev/looper/looper-runs/20261113T050251Z-issue-3/outcome
+< Blocked-by: tacplus-dev/looper#115
+Issue #3 isn't done: the release workflow, `release.yml`, can't be pushed yet, so no image is published and nothing is tagged. I've marked the issue `Blocked-by: tacplus-dev/looper#115` and left it open.
+
+**Why it's blocked:** this run's GitHub App token isn't allowed to push anything under `.github/workflows/`. Pushes carrying `release.yml` were refused, both the checkpoint and the land. looper#106 had granted that permission, but looper#115 took it away again for security. Once #115 lands, the permission comes back only on issues labelled `looper:workflows`, which only a member can set. **Someone with membership needs to add that label to #3.**
+
+**Queued to land** (commit `f9324de`), everything except the workflow file. The manager will merge it after me and post its verdict on the issue.
+- **`ci/gates.sh`:** runs `just gates` in the build image `tacplus.lock` pins. Every tacplus-dev repository is now public, so generation needs no credential. `trivy` comes from `ci/trivy.sh`, pinned to 0.76.2 by checksum.
+- **`ci/release-image.sh`:** builds the existing Dockerfile for linux/arm64. amd64 is off by default, matching the fleets' setting. The image is labelled with the version, commit, date and source.
+- **Tags, notes and Latest:**
+  - `ci/release-tags.sh` moves `X.Y` only to that line's highest patch.
+  - `ci/release-notes.sh` lists the commits since the previous release.
+  - `ci/release-flag.sh` marks a release Latest only if it is the highest overall.
+- **`ci/release_test.sh`:** fixture-repo tests for the three scripts above, now part of `just gates`.
+- README "Releasing", STATE.md and PROPOSALS.md are updated.
+
+**Verified:**
+- The 25 script tests pass locally.
+- `ci/trivy.sh` downloaded and checksum-verified trivy.
+- actionlint passes on `release.yml`.
+
+**Not verified:**
+- The full `just gates` on this commit. My build job sat in "building" for over 80 minutes (looper#128 is about this queueing), so I queued the land without its verdict; the land runs the full gates itself.
+- `release.yml` has never run.
+
+**Where the workflow is:** the full `release.yml` is in my comment on #3, ready to apply as is. It handles a tag push, a dry run, and a `publish` mode that builds an existing tag such as `v0.1.0` without moving it. That comment lists the next run's steps:
+1. Commit and land `release.yml`.
+2. Publish `v0.1.0`. It predates `tacplus.lock`, so it builds with main's tacplus 2.6.1.
+3. Make the package public if GitHub didn't create it public.
+4. Dry-run `v0.1.1`.
+5. Tag `v0.2.0` on main.
+
+No service handlers were touched, so the trace rule didn't apply.
+= success: Issue #3 isn't done: the release workflow, `release.yml`, can't be pushed yet, so no image is published and nothing is tagged. I've marked the issue `Blocked-by: tacplus-dev/looper#115` and left it open.
+
+**Why it's blocked:** this run's GitHub App token isn't allowed to push anything under `.github/workflows/`. Pushes carrying `release.yml` were refused, both the checkpoint and the land. looper#106 had granted that permission, but looper#115 took it away again for security. Once #115 lands, the permission comes back only on issues labelled `looper:workflows`, which only a member can set. **Someone with membership needs to add that label to #3.**
+
+**Queued to land** (commit `f9324de`), everything except the workflow file. The manager will merge it after me and post its verdict on the issue.
+- **`ci/gates.sh`:** runs `just gates` in the build image `tacplus.lock` pins. Every tacplus-dev repository is now public, so generation needs no credential. `trivy` comes from `ci/trivy.sh`, pinned to 0.76.2 by checksum.
+- **`ci/release-image.sh`:** builds the existing Dockerfile for linux/arm64. amd64 is off by default, matching the fleets' setting. The image is labelled with the version, commit, date and source.
+- **Tags, notes and Latest:**
+  - `ci/release-tags.sh` moves `X.Y` only to that line's highest patch.
+  - `ci/release-notes.sh` lists the commits since the previous release.
+  - `ci/release-flag.sh` marks a release Latest only if it is the highest overall.
+- **`ci/release_test.sh`:** fixture-repo tests for the three scripts above, now part of `just gates`.
+- README "Releasing", STATE.md and PROPOSALS.md are updated.
+
+**Verified:**
+- The 25 script tests pass locally.
+- `ci/trivy.sh` downloaded and checksum-verified trivy.
+- actionlint passes on `release.yml`.
+
+**Not verified:**
+- The full `just gates` on this commit. My build job sat in "building" for over 80 minutes (looper#128 is about this queueing), so I queued the land without its verdict; the land runs the full gates itself.
+- `release.yml` has never run.
+
+**Where the workflow is:** the full `release.yml` is in my comment on #3, ready to apply as is. It handles a tag push, a dry run, and a `publish` mode that builds an existing tag such as `v0.1.0` without moving it. That comment lists the next run's steps:
+1. Commit and land `release.yml`.
+2. Publish `v0.1.0`. It predates `tacplus.lock`, so it builds with main's tacplus 2.6.1.
+3. Make the package public if GitHub didn't create it public.
+4. Dry-run `v0.1.1`.
+5. Tag `v0.2.0` on main.
+
+No service handlers were touched, so the trace rule didn't apply.
