@@ -1,0 +1,49 @@
+# Accepted findings, read by the build's security job (tacplus-dev/looper's
+# looper-scan; its README, "Security checks", has the form and the policy). An
+# entry matches its id on any package, so each reason names the packages it is
+# for; on expiry the job fails again, so an exception is re-examined, never
+# silently kept.
+#
+# The jackson shaded in Hazelcast 5.7.0 (#28): jackson-core and -databind 2.21.2
+# and 3.1.2, as com.hazelcast.shaded.*, which the job finds in
+# server/target/stratum.jar (looper#147). Decided by Jody (hub, on #28); the
+# reasoning is in decisions/2026-11-03-shaded-jackson-in-hazelcast.md, and
+# ShadedJacksonReachabilityTest fails if it changes. The same entries, scoped by
+# purl, are in .trivyignore.yaml for `just audit-jar`: change both together.
+# They do not cover the unshaded jackson 2.18.12 (the jackson-bom pin, #8).
+
+exceptions:
+  # jackson-core
+  - id: CVE-2026-68494
+    reason: "Only jackson-core 2.21.2 and 3.1.2 shaded in Hazelcast 5.7.0 (com.hazelcast.shaded.*). In the non-blocking (async) parser: 2.21.2 is dead code, and Hazelcast creates no non-blocking parser from 3.1.2 (#28)."
+    decided_by: jodydadescott
+    expires: 2026-12-03
+  - id: CVE-2026-89407
+    reason: "Only jackson-core 2.21.2 and 3.1.2 shaded in Hazelcast 5.7.0 (com.hazelcast.shaded.*). In NumberInput.looksLikeValidNumber, reached through databind's string-to-number coercion: nothing references either databind, and nothing outside it calls that method (#28)."
+    decided_by: jodydadescott
+    expires: 2026-12-03
+  - id: CVE-2026-89425
+    reason: "Only jackson-core 2.21.2 and 3.1.2 shaded in Hazelcast 5.7.0 (com.hazelcast.shaded.*). In UTF8DataInputJsonParser, created only by createParser(DataInput): 2.21.2 is dead code, and Hazelcast parses only byte[], String, Reader and InputStream with 3.1.2 (#28)."
+    decided_by: jodydadescott
+    expires: 2026-12-03
+  # jackson-databind
+  - id: CVE-2026-54512
+    reason: "Only jackson-databind 2.21.2 and 3.1.2 shaded in Hazelcast 5.7.0 (com.hazelcast.shaded.*), where no class outside the databind references it: dead code (#28)."
+    decided_by: jodydadescott
+    expires: 2026-12-03
+  - id: CVE-2026-54513
+    reason: "Only jackson-databind 2.21.2 and 3.1.2 shaded in Hazelcast 5.7.0 (com.hazelcast.shaded.*), where no class outside the databind references it: dead code (#28)."
+    decided_by: jodydadescott
+    expires: 2026-12-03
+  - id: CVE-2026-68497
+    reason: "Only jackson-databind 2.21.2 and 3.1.2 shaded in Hazelcast 5.7.0 (com.hazelcast.shaded.*), where no class outside the databind references it: dead code (#28)."
+    decided_by: jodydadescott
+    expires: 2026-12-03
+  - id: CVE-2026-91776
+    reason: "Only jackson-databind 2.21.2 and 3.1.2 shaded in Hazelcast 5.7.0 (com.hazelcast.shaded.*), where no class outside the databind references it: dead code (#28)."
+    decided_by: jodydadescott
+    expires: 2026-12-03
+  - id: CVE-2026-91777
+    reason: "Only jackson-databind 2.21.2 and 3.1.2 shaded in Hazelcast 5.7.0 (com.hazelcast.shaded.*), where no class outside the databind references it: dead code (#28)."
+    decided_by: jodydadescott
+    expires: 2026-12-03
