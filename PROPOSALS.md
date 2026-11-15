@@ -163,5 +163,24 @@ the looper then marks it `promoted` or `declined` here with the date.
   changed list applies at the next start, as `Config.seed_members` did. Subscribing to the generated
   `ConfigState.tenant_configs` watch could log, or report in health, a list that no longer matches the one the
   member joined, so a scale-up the operator delivers is visible before the rolling restart.
+- **The deterministic security floor does not reach stratum's Java yet** (2026-11-15, nightly scan;
+  tacplus-dev/looper#49, looper#147): the build pipeline's report for main (run 20261115T112313Z) counts 0 findings,
+  but lists osv-scanner as "transitive dependencies not resolved" (it resolves `server/pom.xml` against the
+  registry, where the reactor's `stratum-model:1.2.0-SNAPSHOT` is not) and SpotBugs as "the gates compiled no
+  target/classes", and the jar scan has a jar only when the gates built one (#36). So none of the floor's SCA or SAST
+  sees stratum's dependency tree or bytecode, and the tree check is still by hand: this scan installed model and
+  codegen with `-Dtacplus.skip=true` into an empty repository, listed every scope's dependencies (153 artifacts) and
+  queried OSV (clean), and read the plugin realms under `mvn -X` (only #34's install plugin). looper-scan could
+  resolve a Maven reactor by installing it first, or read `mvn dependency:list`. The scan also cannot run
+  `just gates` or build the jar itself: `tacplus` in its image runs the build through the Docker API, and the scan's
+  `docker` is the brokered CLI (looper#68). Needs a looper issue.
+- **Move the tacplus.lock pin with the 2.6 line's patches** (2026-11-15, nightly scan; #32): `tacplus.lock` pins
+  2.6.1 (2026-11-07), and only `tacplus pin` in a commit moves it; the line is at v2.6.12 (2026-11-14). The patches
+  between carry changes to the Java chassis stratum generates with: v2.6.7 (the GCS archive's google-cloud-storage
+  2.76.0, guava `-jre` and the OpenTelemetry BOM pinned, tacplus#263: the tree behind #8, #15 and #19) and v2.6.9
+  (outbound-deadline asserts the leaf receives the root's trace_id, tacplus#310). The scan's pin rule reads the
+  MAJOR.MINOR floor, so a stale patch is reported nowhere. Who moves the pin and when (the looper re-pins on each
+  patch of the line, gates and release included; or the scan files a `bug` once the pin lags the line) is Jody's
+  call: the pin exists so that a new patch never reaches main without a commit (#32).
 
 ## Promoted / declined
