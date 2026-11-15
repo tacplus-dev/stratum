@@ -23,6 +23,13 @@ the looper then marks it `promoted` or `declined` here with the date.
   `NOT_SERVING`, 8443 is not up without a kernel state-store endpoint in the bootstrap config). A recipe that
   builds the image and starts it against a stub state store until 8443 answers `SERVING` would turn that
   into a check, and would cover the next base or JDK move (java25-debian13 is published).
+- **amd64 release images, and a smoke test of the published one** (2026-11-13, #3): the release workflow
+  builds linux/arm64 only (`PLATFORMS` in `.github/workflows/release.yml`), amd64 off by default like the
+  fleets' `images/pins.yaml`; turning it on is the one-line change there. No step starts the published image:
+  the image smoke test above, run on the image the workflow pushes, would check it before the GitHub release.
+- **Release v0.1.x from `release/0.1` with the workflow** (2026-11-13, #3): `release/0.1` predates
+  `release.yml`, so a tag there does not run it; it is published by the `publish` dispatch from main (README
+  Releasing). Backporting `release.yml` and `ci/` to `release/0.1` would let its tags release themselves.
 - **One SLF4J provider in the jar** (2026-10-27, #14): the server pulls in both logback and `slf4j-simple`
   (root `pom.xml` dependencyManagement, `model/pom.xml`, `server/pom.xml`), so every start prints
   `Class path contains multiple SLF4J providers`. Logback wins today, but the choice is classpath order. If

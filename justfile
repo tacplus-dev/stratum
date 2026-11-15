@@ -49,8 +49,12 @@ test: build
 audit-jar: build
   {{TRIVY}} rootfs --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --ignorefile .trivyignore.yaml server/target/stratum.jar
 
+# The release scripts (.github/workflows/release.yml), on a fixture repository.
+test-release:
+  ci/release_test.sh
+
 # The gates every change passes before it is pushed.
-gates: check-generated test audit-jar
+gates: check-generated test audit-jar test-release
 
 clean:
   rm -rf model/target codegen/target server/target target
