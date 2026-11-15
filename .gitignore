@@ -35,4 +35,3 @@ Thumbs.db
 backenddb-mock-runner.log
 # Claude Code
 .claude/
-launcher-linux-*
