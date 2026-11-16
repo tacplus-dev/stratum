@@ -101,11 +101,11 @@ the looper then marks it `promoted` or `declined` here with the date.
   that runs that audit on push and uploads SARIF (or a README section that says where the report lives) would
   give the scan one to read.
 - **Bump Hazelcast when it re-shades a fixed jackson** (2026-11-03, #28): the eight jackson advisories shaded in
-  Hazelcast 5.7.0 are accepted as unreachable until 2026-12-03 (`.trivyignore.yaml`,
+  Hazelcast 5.7.0 are accepted as unreachable until 2026-12-03 (`security-exceptions.yaml` and `.trivyignore.yaml`,
   decisions/2026-11-03-shaded-jackson-in-hazelcast.md). Hazelcast ships no OSS patch releases, so the fix comes
   with its next minor; asked on hazelcast/hazelcast#26597. When it ships: bump `hazelcast.version`, delete the
   entries, and keep `ShadedJacksonReachabilityTest` while any shaded jackson remains. If it has not shipped by
-  2026-12-03, `just gates` fails on main, and the exception needs re-examining, with the test still green, or
+  2026-12-03, the build's security job fails on main (and `just audit-jar` locally), and the exception needs re-examining, with the test still green, or
   another route: an unaffiliated fork that re-shades jackson 2.21.7 / 3.1.7 ("Opencast", its own Maven
   repository) is advertised in those threads, and taking it would change the provenance of the store's core
   dependency, which is Jody's call.
@@ -113,7 +113,14 @@ the looper then marks it `promoted` or `declined` here with the date.
   current database, so a new advisory turns `just gates` red on main, and on every land, with no stratum
   commit, like the tacplus patch did (#20). That is the point of the audit, but a land blocked by an advisory
   in an unrelated jar may want a looper rule: whether a newly red audit blocks unrelated lands, or is
-  triaged as its own bug first.
+  triaged as its own bug first. Since #36 the scan is the build's security job's (looper#147), not `just gates`'s,
+  so the rule would be the looper's.
+- **Per-package exceptions in the security job** (2026-11-14, #36): `security-exceptions.yaml` matches an id on any
+  package, while `.trivyignore.yaml` scoped each jackson advisory by purl to the shaded copies, so the same CVE on
+  the unshaded jackson 2.18.12 (the jackson-bom pin, #8) would now be accepted too (it is not affected today, and
+  each reason names the shaded packages). And the entries are kept twice, for the job and for `just audit-jar`. A
+  `purls:` (or `where:`) key in the looper's exception form would restore the scope, and `audit-jar` could then read
+  the one file. That is a tacplus-dev/looper change.
 - **Stored rows keep the write's `trace_id`** (2026-11-03, #29): the trace decision
   (tacplus-dev/roadmap decisions/trace-propagation-2026-11-03.md) clears field 200 on every store, the record
   plane and redo included. Records already carry it (`LetsEncryptCert.trace_id = 200`), and

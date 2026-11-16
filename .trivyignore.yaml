@@ -1,7 +1,9 @@
 # Accepted advisories in the release jar, read by `just audit-jar` (trivy over
 # server/target/stratum.jar). Every entry names the exact package it covers
 # (purls) and expires: on expiry trivy reports the advisory again and the
-# gates fail, so an exception is re-examined, never silently kept.
+# gates fail, so an exception is re-examined, never silently kept. The build's
+# security job, which scans the same jar on every land (#36), reads the same
+# entries from security-exceptions.yaml: change both together.
 #
 # The jackson in Hazelcast 5.7.0 (#28): jackson-core and -databind 2.21.2 and
 # 3.1.2, shaded as com.hazelcast.shaded.*. 5.7.0 is the latest Hazelcast and none
