@@ -18,6 +18,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -110,6 +111,7 @@ public final class RecordStore {
     private final RedoLog redo;
     private volatile long ackTimeoutMs;
     private final EntryLocks locks;
+    private final Consumer<String> onSequencerWork;
     private final ChangeFeed feed = new ChangeFeed();
     private final IMap<String, Long> revisions;
     private final IMap<String, Long> meta;
@@ -133,11 +135,18 @@ public final class RecordStore {
     }
 
     RecordStore(HazelcastInstance hz, RecordTypes types, RedoLog redo, Duration ackTimeout, EntryLocks locks) {
+        this(hz, types, redo, ackTimeout, locks, traceId -> { });
+    }
+
+    /** {@code onSequencerWork} is handed the trace_id of each read and write this member runs as the sequencer. */
+    RecordStore(HazelcastInstance hz, RecordTypes types, RedoLog redo, Duration ackTimeout, EntryLocks locks,
+                Consumer<String> onSequencerWork) {
         this.hz = hz;
         this.types = types;
         this.redo = redo;
         this.ackTimeoutMs = ackTimeout.toMillis();
         this.locks = locks;
+        this.onSequencerWork = onSequencerWork;
         this.revisions = hz.getMap(REVISIONS_MAP);
         this.meta = hz.getMap(META_MAP);
         this.changes = hz.getReliableTopic(CHANGES_TOPIC);
@@ -429,6 +438,7 @@ public final class RecordStore {
     }
 
     Query.RecordApplyResponse applyHere(Query.RecordApplyRequest request) throws ProtoException {
+        onSequencerWork.accept(request.getTraceId());
         List<WriteOp> ops = new ArrayList<>();
         for (Query.RecordOp op : request.getOpsList()) {
             ops.add(types.decode(op));
@@ -691,11 +701,12 @@ public final class RecordStore {
      * answer sees it, and a Get during a write waits for its ack.
      *
      * @param namespace the namespace the read is held to; "" for a fleet-wide caller
+     * @param traceId   the read request's trace_id, carried to the sequencer when forwarded
      * @throws ProtoException NOT_FOUND when absent or held to another namespace
      */
-    public Stored get(String type, RedoKey key, String namespace) throws ProtoException {
+    public Stored get(String type, RedoKey key, String namespace, String traceId) throws ProtoException {
         if (!isSequencer()) {
-            byte[] reply = forward(SequencerCall.get(type, key, namespace));
+            byte[] reply = forward(SequencerCall.get(type, key, namespace, traceId));
             try {
                 RedoChange c = RedoChange.parseFrom(reply);
                 RecordType t = types.byName(type);
@@ -704,10 +715,11 @@ public final class RecordStore {
                 throw new ProtoException(ProtoException.INTERNAL, "sequencer reply: " + e.getMessage(), e);
             }
         }
-        return getHere(type, key, namespace);
+        return getHere(type, key, namespace, traceId);
     }
 
-    Stored getHere(String type, RedoKey key, String namespace) throws ProtoException {
+    Stored getHere(String type, RedoKey key, String namespace, String traceId) throws ProtoException {
+        onSequencerWork.accept(traceId);
         requireReadable();
         RecordType t = types.byName(type);
         if (t == null) {
@@ -774,21 +786,24 @@ public final class RecordStore {
         private final boolean isApply;
         private final byte[] payload;
         private final String namespace;
+        /** A read's trace_id; an apply's is in its request. */
+        private final String traceId;
         private transient HazelcastInstance hz;
 
-        private SequencerCall(boolean isApply, byte[] payload, String namespace) {
+        private SequencerCall(boolean isApply, byte[] payload, String namespace, String traceId) {
             this.isApply = isApply;
             this.payload = payload;
             this.namespace = namespace;
+            this.traceId = traceId;
         }
 
         static SequencerCall apply(Query.RecordApplyRequest request) {
-            return new SequencerCall(true, request.toByteArray(), "");
+            return new SequencerCall(true, request.toByteArray(), "", "");
         }
 
-        static SequencerCall get(String type, RedoKey key, String namespace) {
+        static SequencerCall get(String type, RedoKey key, String namespace, String traceId) {
             return new SequencerCall(false,
-                    RedoChange.newBuilder().setRecordType(type).setKey(key).build().toByteArray(), namespace);
+                    RedoChange.newBuilder().setRecordType(type).setKey(key).build().toByteArray(), namespace, traceId);
         }
 
         @Override
@@ -808,7 +823,7 @@ public final class RecordStore {
                     return new Reply(store.applyHere(Query.RecordApplyRequest.parseFrom(payload)).toByteArray(), 0, null);
                 }
                 RedoChange c = RedoChange.parseFrom(payload);
-                Stored s = store.getHere(c.getRecordType(), c.getKey(), namespace);
+                Stored s = store.getHere(c.getRecordType(), c.getKey(), namespace, traceId);
                 return new Reply(RedoChange.newBuilder().setValue(s.row.toByteString())
                         .setRevision(s.revision).build().toByteArray(), 0, null);
             } catch (ProtoException e) {

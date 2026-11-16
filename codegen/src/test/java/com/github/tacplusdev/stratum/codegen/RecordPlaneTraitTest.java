@@ -205,4 +205,24 @@ class RecordPlaneTraitTest {
         assertTrue(!queries.contains("services.stratum.RecordQuery"), queries);
         assertTrue(!maps.contains("types.services.stratum.Stratum"), maps);
     }
+
+    /**
+     * A Get or a write may be forwarded to the sequencer, a call the request
+     * causes: the generated handler hands the store the request's trace_id
+     * (tacplus-dev/looper#51, stratum#37).
+     */
+    @Test
+    void theWriteSurfacePassesTheRequestsTraceIdToTheStore(@TempDir Path dir, @TempDir Path out)
+            throws IOException {
+        Path protoRoot = traitTree(dir);
+        RecordMapImplGenerator.generate(out,
+                VServiceDiscovery.discoverRecordPlane(protoRoot, "stratum").s2s,
+                RecordDiscovery.discover(protoRoot));
+        String maps = Files.readString(out.resolve("com/github/tacplusdev/stratum/StratumRecordMaps.java"));
+
+        assertTrue(maps.contains("RecordStore.Stored s = store().get(\"demo.DemoEvent\", "
+                + "StratumRecordTypes.demoEventKey(req.getEventId()), req.getNamespace(), req.getTraceId());"), maps);
+        assertTrue(maps.contains("return write(req, req.getDurability(), req.getTraceId());"), maps);
+        assertTrue(maps.contains(".addOps(op).setDurability(durability).setTraceId(traceId).build()"), maps);
+    }
 }
