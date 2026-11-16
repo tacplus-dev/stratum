@@ -129,7 +129,8 @@ the looper then marks it `promoted` or `declined` here with the date.
 - **A forwarded Get drops its `trace_id`** (2026-11-03, #29): `RecordStore.get` forwards to the sequencer
   as `SequencerCall.get(type, key, namespace)`, and the trace isn't in it. That's harmless today, because
   the sequencer's `getHere` makes no further call. If it ever does, carry the request's `trace_id` in the
-  call, the way `SequencerCall.apply` carries the whole request.
+  call, the way `SequencerCall.apply` carries the whole request. Filed as a bug, #37 (2026-11-16, nightly scan):
+  the decision makes no "harmless" exception, and `Get<T>Request` already has field 200.
 - **A "Trace propagation" section in the README** (2026-11-05, nightly scan; tacplus-dev/looper#51, #29): the
   nightly scan reads the README's "Trace propagation" section, and there is none (nor "Security checks", see
   above). `looper-trace check` reads no Java (`pass (0 handlers, 0 findings)`, 42 Java files not checked), so
