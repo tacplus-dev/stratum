@@ -5,7 +5,12 @@
 # Stratum holds no durable state (the redo service is its durability), so the
 # image has no volume.
 
-FROM gcr.io/distroless/java21-debian13
+# The base is pinned by digest, so the image main builds is the image main
+# names: move the digest in a commit of its own when distroless publishes
+# fixes (#40). Its unfixed MEDIUM, LOW and UNKNOWN advisories are recorded in
+# security-baseline.json under this digest: a commit that moves the digest
+# moves them too (`looper-scan baseline`), or the next nightly reports them new.
+FROM gcr.io/distroless/java21-debian13@sha256:132eb554519304beb13de16013176efb8aa67bb7bf9e2d1ca340e97e744c3cb3
 
 ARG BUILD_DATE
 ARG VCS_REF
