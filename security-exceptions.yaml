@@ -1,0 +1,11 @@
+# Findings the security checks accept (looper-scan's build and nightly scans),
+# each with its reason, who decided and an expiry: on expiry the finding is
+# reported again and the policy fails, so an exception is re-examined, never
+# silently kept. The release jar's own advisories are in
+# .trivyignore.yaml (`just audit-jar`).
+
+exceptions:
+  - id: DS-0026
+    reason: "No HEALTHCHECK in the Dockerfile: the distroless image has no shell, health is the launcher's HEALTH_PORT probe, read by Kubernetes probes, and Kubernetes ignores HEALTHCHECK (#40)."
+    decided_by: jodydadescott
+    expires: 2027-05-17
