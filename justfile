@@ -49,8 +49,19 @@ test: build
 audit-jar: build
   {{TRIVY}} rootfs --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --ignorefile .trivyignore.yaml server/target/stratum.jar
 
+# Every FROM names its base by digest, so an image is built on exactly the base
+# main records, and a base with fixes reaches main only as a digest move in a
+# commit (#39, #40).
+check-base-pinned:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  unpinned="$(grep -n -i -E '^[[:space:]]*FROM[[:space:]]' Dockerfile | grep -v -E '@sha256:[0-9a-f]{64}([[:space:]]|$)' || true)"
+  if [[ -n "$unpinned" ]]; then
+    echo "check-base-pinned: Dockerfile FROM without a digest:" >&2; echo "$unpinned" >&2; exit 1
+  fi
+
 # The gates every change passes before it is pushed.
-gates: check-generated test audit-jar
+gates: check-base-pinned check-generated test audit-jar
 
 clean:
   rm -rf model/target codegen/target server/target target

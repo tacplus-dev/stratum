@@ -5,7 +5,9 @@
 # Stratum holds no durable state (the redo service is its durability), so the
 # image has no volume.
 
-FROM gcr.io/distroless/java21-debian13
+# Pinned by digest (the multi-arch index): a base with fixes reaches main only
+# as a digest move in a commit (#39, #40). Pinned 2026-11-17, Debian 13.7.
+FROM gcr.io/distroless/java21-debian13@sha256:132eb554519304beb13de16013176efb8aa67bb7bf9e2d1ca340e97e744c3cb3
 
 ARG BUILD_DATE
 ARG VCS_REF

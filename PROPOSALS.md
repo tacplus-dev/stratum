@@ -184,4 +184,11 @@ the looper then marks it `promoted` or `declined` here with the date.
   patch of the line, gates and release included; or the scan files a `bug` once the pin lags the line) is Jody's
   call: the pin exists so that a new patch never reaches main without a commit (#32).
 
+- **Report a base-image digest that lags its tag** (2026-11-17, #39, #40): the `Dockerfile` now pins
+  `gcr.io/distroless/java21-debian13` by digest (`just check-base-pinned`), so a rebuilt base with fixes reaches
+  main only as a digest move in a commit. Nothing yet notices that the tag has moved: the nightly scan reads the
+  pinned image, so a fixed base turns the finding blocking but no one is told which digest fixes it. looper-scan
+  could compare the pin with the tag's current index digest and name the newer one (and whether it clears the
+  HIGH findings) in the report or in the `bug` it files. Needs a looper issue.
+
 ## Promoted / declined
