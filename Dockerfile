@@ -5,7 +5,13 @@
 # Stratum holds no durable state (the redo service is its durability), so the
 # image has no volume.
 
-FROM gcr.io/distroless/java21-debian13
+# The base is pinned by digest, never a tag alone (#45; tacplus-dev/roadmap
+# decisions/security-gates-ship-only-2026-11-23.md, point 2), so a rebuild of
+# the same commit ships the same, scanned base: the digest is the tag's
+# multi-arch index as of 2026-11-24, and nightly maintenance moves it
+# (tacplus-dev/looper#234). ReleaseImageBaseDigestTest fails on any FROM
+# without one.
+FROM gcr.io/distroless/java21-debian13:latest@sha256:e5ddc8b22604bf842e43e0e3cc6694da4c3440714749121f024e2ee1d1808539
 
 ARG BUILD_DATE
 ARG VCS_REF
