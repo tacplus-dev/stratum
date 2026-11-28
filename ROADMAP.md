@@ -16,6 +16,7 @@ The platform's highest priority: the per-tenant, in-memory rebuild (#2), on the 
 - Hazelcast 5.5.0 CRITICAL advisory: bump to 5.7.0, now or folded into #2 (#10)
 - Remove unused calcite-core (#9)
 -  (#26). Agent, at Jody's request, 2026-11-06.
+- Call redo as the `/system` service on tacplus 2.6.16, released (#54; for fleet-seatrials#3; Jody 2026-11-07). Hub, on its recommendation with Jody's standing agreement (tp-act-on-recommendations), 2026-11-27.
 
 ## Later
 - Per-tenant, in-memory Stratum, durability through the redo service (#2), after tacplus#163 and redo#1
