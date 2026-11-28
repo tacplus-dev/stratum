@@ -47,3 +47,9 @@ exceptions:
     reason: "Only jackson-databind 2.21.2 and 3.1.2 shaded in Hazelcast 5.7.0 (com.hazelcast.shaded.*), where no class outside the databind references it: dead code (#28)."
     decided_by: jodydadescott
     expires: 2026-12-03
+  # The release image (#40)
+  - id: DS-0026
+    where: Dockerfile
+    reason: "No HEALTHCHECK in the Dockerfile: the distroless image has no shell, health is the launcher's HEALTH_PORT probe, read by Kubernetes probes, and Kubernetes ignores HEALTHCHECK (#40)."
+    decided_by: jodydadescott
+    expires: 2027-05-17
