@@ -90,6 +90,10 @@ the looper then marks it `promoted` or `declined` here with the date.
   realm's jars (106, 20 realms) are clean on OSV. fleet-dev's docs/java-plugins.md has no entry for compiler, resources,
   protobuf-maven-plugin or os-maven-plugin, and covers jar 3.5.0 and plugin-plugin 3.15.1 with plexus-archiver
   overrides where 3.5.1 and 3.16.0 now need none: a fleet-dev issue, as tacplus-dev/fleet-dev#17/#18 were.
+  #42 pinned clean 3.5.0 (plexus-utils 4.0.3 override) and deploy 3.2.0, whose defaults (clean 3.2.0 on
+  commons-io 2.6, deploy 3.1.4 on plexus-utils 4.0.1) no recipe runs: a check reading only the gates' build log
+  would never see those realms, so it needs `mvn -X clean deploy -DaltDeploymentRepository=scratch::file://...`
+  (or `help:effective-pom`'s plugin versions checked against fleet-dev's `dependencies.yaml`) to cover them.
 - **model's antrun step and `just generate` run different compilers** (2026-11-03, #30): `just generate`
   runs `tacplus build --tag latest`, while model's antrun target runs plain `tacplus build` when the
   generated sources are missing (a bare `mvn install`). Running that target produced different sources
