@@ -82,6 +82,13 @@ class RecordStoreTest {
         return s;
     }
 
+    /** A store whose sequencer work reports the trace_id it runs under to {@code traces}. */
+    private RecordStore store(HazelcastInstance hz, RedoLog redo, java.util.function.Consumer<String> traces) {
+        RecordStore s = new RecordStore(hz, new StratumRecordTypes(), redo, Duration.ofSeconds(5), new EntryLocks(), traces);
+        stores.add(s);
+        return s;
+    }
+
     /** A replayed store of one member over {@code redo}. */
     private RecordStore started(InMemoryRedoLog redo) throws ProtoException {
         RecordStore s = store(member(), redo, Duration.ofSeconds(5));
@@ -190,15 +197,15 @@ class RecordStoreTest {
     void getAnswersTheRowAndItsRevisionAndNotFound() throws Exception {
         RecordStore s = started(new InMemoryRedoLog());
         long rev = write(s, put(cert("a", 7)));
-        RecordStore.Stored got = s.get(TYPE, StratumRecordTypes.letsEncryptCertKey("a"), NS);
+        RecordStore.Stored got = s.get(TYPE, StratumRecordTypes.letsEncryptCertKey("a"), NS, "");
         assertEquals(7, ((LetsEncryptCert) got.row).getExpiresAt());
         assertEquals(rev, got.revision);
 
         assertEquals(ProtoException.NOT_FOUND,
-                code(() -> s.get(TYPE, StratumRecordTypes.letsEncryptCertKey("b"), NS)));
+                code(() -> s.get(TYPE, StratumRecordTypes.letsEncryptCertKey("b"), NS, "")));
         // Another namespace's entry answers as absent.
         assertEquals(ProtoException.NOT_FOUND,
-                code(() -> s.get(TYPE, StratumRecordTypes.letsEncryptCertKey("a"), "/tenants/other01")));
+                code(() -> s.get(TYPE, StratumRecordTypes.letsEncryptCertKey("a"), "/tenants/other01", "")));
     }
 
     @Test
@@ -410,7 +417,7 @@ class RecordStoreTest {
         assertEquals(2, rows(s).get("a").getExpiresAt());
         assertNull(rows(s).get("b"));
         assertEquals(3, rows(s).get("c").getExpiresAt());
-        assertEquals(11, s.get(TYPE, StratumRecordTypes.letsEncryptCertKey("a"), NS).revision,
+        assertEquals(11, s.get(TYPE, StratumRecordTypes.letsEncryptCertKey("a"), NS, "").revision,
                 "a replay restores revisions exactly");
 
         // The store continues the log where it ends, with higher revisions.
@@ -435,7 +442,7 @@ class RecordStoreTest {
         second.catchUp();
         assertNull(rows(second).get("a"));
         assertEquals(2, rows(second).get("b").getExpiresAt());
-        assertEquals(rev, second.get(TYPE, StratumRecordTypes.letsEncryptCertKey("b"), NS).revision);
+        assertEquals(rev, second.get(TYPE, StratumRecordTypes.letsEncryptCertKey("b"), NS, "").revision);
     }
 
     // -----------------------------------------------------------------------
@@ -452,10 +459,42 @@ class RecordStoreTest {
 
         long rev = write(other, insert(cert("a", 1)));
         assertEquals(ProtoException.ALREADY_EXISTS, code(() -> write(other, insert(cert("a", 2)))));
-        assertEquals(rev, other.get(TYPE, StratumRecordTypes.letsEncryptCertKey("a"), NS).revision);
+        assertEquals(rev, other.get(TYPE, StratumRecordTypes.letsEncryptCertKey("a"), NS, "").revision);
         assertEquals(1, redo.lastSeq(), "one writer of the log");
         assertTrue(other.readable());
         assertEquals(1, rows(sequencer).get("a").getExpiresAt());
+    }
+
+    /** The forward of a Get is caused by it, so it carries the Get's trace_id to the sequencer. */
+    @Test
+    void aForwardedGetCarriesItsTraceIdToTheSequencer() throws Exception {
+        InMemoryRedoLog redo = new InMemoryRedoLog();
+        List<String> traces = java.util.Collections.synchronizedList(new ArrayList<>());
+        RecordStore sequencer = store(member(), redo, traces::add);
+        sequencer.catchUp();
+        RecordStore other = store(member(), redo, Duration.ofSeconds(5));
+        waitFor(() -> members.get(1).getCluster().getMembers().size() == 2);
+        assertFalse(other.isSequencer());
+        write(sequencer, put(cert("a", 1)));
+        traces.clear();
+
+        other.get(TYPE, StratumRecordTypes.letsEncryptCertKey("a"), NS, "t-1");
+        assertEquals(List.of("t-1"), traces);
+    }
+
+    /** The forward of an Apply is the request itself, trace_id included. */
+    @Test
+    void aForwardedApplyCarriesItsTraceIdToTheSequencer() throws Exception {
+        InMemoryRedoLog redo = new InMemoryRedoLog();
+        List<String> traces = java.util.Collections.synchronizedList(new ArrayList<>());
+        RecordStore sequencer = store(member(), redo, traces::add);
+        sequencer.catchUp();
+        RecordStore other = store(member(), redo, Duration.ofSeconds(5));
+        waitFor(() -> members.get(1).getCluster().getMembers().size() == 2);
+        assertFalse(other.isSequencer());
+
+        other.apply(ops(put(cert("a", 1))).toBuilder().setTraceId("t-1").build());
+        assertEquals(List.of("t-1"), traces);
     }
 
     @Test
