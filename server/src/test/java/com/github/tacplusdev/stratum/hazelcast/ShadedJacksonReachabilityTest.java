@@ -29,7 +29,8 @@ import com.hazelcast.core.Hazelcast;
  * Hazelcast 5.7.0 shades jackson-databind 2.21.2 and 3.1.2 and jackson-core 2.21.2
  * and 3.1.2 into its jar (com.hazelcast.shaded.*), with HIGH advisories, fixed only
  * in jackson releases no Hazelcast carries yet (#28). They are accepted, with an
- * expiry, in .trivyignore.yaml because none of the vulnerable code can run in a
+ * expiry, in security-exceptions.yaml (the build's security job) and
+ * .trivyignore.yaml (`just audit-jar`) because none of the vulnerable code can run in a
  * Stratum member; decisions/2026-11-03-shaded-jackson-in-hazelcast.md has the
  * reasoning. This test is that reasoning, kept:
  *
@@ -113,7 +114,7 @@ class ShadedJacksonReachabilityTest {
         }
         assertTrue(scanned > 5_000, "scanned only " + scanned + " classes: is this the Hazelcast jar?");
         assertTrue(shaded > 0, "no shaded jackson 2.x or databind left in the Hazelcast jar: "
-                + "drop their entries from .trivyignore.yaml and this test's DEAD list");
+                + "drop their entries from security-exceptions.yaml, .trivyignore.yaml and this test's DEAD list");
         assertEquals(List.of(), found, "Hazelcast reaches shaded jackson code its advisories are in (#28)");
     }
 

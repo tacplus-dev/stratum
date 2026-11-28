@@ -45,12 +45,15 @@ test: build
 # Advisories in the release jar itself, shaded copies included: a library
 # another jar relocates into its own packages (jackson inside Hazelcast, #28) is
 # no dependency, so no check of the resolved tree sees it. HIGH and above fail,
-# except those .trivyignore.yaml accepts, each until its expiry.
+# except those .trivyignore.yaml accepts, each until its expiry. For local use:
+# the build's security job scans the same jar on every land, under
+# security-exceptions.yaml (tacplus-dev/looper#147), so it is not in `gates`,
+# which run in the build image, without trivy (#36).
 audit-jar: build
   {{TRIVY}} rootfs --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --ignorefile .trivyignore.yaml server/target/stratum.jar
 
 # The gates every change passes before it is pushed.
-gates: check-generated test audit-jar
+gates: check-generated test
 
 clean:
   rm -rf model/target codegen/target server/target target
