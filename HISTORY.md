@@ -25,3 +25,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-06 looper issue Hazelcast member traffic must never join or reach another tenant's Stratum: same cluster name, multicast join, no member auth (#17)
 - 2026-11-09 looper issue tacplus floor is 2.5; the latest released line is 2.6 (v2.6.1) (#32)
 - 2026-11-28 looper issue Pinned images behind their lines: relock (tacplus.lock: tacplus 2.6.1 → 2.6.13, and 1 more) (#44)
+- 2026-11-28 looper issue Seed members per tenant: a tenant-scope config slice, read from the tenant's TenantConfig (operator#2, option B) (#26)
