@@ -518,7 +518,6 @@ public final class RecordStore {
             if (logged) {
                 seq = nextSeq++;
                 acked = redo.append(RedoAppend.newBuilder()
-                        .setTenant(GrpcRedoLog.REDO_TENANT)
                         .setSeq(seq)
                         .addAllChanges(redoChanges)
                         .setDurability(owed)
