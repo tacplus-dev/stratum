@@ -27,17 +27,14 @@ import com.github.tacplusdev.stratum.model.types.sys.spec.Spec.Durability;
  * store, opened on the first append and again after it fails, and a
  * {@code Replay} per catch-up.
  *
- * <p>The redo runs in the reserved {@code restore} tenant, so every call is a
- * tenant-to-tenant call whose route field names that tenant
- * (tacplus-dev/tacplus#170). The tenant a write belongs to is never a field: the
+ * <p>The redo is a {@code /system} service, so every call is a tenant to
+ * {@code /system} call, routed by no field (S2S never crosses tenants,
+ * tacplus-dev/tacplus#258). The tenant a write belongs to is never a field: the
  * redo reads it off this store's identity.
  */
 public final class GrpcRedoLog implements RedoLog {
 
     private static final Logger log = LoggerFactory.getLogger(GrpcRedoLog.class);
-
-    /** The reserved restore tenant, where the redo service runs (Jody, 2026-10-26). */
-    public static final String REDO_TENANT = "00000002";
 
     private static final class Pending {
         final CompletableFuture<Void> acked = new CompletableFuture<>();
@@ -82,7 +79,7 @@ public final class GrpcRedoLog implements RedoLog {
     private StreamObserver<RedoAppend> open(long gen) {
         // trace: unrelated: one stream carries every write's append; each write's
         // trace belongs on its own RedoAppend, not on the stream's opening
-        return client.append(REDO_TENANT, new StreamObserver<RedoAck>() {
+        return client.append(new StreamObserver<RedoAck>() {
             @Override
             public void onNext(RedoAck ack) {
                 Pending p = pending.get(ack.getSeq());
@@ -145,7 +142,7 @@ public final class GrpcRedoLog implements RedoLog {
     public void replay(Consumer<RedoReplayEntry> entry) {
         CountDownLatch done = new CountDownLatch(1);
         AtomicReference<Throwable> failed = new AtomicReference<>();
-        client.replay(RedoReplayRequest.newBuilder().setTenant(REDO_TENANT).build(),
+        client.replay(RedoReplayRequest.getDefaultInstance(),
                 new StreamObserver<RedoReplayEntry>() {
                     @Override
                     public void onNext(RedoReplayEntry e) {

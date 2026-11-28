@@ -12,9 +12,9 @@ Decision: tacplus-dev/roadmap `decisions/stratum-per-tenant-2026-10-25.md`. Issu
   disk. There are no volumes, no member roles, no checkpoint, no disk index and no idle eviction.
 - Every write that is owed LOCAL or REMOTE is appended to the redo service and acked there **before**
   it is applied in memory. The log is the database: every start rebuilds memory from it.
-- The redo service runs in the reserved `restore` tenant (`00000002`). Stratum reaches it through the
-  generated client for `redolog.Redo`, as a tenant-to-tenant call whose route field names `00000002`
-  (`store/GrpcRedoLog.java`, tacplus-dev/tacplus#170). The tenant a write belongs to is never a request
+- The redo service is a `/system` service. Stratum reaches it through the generated client for
+  `redolog.Redo`, as a tenant to `/system` call routed by no field: S2S never crosses tenants
+  (`store/GrpcRedoLog.java`, tacplus-dev/tacplus#258). The tenant a write belongs to is never a request
   field: the redo reads it off Stratum's identity, and keeps one log per tenant. The contract is
   `sys/redo.proto` (generated into `model/target/generated-sources/model/proto/sys/redo.proto`).
 - The redo log is one sequence per tenant. An append is refused unless its seq is exactly one more than

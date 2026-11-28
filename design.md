@@ -61,7 +61,7 @@ Stratum's hand-written code names no record type.
 | `server/.../store/RecordStore.java` | The store: sequencer (oldest member) and forwarding, the write path (locks, conditions, append, ack, apply, publish), point reads, replay and takeover, the read gate. |
 | `server/.../store/EntryLocks.java`, `EntryId.java` | Entry locks in canonical order (record type, then key); map locks. |
 | `server/.../store/WriteOp.java`, `RecordType.java`, `RecordTypes.java` | One decoded write; what the store knows of a record type. |
-| `server/.../store/RedoLog.java`, `GrpcRedoLog.java` | The redo service through its generated client: one `Append` stream per store, a `Replay` per catch-up, route tenant `00000002`. |
+| `server/.../store/RedoLog.java`, `GrpcRedoLog.java` | The redo service through its generated client: one `Append` stream per store, a `Replay` per catch-up, a tenant to `/system` call routed by no field. |
 | `server/.../store/ChangeFeed.java` | Each member's view of committed changes: what Watch serves, with 4096 changes of history per type. |
 | `server/.../hazelcast/StratumMapConfig.java` | Hazelcast config: cluster `stratum-<tid>` (the tid from the instance's own SPIFFE identity), bound to the member port's loopback target, TCP/IP join to the other members only (never multicast), one map per record type, backups, zone-aware grouping, the change topic, the sequencer executor. No eviction. |
 | `server/.../hazelcast/MemberNetwork.java` | Hazelcast behind the generated member port (#17, tacplus#212): which seed is this member, its loopback alias (`127.0.2.<i+1>`, the same on every member), and a forward to each other member's port. |
@@ -97,3 +97,6 @@ config. Config fields 2 and 4-8 are reserved in `stratum.proto`.
   its namespace and its redo log at both sites.
 - **2026-10-28 (Jody, redo#1):** the second site is redo to redo (`redo.RedoSite`). Stratum builds
   against LOCAL now; REMOTE is refused until that link is deployed.
+- **2026-11-07 (Jody, `decisions/s2s-never-crosses-tenants-2026-10-31.md`, addendum; tacplus#258):** the
+  redo service is a `/system` service, no longer in the `restore` tenant: Stratum calls it tenant to
+  `/system`, and the redo contract's rpcs are routed by no field (tacplus 2.6.16, #53).
