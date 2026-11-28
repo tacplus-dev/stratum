@@ -38,3 +38,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-28 looper issue seedMembers looks up the tenant's TenantConfig by tid; kernel keys it /tenants/<name>, so a tenant's Stratum finds no seeds (#50)
 - 2026-11-28 looper issue maven-install-plugin 3.1.4 (default binding, every module) runs on plexus-utils 4.0.1 (GHSA-6fmv-xxpf-w3cw, HIGH): pin it and override plexus-utils to 4.0.3 (#34)
 - 2026-11-28 looper issue STATE.md Blocked on names tacplus-dev/looper#115, closed 2026-11-15: rewrite the line (#3 now waits only on the looper:workflows label) (#52)
+- 2026-11-28 looper release v0.2.5 (https://github.com/tacplus-dev/stratum/releases/tag/v0.2.5)
