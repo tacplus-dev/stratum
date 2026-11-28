@@ -4,10 +4,11 @@ registries:
 services:
     - name: stratum
       id: 34
+      tenant_slice_field: 4
       contract: https://github.com/tacplus-dev/stratum.git
-      visibility: private
+      visibility: public
 vservices:
     - name: query
       field_id: 71
       contract: https://github.com/tacplus-dev/stratum.git
-      visibility: private
+      visibility: public
