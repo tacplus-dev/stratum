@@ -144,9 +144,10 @@ class TenantMemberAdmissionTest {
 
     /**
      * stratum#26: each tenant's members take their seeds from their own tenant's
-     * StratumTenantConfig, out of one ConfigState.tenant_configs holding both
-     * tenants' different lists, as kernel holds them. Each tenant forms its own
-     * cluster of exactly its own members, and neither sees the other's data.
+     * StratumTenantConfig, the one entry of ConfigState.tenant_configs kernel's
+     * tenant pin delivers to them, keyed by the tenant's namespace (stratum#50).
+     * Each tenant forms its own cluster of exactly its own members, and neither
+     * sees the other's data.
      */
     @Test
     void twoTenantsWithTheirOwnSeedMembersEachJoinOnlyTheirOwn() throws Exception {
@@ -156,13 +157,13 @@ class TenantMemberAdmissionTest {
         Member a2 = new Member(A, new InetSocketAddress("127.0.1.2", portA));
         Member b1 = new Member(B, new InetSocketAddress("127.0.1.3", portB));
         Member b2 = new Member(B, new InetSocketAddress("127.0.1.4", portB));
-        Map<String, Kernel.TenantConfigEntry> tenantConfigs = Map.of(
-                A, tenantConfig(A, a1.seed(), a2.seed()),
-                B, tenantConfig(B, b1.seed(), b2.seed()));
+        Map<String, Map<String, Kernel.TenantConfigEntry>> delivered = Map.of(
+                A, Map.of("/tenants/a", tenantConfig("/tenants/a", a1.seed(), a2.seed())),
+                B, Map.of("/tenants/b", tenantConfig("/tenants/b", b1.seed(), b2.seed())));
 
         List<Member> members = List.of(a1, a2, b1, b2);
         for (Member m : members) {
-            List<String> seeds = StratumHandler.seedMembers(m.tenant, tenantConfigs);
+            List<String> seeds = StratumHandler.seedMembers(m.tenant, delivered.get(m.tenant));
             m.start(seeds, seeds.indexOf(m.seed()), null);
         }
         waitFor("each tenant's members to form its cluster", 60_000,
@@ -179,7 +180,7 @@ class TenantMemberAdmissionTest {
         assertEquals("from-b1", b2.hz.<String, String>getMap("probe").get("k"), "B's members share B's data");
     }
 
-    /** {@code tenant}'s entry in ConfigState.tenant_configs, carrying Stratum's slice. */
+    /** The entry kernel keys {@code tenant} in ConfigState.tenant_configs, carrying Stratum's slice. */
     static Kernel.TenantConfigEntry tenantConfig(String tenant, String... seeds) {
         return Kernel.TenantConfigEntry.newBuilder()
                 .setTenantName(tenant)

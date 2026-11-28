@@ -138,7 +138,8 @@ in either half can be stale while the split lasts.
   restart, whatever the member count.
 - Members are found through the tenant's own `StratumTenantConfig.seed_members` (#26), a tenant-scope
   config slice that kernel holds in `ConfigState.tenant_configs` and serves to each instance pinned to
-  its own tenant; the operator derives each tenant's list from the deployment's rendering (operator#2)
+  its own tenant, keyed by the tenant's namespace (`/tenants/<name>`, kernel#34): the member takes the
+  one entry delivered, never looking it up by its tid, and refuses more than one (#50); the operator derives each tenant's list from the deployment's rendering (operator#2)
   and delivers it as that slice, never in the deployment-wide `Config`, which every tenant's Stratum
   shares. The join is TCP/IP to those members only, never multicast. A member whose tenant has no seed
   members, or whose list does not name it, refuses to start; a single member or a dev run sets

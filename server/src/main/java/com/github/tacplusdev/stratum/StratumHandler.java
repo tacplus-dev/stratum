@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 import java.util.function.Function;
 
 import org.slf4j.Logger;
@@ -148,36 +149,48 @@ public class StratumHandler extends StratumVServiceBase {
      * Hazelcast seed members: {@code tenant}'s StratumTenantConfig.seed_members, one
      * "host:5001" entry per member of its store (its member port), rendered by the
      * operator from the StatefulSet's stable per-pod DNS. A single member or a dev
-     * run names itself (127.0.0.1). Another tenant's entry is never read: a member
-     * joins only its own tenant's members. None, the member refuses to start
-     * ({@link MemberNetwork#through}): there is no multicast fallback.
+     * run names itself (127.0.0.1). Kernel keys ConfigState.tenant_configs by the
+     * tenant's namespace (/tenants/&lt;name&gt;), never by the tid this instance's
+     * identity names, and pins a tenant's Stratum to its own tenant's entry
+     * (kernel#34): the one entry delivered is this tenant's, and it is taken
+     * without a lookup (stratum#50). More than one names no tenant (a caller
+     * pinned as /system, which a tenant's Stratum never is), so it is refused,
+     * never picked: a member joins only its own tenant's members. None, the
+     * member refuses to start ({@link MemberNetwork#through}): there is no
+     * multicast fallback.
      *
-     * @param tenantConfigs each tenant's TenantConfig, keyed by tenant, as kernel's
-     *                      ConfigState.tenant_configs holds it
+     * @param tenant        this instance's tenant (its tid), for the log only
+     * @param tenantConfigs the TenantConfigs kernel's ConfigState delivers to this
+     *                      instance, pinned to its own tenant
      */
     public static List<String> seedMembers(String tenant, Map<String, Kernel.TenantConfigEntry> tenantConfigs) {
-        Kernel.TenantConfigEntry entry = tenantConfigs.get(tenant);
-        if (entry == null) {
+        if (tenantConfigs.isEmpty()) {
             log.warn("tenant {} has no TenantConfig: no Hazelcast seed members", tenant);
             return List.of();
         }
-        List<String> members = entry.getConfig().getStratum().getSeedMembersList().stream()
+        if (tenantConfigs.size() > 1) {
+            throw new IllegalStateException("tenant " + tenant + ": kernel delivered " + tenantConfigs.size()
+                    + " TenantConfigs " + new TreeSet<>(tenantConfigs.keySet())
+                    + ", not only its own tenant's: cannot tell whose seed members to join");
+        }
+        Map.Entry<String, Kernel.TenantConfigEntry> only = tenantConfigs.entrySet().iterator().next();
+        List<String> members = only.getValue().getConfig().getStratum().getSeedMembersList().stream()
                 .map(String::trim)
                 .filter(m -> !m.isEmpty())
                 .toList();
-        log.info("tenant {}: Hazelcast seed members {}", tenant, members);
+        log.info("tenant {} ({}): Hazelcast seed members {}", tenant, only.getKey(), members);
         return members;
     }
 
     /**
      * This tenant's TenantConfigs as kernel serves them to this instance: pinned to
      * its own tenant, projected to Stratum's slice. The generated watch may not have
-     * delivered yet when the member starts, so its cache is backed by one read.
+     * delivered yet when the member starts, so an empty cache is backed by one read.
      */
-    private Map<String, Kernel.TenantConfigEntry> tenantConfigs(String tenant) {
+    private Map<String, Kernel.TenantConfigEntry> tenantConfigs() {
         var configState = sm.getStateClients().services().configState();
         Map<String, Kernel.TenantConfigEntry> cached = configState.getTenantConfigsMap();
-        if (cached.containsKey(tenant)) {
+        if (!cached.isEmpty()) {
             return cached;
         }
         // trace: unrelated: the member's start reads its tenant's seeds once, whichever config delivery or call happens to start it
@@ -196,7 +209,7 @@ public class StratumHandler extends StratumVServiceBase {
         }
         var mp = sm.getConfig().getMemberPort();
         InetSocketAddress target = new InetSocketAddress(mp.getTargetAddress().getHost(), mp.getTargetAddress().getPort());
-        List<String> seeds = seedMembers(tenant, tenantConfigs(tenant));
+        List<String> seeds = seedMembers(tenant, tenantConfigs());
         int self = MemberNetwork.self(seeds, MemberNetwork.localHostname(), MemberNetwork::isLocalAddress);
         try {
             network = MemberNetwork.through(seeds, self, target, mp.getListenAddress().getPort(),
