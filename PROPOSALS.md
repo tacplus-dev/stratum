@@ -206,5 +206,17 @@ the looper then marks it `promoted` or `declined` here with the date.
   MAJOR.MINOR floor, so a stale patch is reported nowhere. Who moves the pin and when (the looper re-pins on each
   patch of the line, gates and release included; or the scan files a `bug` once the pin lags the line) is Jody's
   call: the pin exists so that a new patch never reaches main without a commit (#32).
+- **Move the base image's digest, and its baseline with it** (2026-11-17, #40): the `Dockerfile` pins
+  `gcr.io/distroless/java21-debian13` by digest, moved by hand in a commit when distroless publishes fixes (#39's
+  HIGH expat and util-linux among them). looper-scan names an image finding by its reference, digest included, so
+  `security-baseline.json` has to move in the same commit (`looper-scan baseline` over a scan of the new digest). If
+  it doesn't, the next nightly reports every unfixed advisory as new again. A bot, or a nightly check that `latest`
+  has moved past the pin, could open that commit and file a `bug` when the new digest fixes a HIGH. Without one, a
+  fixed base reaches main only when someone notices.
+- **Scope the jackson exceptions by `where`** (2026-11-28, #40): looper-scan now warns that each of the eight
+  jackson entries in `security-exceptions.yaml` (#28) has no `where`, so it accepts its id in every file, not only
+  in the jackson Hazelcast 5.7.0 shades. A `where` glob on the release jar (`server/target/stratum.jar`, looper#182) would
+  scope them the way `.trivyignore.yaml` scopes them by purl. They expire 2026-12-03, so the re-examination that
+  expiry forces is the natural time to add it.
 
 ## Promoted / declined
