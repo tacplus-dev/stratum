@@ -35,3 +35,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-28 looper release v0.2.4 (https://github.com/tacplus-dev/stratum/releases/tag/v0.2.4)
 - 2026-11-28 looper issue A Get forwarded to the sequencer drops the inbound trace_id (SequencerCall.get carries none), and no test asserts either sequencer forward carries it (#37)
 - 2026-11-28 looper issue Take the launcher from a pinned tacplus-dev release, not SeaBeam's schematic image (#16)
+- 2026-11-28 looper issue seedMembers looks up the tenant's TenantConfig by tid; kernel keys it /tenants/<name>, so a tenant's Stratum finds no seeds (#50)
