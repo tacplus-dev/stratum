@@ -600,9 +600,9 @@ public final class RecordMapImplGenerator {
             w.println("        return store().apply(req);");
             w.println("    }");
             w.println();
-            w.println("    /** A single write, as the one-op Apply it is. */");
+            w.println("    /** A single write, as the one-op Apply it is, under the write's trace_id. */");
             w.println("    private " + msgs + ".RecordWriteResult write(Message req, " + msgs
-                    + ".RecordDurability durability) throws ProtoException {");
+                    + ".RecordDurability durability, String traceId) throws ProtoException {");
             w.println("        " + msgs + ".RecordOp.Builder op = " + msgs + ".RecordOp.newBuilder();");
             w.println("        // By the request's message type: the oneof's field names are tacplus's to derive.");
             w.println("        for (Descriptors.FieldDescriptor f : " + msgs + ".RecordOp.getDescriptor().getOneofs().get(0).getFields()) {");
@@ -611,7 +611,7 @@ public final class RecordMapImplGenerator {
             w.println("            }");
             w.println("        }");
             w.println("        return store().apply(" + msgs + ".RecordApplyRequest.newBuilder()");
-            w.println("                .addOps(op).setDurability(durability).build()).getResults(0);");
+            w.println("                .addOps(op).setDurability(durability).setTraceId(traceId).build()).getResults(0);");
             w.println("    }");
             w.println();
             w.println("    /** A record watch change for a committed change of the feed. */");
@@ -658,7 +658,7 @@ public final class RecordMapImplGenerator {
         w.println("    public " + msgs + ".Get" + t + "Response " + lower("Get" + t)
                 + "(Caller caller, " + msgs + ".Get" + t + "Request req) throws ProtoException {");
         w.println("        RecordStore.Stored s = store().get(\"" + e.fullName() + "\", " + keyFn + "(req." + keyGetter
-                + "()), req." + nsGetter + "());");
+                + "()), req." + nsGetter + "(), req.getTraceId());");
         w.println("        return " + msgs + ".Get" + t + "Response.newBuilder()");
         w.println("                .setItem((" + fqn + ") s.row).setRevision(s.revision).build();");
         w.println("    }");
@@ -671,7 +671,7 @@ public final class RecordMapImplGenerator {
             w.println("    @Override");
             w.println("    public " + msgs + ".RecordWriteResult " + lower(verb + t)
                     + "(Caller caller, " + msgs + "." + verb + t + "Request req) throws ProtoException {");
-            w.println("        return write(req, req.getDurability());");
+            w.println("        return write(req, req.getDurability(), req.getTraceId());");
             w.println("    }");
         }
 
