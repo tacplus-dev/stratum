@@ -36,3 +36,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-28 looper issue A Get forwarded to the sequencer drops the inbound trace_id (SequencerCall.get carries none), and no test asserts either sequencer forward carries it (#37)
 - 2026-11-28 looper issue Take the launcher from a pinned tacplus-dev release, not SeaBeam's schematic image (#16)
 - 2026-11-28 looper issue seedMembers looks up the tenant's TenantConfig by tid; kernel keys it /tenants/<name>, so a tenant's Stratum finds no seeds (#50)
+- 2026-11-28 looper issue maven-install-plugin 3.1.4 (default binding, every module) runs on plexus-utils 4.0.1 (GHSA-6fmv-xxpf-w3cw, HIGH): pin it and override plexus-utils to 4.0.3 (#34)
