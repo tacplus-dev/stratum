@@ -22,7 +22,11 @@ the looper then marks it `promoted` or `declined` here with the date.
   container started the same on debian12 and debian13 (gRPC health on the plaintext probe port 8444 answers
   `NOT_SERVING`, 8443 is not up without a kernel state-store endpoint in the bootstrap config). A recipe that
   builds the image and starts it against a stub state store until 8443 answers `SERVING` would turn that
-  into a check, and would cover the next base or JDK move (java25-debian13 is published).
+  into a check, and would cover the next base or JDK move (java25-debian13 is published). Since #16 the
+  image takes the launcher from tacplus-dev/launcher v0.1.0 (`ADD --checksum`), on `HEALTH_PORT=8444`; that
+  was checked only through BuildKit's Dockerfile frontend (the LLB fetches each arch's pinned URL with its
+  sha256) and by running the released binary outside an image, so the same smoke test would also cover the
+  launcher pin, its health probe and its next move.
 - **One SLF4J provider in the jar** (2026-10-27, #14): the server pulls in both logback and `slf4j-simple`
   (root `pom.xml` dependencyManagement, `model/pom.xml`, `server/pom.xml`), so every start prints
   `Class path contains multiple SLF4J providers`. Logback wins today, but the choice is classpath order. If
