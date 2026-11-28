@@ -29,6 +29,7 @@
 		<resources-plugin.version>3.5.0</resources-plugin.version>
 		<clean-plugin.version>3.5.0</clean-plugin.version>
 		<deploy-plugin.version>3.2.0</deploy-plugin.version>
+		<install-plugin.version>3.2.0</install-plugin.version>
 		<protobuf-plugin.version>0.6.1</protobuf-plugin.version>
 		<shade-plugin.version>3.6.1</shade-plugin.version>
 		<exec-plugin.version>3.6.4</exec-plugin.version>
@@ -294,6 +295,16 @@
 							<version>3.6.1</version>
 						</dependency>
 					</dependencies>
+				</plugin>
+				<!--
+				  Reaches every module's install (Maven's default binding). Under Maven 3.9.16 the
+				  default is 3.1.4, on plexus-utils 4.0.1 (GHSA-6fmv-xxpf-w3cw); 3.2.0 asks for 4.0.3
+				  and needs no override (#34; fleet-dev docs/java-plugins.md).
+				-->
+				<plugin>
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-install-plugin</artifactId>
+					<version>${install-plugin.version}</version>
 				</plugin>
 				<!--
 				  No just recipe runs clean or deploy, but `mvn clean` and `mvn deploy` on the tree
