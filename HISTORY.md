@@ -31,3 +31,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-28 looper issue maven-clean-plugin and maven-deploy-plugin are unset: Maven 3.9.16's clean 3.2.0 loads commons-io 2.6, deploy 3.1.4 plexus-utils 4.0.1 (HIGH); pin clean 3.5.0 (plexus-utils 4.0.3) and deploy 3.2.0 (#42)
 - 2026-11-28 looper release v0.1.1 (https://github.com/tacplus-dev/stratum/releases/tag/v0.1.1)
 - 2026-11-28 looper release v0.2.3 (https://github.com/tacplus-dev/stratum/releases/tag/v0.2.3)
+- 2026-11-28 looper issue Release image: 79 unfixed MEDIUM/LOW base-image advisories; the Dockerfile follows the base's latest tag and has no HEALTHCHECK (trivy DS-0001, DS-0026) (#40)
