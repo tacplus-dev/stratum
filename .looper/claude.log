@@ -1,0 +1,106 @@
+= init
+= thinking_tokens
+= thinking_tokens
+> Bash git status --short && git diff | head -80 && /usr/local/bin/repo-looper --repo stratum --issue-text tacplus#955 | tail -60
+<  M PROPOSALS.md  M STATE.md diff --git a/PROPOSALS.md b/PROPOSALS.md index a586be9..6770352 100644 --- a/PROPOSALS.md +++ b/PROPOSALS.md @@ -125,7 +125,8 @@ the looper then marks it `promoted` or `declined` here with the date.    (tacplus-dev/roadmap decisions/trace-propagation-2026-11-03.md) clears...
+> Bash cd /tmp; gh api repos/tacplus-dev/tacplus/releases --jq '.[0:5][]|.tag_name+" "+.published_at'; gh issue view 954 --repo tacplus-dev/tacplus --json state,closedAt,title; gh api repos/tacplus-dev/tacplus/git/refs/tags/v2.7.0 2>&1 | head -5
+< v2.6.16 2026-11-28T02:45:45Z v2.6.15 2026-11-27T23:12:46Z v2.7.0 2026-11-26T19:47:05Z v2.6.14 2026-11-23T00:42:58Z v2.6.13 2026-11-15T12:11:17Z {"closedAt":null,"state":"OPEN","title":"Release tacplus v2.7.0 (trace_id traced helper forms, #327)"} {"ref":"refs/tags/v2.7.0","node_id":"REF_kwDOVJ-DDrBy...
+> Bash /usr/local/bin/repo-looper --repo stratum --issue-text tacplus#954 | tail -40; gh api /orgs/tacplus-dev/packages/container/tacplus%2Fbuild/versions --jq '.[0:6][]|(.metadata.container.tags|join(","))+" "+.name' 2>&1 | head
+< > waiting on https://github.com/tacplus-dev/tacplus/actions/runs/45885632669: Done: full gates (just gates, build 20261126T181546Z-138084556: 'verdict: success: the gates full passed', 19 of 19) green on 715ecaa9; tag v2.7.0 (annotated) and release/2.7 pushed at 715ecaa9. Release run 45885632680 gre...
+= thinking_tokens
+= thinking_tokens
+> Bash gh api --paginate /orgs/tacplus-dev/packages/container/tacplus%2Fbuild/versions --jq '.[]|.metadata.container.tags[]' | grep '^2\.7' ; gh api repos/tacplus-dev/tacplus/git/refs/tags/v2.7.1 2>&1 | head -2; gh issue view 830 --repo tacplus-dev/tacplus --json state,closedAt
+= task_started
+= task_notification
+< {"message":"Not Found","documentation_url":"https://docs.github.com/rest/git/refs#get-all-references-in-a-namespace","status":"404"}gh: Not Found (HTTP 404) {"closedAt":null,"state":"OPEN"}
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /var/lib/looper-cache/work/stratum/issues/29; gh issue view 36 --repo tacplus-dev/stratum --json state,labels --jq '.state,[.labels[].name]'; ls; cat gates.yaml 2>/dev/null | head -30; grep -n '2.6.1\b\|#955\|#313' PROPOSALS.md STATE.md
+< CLOSED ["bug","approved","looper:in-progress","priority:high"] Dockerfile HISTORY.md LICENSE PROPOSALS.md PROVENANCE.md QUESTIONS.md README.md RECORD_EVENT_ARCHITECTURE.md ROADMAP.md STATE.md STRATUM_MIGRATION.md codegen decisions design.md docs justfile model pom.xml proto security-exceptions.yaml ...
+Still blocked: tacplus v2.7.0 is tagged but there is no `build:2.7.x` image to pin (that waits on tacplus#954/#830). I'm resolving the STATE.md conflict and refreshing the docs to say so.
+> Bash python3 - <<'EOF' import re p='STATE.md'; s=open(p).read() s=re.sub(r'<<<<<<< HEAD\n.*?\n=======\n(.*?)\n>>>>>>> origin/main\n', lambda m: m.group(1).replace('2026-11-28 by the looper (#36)','2026-11-28 by the looper (#29)')+'\n', s, flags=re.S) old="have no field 200 in any tacplus release yet: tac...
+< 0  PROPOSALS.md | 5 +++--  STATE.md     | 4 ++--  2 files changed, 5 insertions(+), 4 deletions(-) --- a/PROPOSALS.md +++ b/PROPOSALS.md -  tacplus-dev/tacplus#313 clears it on generated storage paths. Once it lands, check with a raw map read +  tacplus-dev/tacplus#313 clears it on generated storage...
+= thinking_tokens
+= thinking_tokens
+> Bash ls .git/MERGE_HEAD 2>/dev/null; git log --oneline origin/main..HEAD; git add PROPOSALS.md && git commit -q -m "PROPOSALS.md: #29's trace items wait on tacplus v2.7.1, the pin is past #313  The stored trace_id check no longer waits on a pin move: stratum pins 2.6.15, past tacplus v2.6.4's store clear...
+< Exit code 128 Author identity unknown  *** Please tell me who you are.  Run    git config --global user.email "you@example.com"   git config --global user.name "Your Name"  to set your account's default identity. Omit --global to set the identity only in this repository.  fatal: empty ident name (fo...
+> Bash git log -3 --format='%an <%ae>' origin/main; git log --oneline origin/main..HEAD | head; git log --oneline HEAD..origin/main | head
+< jodydadescott <jody@thescottsweb.com> jodydadescott <jody@thescottsweb.com> jodydadescott <jody@thescottsweb.com>
+= thinking_tokens
+= thinking_tokens
+> Bash git log --all -20 --format='%h %an <%ae> %s' | grep -iv jodyd | head -5; git log -1 --format='%an <%ae>' 735c9d6
+< 3cdbd88 root <root@looper-vm-tacplus-dev-6dhz.us-central1-b.c.tacplus-ci.internal> looper-claim looper-vm-tacplus-dev-6dhz/20261128T050803Z-issue-16 until 1795843383 804f29d root <root@looper-vm-tacplus-dev-6dhz.us-central1-b.c.tacplus-ci.internal> looper-claim looper-vm-tacplus-dev-6dhz/20261128T05...
+= thinking_tokens
+= thinking_tokens
+> Bash G="git -c user.name=looper-29 -c user.email=looper-29@looper-vm-tacplus-dev-6dhz" && git add PROPOSALS.md && $G commit -q -m "PROPOSALS.md: #29's trace items wait on tacplus v2.7.1, the pin is past #313  The stored trace_id check no longer waits on a pin move: stratum pins 2.6.15, past tacplus v2.6....
+< d04655b STATE.md: #29's trace gap waits on tacplus v2.7.1 and its build image 52fb5c1 PROPOSALS.md: #29's trace items wait on tacplus v2.7.1, the pin is past #313
+Docs-only, so no local build is needed beyond what the land runs. Landing:
+> Bash /usr/local/bin/repo-looper --repo stratum --issue 29 --land 2>&1 | tail -15
+= task_started
+= task_notification
+< to set your account's default identity. Omit --global to set the identity only in this repository.  fatal: empty ident name (for <looper-29@looper-vm-tacplus-dev-6dhz.us-central1-b.c.tacplus-ci.internal>) not allowed fatal: : not a valid SHA1 fatal: ambiguous argument '': unknown revision or path no...
+= thinking_tokens
+= thinking_tokens
+> Bash git config user.name looper-29 && git config user.email looper-29@looper-vm-tacplus-dev-6dhz && git status --short && git log --oneline -3 && /usr/local/bin/repo-looper --repo stratum --issue 29 --land 2>&1 | tail -15
+= task_started
+= task_notification
+< d04655b STATE.md: #29's trace gap waits on tacplus v2.7.1 and its build image 52fb5c1 PROPOSALS.md: #29's trace items wait on tacplus v2.7.1, the pin is past #313 cb62bf4 STATE.md: the jar scan in the security job, tacplus 2.6.15 (#36) [2026-11-28T05:09:45Z] checkpoint of #29 (land queued) pushed to...
+= thinking_tokens
+= thinking_tokens
+> Bash git fetch -q origin looper/stratum-29 && git log --oneline -3 FETCH_HEAD && git diff --stat origin/main FETCH_HEAD
+< a6def25 looper: work in progress on #29 (land queued) d04655b STATE.md: #29's trace gap waits on tacplus v2.7.1 and its build image 52fb5c1 PROPOSALS.md: #29's trace items wait on tacplus v2.7.1, the pin is past #313  .looper/claude.log |  50 ++++++++  .looper/land       |   4 +  .looper/prompt.md  ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash /usr/local/bin/repo-looper --repo stratum --issue 29 --checkpoint "Docs-only land queued (52fb5c1 PROPOSALS.md, d04655b STATE.md): the trace gap now waits on tacplus v2.7.1 + build:2.7.1 (tacplus#954; v2.7.0 is tagged but has no build image), and the stored-trace_id proposal notes the 2.6.15 pin is ...
+< [2026-11-28T05:10:00Z] checkpoint of #29 (a step) pushed to looper/stratum-29:  5 files changed, 426 insertions(+), 4 deletions(-) Blocked-by: tacplus-dev/tacplus#954
+The fix for #29 still can't be made, so I landed only a docs update and marked the issue blocked again.
+
+**Why it's still blocked.** Stratum can only use field 200 on `RedoAppend` and `RedoReplayRequest` by pinning a tacplus 2.7 release. tacplus `v2.7.0` is tagged, but it has no `build:2.7.0` build image, and its tag can't produce one. The pin needs `v2.7.1` and `build:2.7.1`. tacplus-dev/tacplus#954 is the issue that publishes them, and it is still open: it waits on tacplus#830. The two blockers named on this issue are both closed: #36 landed, and tacplus#955 was closed as a duplicate of #954.
+
+**What I did:**
+- Resolved the STATE.md conflict by taking main's version, with the "last updated" line now saying #29.
+- Committed two doc changes:
+  - `52fb5c1` (PROPOSALS.md): the check on stored `trace_id` no longer waits for the pin to move, because stratum now pins tacplus 2.6.15, which already has tacplus#313's clearing (from v2.6.4). The redo trace item now points at v2.7.1 and tacplus#954.
+  - `d04655b` (STATE.md): the trace gap now says it waits for v2.7.1 and its build image (tacplus#954), instead of tacplus#313 or #955.
+- Queued the land with the manager. Its verdict will come as a comment on the issue. No build ran on these commits: they touch only docs, so only the manager's land build will check them.
+- Wrote `Blocked-by: tacplus-dev/tacplus#954` to this run's outcome file.
+
+I had to give my own worktree a local git identity (`looper-29`) because commits and `--land` failed without one.
+
+**Left for the run after tacplus#954 closes:**
+1. Pin tacplus 2.7.1 and regenerate.
+2. Set `trace_id` in `RecordStore.commit`.
+3. Pass the write's `trace_id` through `applyHere → catchUp → replay`.
+4. Write the `InMemoryRedoLog` tests: a single write, an `Apply`, an inline catch-up that carries the trace, and the keeper's replays carrying none.
+5. Build, land, and handle the patch release. Main has taken features since v0.1.0, so the patch would go to `release/0.1` as a backport, not be cut from main.
+
+**Trace check:** I touched no handler this run. The `// trace: unrelated:` markers in `StratumHandler.keepInSync` and `GrpcRedoLog.open` are unchanged.
+= success: The fix for #29 still can't be made, so I landed only a docs update and marked the issue blocked again.
+
+**Why it's still blocked.** Stratum can only use field 200 on `RedoAppend` and `RedoReplayRequest` by pinning a tacplus 2.7 release. tacplus `v2.7.0` is tagged, but it has no `build:2.7.0` build image, and its tag can't produce one. The pin needs `v2.7.1` and `build:2.7.1`. tacplus-dev/tacplus#954 is the issue that publishes them, and it is still open: it waits on tacplus#830. The two blockers named on this issue are both closed: #36 landed, and tacplus#955 was closed as a duplicate of #954.
+
+**What I did:**
+- Resolved the STATE.md conflict by taking main's version, with the "last updated" line now saying #29.
+- Committed two doc changes:
+  - `52fb5c1` (PROPOSALS.md): the check on stored `trace_id` no longer waits for the pin to move, because stratum now pins tacplus 2.6.15, which already has tacplus#313's clearing (from v2.6.4). The redo trace item now points at v2.7.1 and tacplus#954.
+  - `d04655b` (STATE.md): the trace gap now says it waits for v2.7.1 and its build image (tacplus#954), instead of tacplus#313 or #955.
+- Queued the land with the manager. Its verdict will come as a comment on the issue. No build ran on these commits: they touch only docs, so only the manager's land build will check them.
+- Wrote `Blocked-by: tacplus-dev/tacplus#954` to this run's outcome file.
+
+I had to give my own worktree a local git identity (`looper-29`) because commits and `--land` failed without one.
+
+**Left for the run after tacplus#954 closes:**
+1. Pin tacplus 2.7.1 and regenerate.
+2. Set `trace_id` in `RecordStore.commit`.
+3. Pass the write's `trace_id` through `applyHere → catchUp → replay`.
+4. Write the `InMemoryRedoLog` tests: a single write, an `Apply`, an inline catch-up that carries the trace, and the keeper's replays carrying none.
+5. Build, land, and handle the patch release. Main has taken features since v0.1.0, so the patch would go to `release/0.1` as a backport, not be cut from main.
+
+**Trace check:** I touched no handler this run. The `// trace: unrelated:` markers in `StratumHandler.keepInSync` and `GrpcRedoLog.open` are unchanged.
+= usage: {"claude-opus-5-5":{"inputTokens":30,"outputTokens":6618,"cacheReadInputTokens":630764,"cacheCreationInputTokens":37892,"webSearchRequests":0,"costUSD":0.5617687999999998,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":1633,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}
