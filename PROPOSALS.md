@@ -161,11 +161,6 @@ the looper then marks it `promoted` or `declined` here with the date.
   plain and unauthenticated (tacplus-dev/kernel#24, kernel PROPOSALS.md). `MemberNetwork` (the per-member
   loopback alias, forwarded to each peer's member port) is the glue kernel would need too; if both use it,
   it belongs in tacplus's generated member port rather than in each service.
-- **Register `StratumTenantConfig`'s TenantConfig field number** (2026-11-07, #26): tacplus numbers a new
-  tenant slice `max + 1` in each build and records it nowhere (tacplus-dev/tacplus#352), so `stratum = 4` in the
-  generated TenantConfig holds only because stratum's build and kernel's (tacplus-dev/kernel#34) see the same
-  slices. Once tacplus can register a slice field, register `stratum`'s in tacplus-dev/registry (4, as generated
-  today) and sync `proto/registry.yaml`.
 - **Watch the seed members, not only read them at start** (2026-11-07, #26): the member reads its tenant's
   `StratumTenantConfig.seed_members` once, when it starts (the generated watch's cache, else one GetAll), and a
   changed list applies at the next start, as `Config.seed_members` did. Subscribing to the generated
@@ -182,9 +177,10 @@ the looper then marks it `promoted` or `declined` here with the date.
   resolve a Maven reactor by installing it first, or read `mvn dependency:list`. The scan also cannot run
   `just gates` or build the jar itself: `tacplus` in its image runs the build through the Docker API, and the scan's
   `docker` is the brokered CLI (looper#68). Needs a looper issue.
-- **Move the tacplus.lock pin with the 2.6 line's patches** (2026-11-15, nightly scan; #32): `tacplus.lock` pins
-  2.6.1 (2026-11-07), and only `tacplus pin` in a commit moves it; the line is at v2.6.12 (2026-11-14). The patches
-  between carry changes to the Java chassis stratum generates with: v2.6.7 (the GCS archive's google-cloud-storage
+- **Move the tacplus.lock pin with the 2.6 line's patches** (2026-11-15, nightly scan; #32): `tacplus.lock` pinned
+  2.6.1 (2026-11-07), and only `tacplus pin` in a commit moves it; the line was at v2.6.12 (2026-11-14). #26 moved
+  it to 2.6.15 (2026-11-28), the first 2.6 patch with tacplus#352's registered slice fields. The patches it skipped
+  carry changes to the Java chassis stratum generates with: v2.6.7 (the GCS archive's google-cloud-storage
   2.76.0, guava `-jre` and the OpenTelemetry BOM pinned, tacplus#263: the tree behind #8, #15 and #19) and v2.6.9
   (outbound-deadline asserts the leaf receives the root's trace_id, tacplus#310). The scan's pin rule reads the
   MAJOR.MINOR floor, so a stale patch is reported nowhere. Who moves the pin and when (the looper re-pins on each
