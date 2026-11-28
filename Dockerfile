@@ -10,7 +10,7 @@
 # fixes (#40). Its unfixed MEDIUM, LOW and UNKNOWN advisories are recorded in
 # security-baseline.json under this digest: a commit that moves the digest
 # moves them too (`looper-scan baseline`), or the next nightly reports them new.
-FROM gcr.io/distroless/java21-debian13@sha256:132eb554519304beb13de16013176efb8aa67bb7bf9e2d1ca340e97e744c3cb3
+FROM gcr.io/distroless/java21-debian13@sha256:e5ddc8b22604bf842e43e0e3cc6694da4c3440714749121f024e2ee1d1808539
 
 ARG BUILD_DATE
 ARG VCS_REF
