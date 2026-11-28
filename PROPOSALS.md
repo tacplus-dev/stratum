@@ -218,14 +218,9 @@ the looper then marks it `promoted` or `declined` here with the date.
   in the jackson Hazelcast 5.7.0 shades. A `where` glob on the release jar (`server/target/stratum.jar`, looper#182) would
   scope them the way `.trivyignore.yaml` scopes them by purl. They expire 2026-12-03, so the re-examination that
   expiry forces is the natural time to add it.
-- **Call redo as the `/system` service on tacplus 2.6.16, and release it** (2026-11-28, #54): redo is a `/system`
-  service (Jody, 2026-11-07, roadmap `decisions/s2s-never-crosses-tenants-2026-10-31.md` addendum; tacplus#258), so
-  `GrpcRedoLog` drops `REDO_TENANT` (`00000002`) and the routed `append`/`replay`, and `RecordStore` stops setting
-  the deprecated `RedoAppend.tenant`. The docs saying redo runs in the `restore` tenant follow, with a superseding
-  design.md decision entry, plus a test that the append and the replay name no tenant (an in-process `Redo` server
-  around `GrpcRedoLog`). On 2.6.16 the generated client takes no tenant, so the routed call doesn't compile:
-  #53's relock is red for that reason and has to land in the same change. fleet-seatrials#3 needs it released
-  (kernel 0.2 needs tacplus 2.6.16). Open: v0.2.5 or v0.3.0 (it changes which redo the image reaches), and the
-  deploy has to move with tacplus-dev/redo#19.
 
 ## Promoted / declined
+
+- **Call redo as the `/system` service on tacplus 2.6.16, and release it** (#54): approved for Jody 2026-11-28 and
+  built: #53 landed the relock and the unrouted `GrpcRedoLog`, #54 the test that the append and the replay name no
+  tenant (`GrpcRedoLogTest`); it is released as the 0.2 line's next patch. Its deploy moves with tacplus-dev/redo#19.
